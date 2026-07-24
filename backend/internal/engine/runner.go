@@ -18,20 +18,24 @@ import (
 )
 
 type Runner struct {
-	store        *db.Store
-	broker       *sse.Broker
-	walletSvc    nodes.WalletSigner
-	registry     *runRegistry
-	relayBaseURL string
+	store                    *db.Store
+	broker                   *sse.Broker
+	walletSvc                nodes.WalletSigner
+	registry                 *runRegistry
+	relayBaseURL             string
+	platformSpendEncMnemonic string
+	usdcAssetID              uint64
 }
 
-func NewRunner(store *db.Store, broker *sse.Broker, walletSvc nodes.WalletSigner, relayBaseURL string) *Runner {
+func NewRunner(store *db.Store, broker *sse.Broker, walletSvc nodes.WalletSigner, relayBaseURL string, platformSpendEncMnemonic string, usdcAssetID uint64) *Runner {
 	return &Runner{
-		store:        store,
-		broker:       broker,
-		walletSvc:    walletSvc,
-		registry:     newRunRegistry(),
-		relayBaseURL: relayBaseURL,
+		store:                    store,
+		broker:                   broker,
+		walletSvc:                walletSvc,
+		registry:                 newRunRegistry(),
+		relayBaseURL:             relayBaseURL,
+		platformSpendEncMnemonic: platformSpendEncMnemonic,
+		usdcAssetID:              usdcAssetID,
 	}
 }
 
@@ -282,10 +286,9 @@ func (r *Runner) executeNode(
 		}
 		return result, nil
 	case models.NodeTypeTool402:
-		if err := r.preflightCheck(ctx, wf, models.X402PlatformFeeUSDMicros); err != nil {
-			return nil, err
-		}
-		// Find the agent that has this tool attached and use its wallet.
+		// Find the agent that has this tool attached and use its wallet (only
+		// the legacy direct-pay dialect still needs this; the relay dialect
+		// pays from the platform's own Wallet 1 spend wallet instead).
 		var aw models.AgentWallet
 		for agentID, cfg := range attachMap {
 			for _, t := range cfg.Tools {
@@ -299,16 +302,17 @@ func (r *Runner) executeNode(
 		// only implements WalletSigner, and ExecuteTool402V2 falls back to a
 		// graceful "no wallet configured" result rather than paying via relay.
 		usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
-		result, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, usdcSigner, r.relayBaseURL)
+		checkBalance := func(cctx context.Context, amount int64) error {
+			return r.preflightCheck(cctx, wf, amount)
+		}
+		paymentResult, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, usdcSigner, r.platformSpendEncMnemonic, r.usdcAssetID, r.relayBaseURL, checkBalance)
 		if err != nil {
 			return nil, err
 		}
-		if m, ok := result.(map[string]any); ok {
-			if _, hasTx := m["txId"]; hasTx {
-				r.debitOrLog(ctx, wf, run, node.ID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
-			}
+		if paymentResult.SettledUSDMicros > 0 {
+			r.debitOrLog(ctx, wf, run, node.ID, paymentResult.SettledUSDMicros, paymentResult.DebitKind)
 		}
-		return result, nil
+		return paymentResult.Response, nil
 	case models.NodeTypeAction:
 		billable := nodes.BillableFlatFee(node.Type, node.Template)
 		if billable {
