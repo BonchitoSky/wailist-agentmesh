@@ -374,3 +374,57 @@ func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
 		t.Fatal("want no payment sent when preflight rejects the real amount")
 	}
 }
+
+// TestX402V2RelayRejectsPayment verifies that when the relay rejects a payment
+// (returns non-2xx status despite X-Payment being present, e.g. expired/invalid
+// payment or verification failure), the result is returned to the caller but
+// nothing is billed — SettledUSDMicros remains 0 and DebitKind remains empty.
+func TestX402V2RelayRejectsPayment(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			// Relay rejects the payment (expired/invalid/verification failed)
+			w.WriteHeader(http.StatusPaymentRequired)
+			w.Write([]byte(`{"error":"payment verification failed"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"PLATFORMADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer relay.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{AgentNodeID: "a1", EncryptedMnemonic: "enc-mnemonic"}
+	signer := &mockSigner{txID: "unused"}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	checkBalance := func(context.Context, int64) error { return nil }
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The response should be returned to the caller (the error message)
+	m, ok := paymentResult.Response.(map[string]any)
+	if !ok {
+		t.Fatalf("want response to be parsed JSON, got %T: %v", paymentResult.Response, paymentResult.Response)
+	}
+	if m["error"] != "payment verification failed" {
+		t.Fatalf("want error message in response, got %v", m)
+	}
+
+	// But nothing should be billed — the payment was rejected, so nothing
+	// actually settled on-chain.
+	if paymentResult.SettledUSDMicros != 0 {
+		t.Fatalf("want SettledUSDMicros=0 (payment rejected), got %d", paymentResult.SettledUSDMicros)
+	}
+	if paymentResult.DebitKind != "" {
+		t.Fatalf("want DebitKind empty (payment rejected), got %q", paymentResult.DebitKind)
+	}
+}

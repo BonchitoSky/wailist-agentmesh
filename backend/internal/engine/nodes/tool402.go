@@ -266,12 +266,19 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	defer payResp.Body.Close()
 	finalBody, _ := io.ReadAll(io.LimitReader(payResp.Body, httpResponseLimit))
 
-	out := Tool402PaymentResult{SettledUSDMicros: int64(amount), DebitKind: models.DebitKindX402RelayCost}
+	out := Tool402PaymentResult{}
 	var result any
 	if json.Unmarshal(finalBody, &result) == nil {
 		out.Response = result
 	} else {
 		out.Response = string(finalBody)
+	}
+	// Only mark as settled if the relay actually accepted the payment.
+	// If the relay rejects (expired/invalid payment, verification failure, etc.)
+	// and returns non-2xx, nothing was confirmed settled on-chain, so don't bill.
+	if payResp.StatusCode >= 200 && payResp.StatusCode < 300 {
+		out.SettledUSDMicros = int64(amount)
+		out.DebitKind = models.DebitKindX402RelayCost
 	}
 	return out, nil
 }
