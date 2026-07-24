@@ -239,7 +239,18 @@ func (r *Runner) executeNode(
 		checkBalance := func(cctx context.Context, amount int64) error {
 			return r.preflightCheck(cctx, wf, amount)
 		}
-		result, err := nodes.ExecuteAgent(ctx, node, attachMap[node.ID], aw, r.walletSvc, rc, checkBalance)
+		// r.walletSvc's dynamic type (*wallet.Service) also satisfies
+		// USDCGroupSigner (same nil-safe assertion as the NodeTypeTool402
+		// case below) — an agent-attached tool402 call routes through the
+		// same relay/Wallet 1 path as a standalone one.
+		usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
+		relayCfg := nodes.X402RelayConfig{
+			USDCSigner:               usdcSigner,
+			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
+			ExpectedAssetID:          r.usdcAssetID,
+			RelayBaseURL:             r.relayBaseURL,
+		}
+		result, err := nodes.ExecuteAgent(ctx, node, attachMap[node.ID], aw, r.walletSvc, rc, checkBalance, relayCfg)
 		if err != nil {
 			// A *nodes.ErrBalanceBlocked failure means the agent's own LLM
 			// turn already completed and only ran into insufficient balance
@@ -258,7 +269,11 @@ func (r *Runner) executeNode(
 			if payments, ok := m["x402Payments"].([]map[string]any); ok {
 				for _, p := range payments {
 					nodeID, _ := p["nodeId"].(string)
-					r.debitOrLog(ctx, wf, run, nodeID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
+					amount, _ := p["settledUsdMicros"].(int64)
+					kind, _ := p["debitKind"].(string)
+					if amount > 0 {
+						r.debitOrLog(ctx, wf, run, nodeID, amount, kind)
+					}
 				}
 			}
 			if nodeIDs, ok := m["billedFlatFeeNodeIds"].([]string); ok {

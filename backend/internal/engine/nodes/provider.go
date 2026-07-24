@@ -23,20 +23,20 @@ func SetOpenAIBaseURL(u string) { openAIBaseURL = u }
 
 // ExecuteAgent runs the agent node: calls the attached LLM with function calling
 // support so the agent decides whether and how to invoke its attached tools.
-func ExecuteAgent(ctx context.Context, node models.WorkflowNode, attach models.AttachConfig, aw models.AgentWallet, signer WalletSigner, rc RunContexter, checkBalance BalanceChecker) (any, error) {
+func ExecuteAgent(ctx context.Context, node models.WorkflowNode, attach models.AttachConfig, aw models.AgentWallet, signer WalletSigner, rc RunContexter, checkBalance BalanceChecker, relayCfg X402RelayConfig) (any, error) {
 	if attach.Provider == nil {
 		return rc.UserInput(), nil
 	}
 	p := attach.Provider
 	switch p.Template {
 	case "openai", "groq", "mistral":
-		return callOpenAICompat(ctx, node, *p, attach.Tools, aw, signer, rc, checkBalance)
+		return callOpenAICompat(ctx, node, *p, attach.Tools, aw, signer, rc, checkBalance, relayCfg)
 	case "anthropic":
 		return callAnthropic(ctx, node, *p, rc)
 	case "gemini":
-		return callGemini(ctx, node, *p, attach.Tools, aw, signer, rc, checkBalance)
+		return callGemini(ctx, node, *p, attach.Tools, aw, signer, rc, checkBalance, relayCfg)
 	default:
-		return callOpenAICompat(ctx, node, *p, attach.Tools, aw, signer, rc, checkBalance)
+		return callOpenAICompat(ctx, node, *p, attach.Tools, aw, signer, rc, checkBalance, relayCfg)
 	}
 }
 
@@ -126,24 +126,15 @@ func buildFuncDecls(tools []models.WorkflowNode) []funcDecl {
 
 // ─── tool execution helper ────────────────────────────────────────────────────
 
-func executeFunctionCall(ctx context.Context, funcName string, args map[string]any, tools []models.WorkflowNode, aw models.AgentWallet, signer WalletSigner, rc RunContexter, checkBalance BalanceChecker) (any, models.WorkflowNode, error) {
+func executeFunctionCall(ctx context.Context, funcName string, args map[string]any, tools []models.WorkflowNode, aw models.AgentWallet, signer WalletSigner, rc RunContexter, checkBalance BalanceChecker, relayCfg X402RelayConfig) (any, models.WorkflowNode, *ToolPaymentInfo, error) {
 	for _, t := range tools {
 		if toolFuncName(t) != funcName {
 			continue
 		}
 		toolNode := t
-		if checkBalance != nil {
-			var feeAmount int64
-			switch {
-			case toolNode.Type == models.NodeTypeTool402:
-				feeAmount = models.X402PlatformFeeUSDMicros
-			case BillableFlatFee(toolNode.Type, toolNode.Template):
-				feeAmount = models.ByokFlatFeeUSDMicros
-			}
-			if feeAmount > 0 {
-				if err := checkBalance(ctx, feeAmount); err != nil {
-					return nil, toolNode, &ErrBalanceBlocked{Err: err}
-				}
+		if checkBalance != nil && BillableFlatFee(toolNode.Type, toolNode.Template) {
+			if err := checkBalance(ctx, models.ByokFlatFeeUSDMicros); err != nil {
+				return nil, toolNode, nil, &ErrBalanceBlocked{Err: err}
 			}
 		}
 		// Append LLM-chosen args as query params onto the endpoint URL
@@ -159,13 +150,28 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			}
 		}
 		if t.Type == models.NodeTypeTool402 {
-			result, err := ExecuteTool402(ctx, toolNode, rc, aw, signer)
-			return result, toolNode, err
+			paymentResult, err := ExecuteTool402V2(ctx, toolNode, rc, aw, signer, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, checkBalance)
+			if err != nil {
+				return nil, toolNode, nil, err
+			}
+			var payment *ToolPaymentInfo
+			if paymentResult.SettledUSDMicros > 0 {
+				payment = &ToolPaymentInfo{
+					NodeID: toolNode.ID, NodeName: toolNode.Name,
+					SettledUSDMicros: paymentResult.SettledUSDMicros,
+					DebitKind:        paymentResult.DebitKind,
+				}
+				if m, ok := paymentResult.Response.(map[string]any); ok {
+					payment.TxID, _ = m["txId"].(string)
+					payment.ExplorerURL, _ = m["explorerURL"].(string)
+				}
+			}
+			return paymentResult.Response, toolNode, payment, nil
 		}
 		result, err := ExecuteTool(ctx, toolNode, rc)
-		return result, toolNode, err
+		return result, toolNode, nil, err
 	}
-	return nil, models.WorkflowNode{}, fmt.Errorf("tool %q not found in attached tools", funcName)
+	return nil, models.WorkflowNode{}, nil, fmt.Errorf("tool %q not found in attached tools", funcName)
 }
 
 // ─── low-level HTTP helper ────────────────────────────────────────────────────
@@ -201,23 +207,45 @@ func postLLMJSON(ctx context.Context, apiURL string, headers map[string]string, 
 
 const maxToolIterations = 15
 
-// collectX402Receipt builds a receipt map from a successful x402 tool result.
-func collectX402Receipt(funcName string, result map[string]any, tools []models.WorkflowNode) map[string]any {
-	txID, _ := result["txId"].(string)
-	amount, _ := result["amount"].(string)
-	explorerURL, _ := result["explorerURL"].(string)
-	receipt := map[string]any{"txId": txID, "amount": amount, "explorerURL": explorerURL}
-	for _, t := range tools {
-		if toolFuncName(t) == funcName {
-			receipt["nodeId"] = t.ID
-			receipt["nodeName"] = t.Name
-			break
-		}
+// ToolPaymentInfo carries what an agent-attached tool402 call actually
+// charged, so the agent loop can bill the real settled amount (relay
+// dialect) or the flat fee (legacy dialect) instead of assuming a fixed
+// amount from the tool result's shape.
+type ToolPaymentInfo struct {
+	NodeID           string
+	NodeName         string
+	SettledUSDMicros int64
+	DebitKind        string
+	// TxID/ExplorerURL are populated only for the legacy direct-pay dialect
+	// (its result map already carries them); relay-dialect payments settle
+	// through the facilitator with no single client-visible txid to surface
+	// here, so these stay empty for that path.
+	TxID        string
+	ExplorerURL string
+}
+
+// paymentReceipt turns a ToolPaymentInfo into the map shape surfaced in an
+// agent's "x402Payments" output field. txId/explorerURL keys are included
+// only when populated (legacy dialect), keeping the existing frontend
+// contract for those fields unchanged while adding the new
+// settledUsdMicros/debitKind fields runner.go needs for correct billing.
+func paymentReceipt(p *ToolPaymentInfo) map[string]any {
+	receipt := map[string]any{
+		"nodeId":           p.NodeID,
+		"nodeName":         p.NodeName,
+		"settledUsdMicros": p.SettledUSDMicros,
+		"debitKind":        p.DebitKind,
+	}
+	if p.TxID != "" {
+		receipt["txId"] = p.TxID
+	}
+	if p.ExplorerURL != "" {
+		receipt["explorerURL"] = p.ExplorerURL
 	}
 	return receipt
 }
 
-func callGemini(ctx context.Context, agent models.WorkflowNode, provider models.WorkflowNode, tools []models.WorkflowNode, aw models.AgentWallet, signer WalletSigner, rc RunContexter, checkBalance BalanceChecker) (any, error) {
+func callGemini(ctx context.Context, agent models.WorkflowNode, provider models.WorkflowNode, tools []models.WorkflowNode, aw models.AgentWallet, signer WalletSigner, rc RunContexter, checkBalance BalanceChecker, relayCfg X402RelayConfig) (any, error) {
 	model := provider.Model
 	if model == "" {
 		model = "gemini-2.5-flash"
@@ -281,7 +309,7 @@ func callGemini(ctx context.Context, agent models.WorkflowNode, provider models.
 		// Execute every requested function call and collect responses
 		responseParts := make([]map[string]any, 0, len(calls))
 		for _, c := range calls {
-			result, toolNode, execErr := executeFunctionCall(ctx, c.name, c.args, tools, aw, signer, rc, checkBalance)
+			result, toolNode, payment, execErr := executeFunctionCall(ctx, c.name, c.args, tools, aw, signer, rc, checkBalance, relayCfg)
 			if execErr != nil {
 				var blocked *ErrBalanceBlocked
 				if errors.As(execErr, &blocked) {
@@ -292,10 +320,8 @@ func callGemini(ctx context.Context, agent models.WorkflowNode, provider models.
 			if execErr != nil {
 				resultStr = "error: " + execErr.Error()
 			} else {
-				if m, ok := result.(map[string]any); ok {
-					if _, hasTx := m["txId"]; hasTx {
-						x402Payments = append(x402Payments, collectX402Receipt(c.name, m, tools))
-					}
+				if payment != nil {
+					x402Payments = append(x402Payments, paymentReceipt(payment))
 				}
 				if BillableFlatFee(toolNode.Type, toolNode.Template) {
 					billedFlatFeeNodeIds = append(billedFlatFeeNodeIds, toolNode.ID)
@@ -363,7 +389,7 @@ func extractGeminiFunctionCalls(resp map[string]any) []geminiFuncCall {
 
 // ─── OpenAI / Groq / Mistral ──────────────────────────────────────────────────
 
-func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider models.WorkflowNode, tools []models.WorkflowNode, aw models.AgentWallet, signer WalletSigner, rc RunContexter, checkBalance BalanceChecker) (any, error) {
+func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider models.WorkflowNode, tools []models.WorkflowNode, aw models.AgentWallet, signer WalletSigner, rc RunContexter, checkBalance BalanceChecker, relayCfg X402RelayConfig) (any, error) {
 	baseURL := openAIBaseURL
 	switch provider.Template {
 	case "groq":
@@ -455,7 +481,7 @@ func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider m
 			var tcArgs map[string]any
 			json.Unmarshal([]byte(tcArgsStr), &tcArgs)
 
-			toolResult, toolNode, toolErr := executeFunctionCall(ctx, tcName, tcArgs, tools, aw, signer, rc, checkBalance)
+			toolResult, toolNode, payment, toolErr := executeFunctionCall(ctx, tcName, tcArgs, tools, aw, signer, rc, checkBalance, relayCfg)
 			if toolErr != nil {
 				var blocked *ErrBalanceBlocked
 				if errors.As(toolErr, &blocked) {
@@ -466,10 +492,8 @@ func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider m
 			if toolErr != nil {
 				resultStr = "error: " + toolErr.Error()
 			} else {
-				if m, ok := toolResult.(map[string]any); ok {
-					if _, hasTx := m["txId"]; hasTx {
-						x402Payments = append(x402Payments, collectX402Receipt(tcName, m, tools))
-					}
+				if payment != nil {
+					x402Payments = append(x402Payments, paymentReceipt(payment))
 				}
 				if BillableFlatFee(toolNode.Type, toolNode.Template) {
 					billedFlatFeeNodeIds = append(billedFlatFeeNodeIds, toolNode.ID)

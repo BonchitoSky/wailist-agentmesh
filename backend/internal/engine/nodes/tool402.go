@@ -134,6 +134,17 @@ type USDCGroupSigner interface {
 	SignUSDCPaymentGroup(ctx context.Context, encMnemonic, payTo string, assetID, amountMicros uint64, feePayerAddr string) ([]string, int, error)
 }
 
+// X402RelayConfig bundles what an agent-attached tool402 call needs to route
+// through the AgentMesh relay (Wallet 1) exactly the way a standalone
+// tool402 node already does via ExecuteTool402V2. Threaded from Runner
+// through ExecuteAgent -> callOpenAICompat/callGemini -> executeFunctionCall.
+type X402RelayConfig struct {
+	USDCSigner               USDCGroupSigner
+	PlatformSpendEncMnemonic string
+	ExpectedAssetID          uint64
+	RelayBaseURL             string
+}
+
 // Tool402PaymentResult is what ExecuteTool402V2 returns, so the caller can
 // debit the amount actually charged instead of assuming a fixed fee.
 // SettledUSDMicros is 0 and DebitKind is "" when no payment was sent (e.g.
@@ -185,7 +196,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing.
 	if err := checkBalance(ctx, models.X402PlatformFeeUSDMicros); err != nil {
-		return Tool402PaymentResult{}, err
+		return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 	}
 	result, err := ExecuteTool402(ctx, node, rc, aw, signer)
 	if err != nil {
@@ -245,7 +256,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	// USDC's 6 decimals match credit_balance_usd_micros' scale exactly —
 	// the relay's asset base-unit amount converts to USD micros 1:1.
 	if err := checkBalance(ctx, int64(amount)); err != nil {
-		return Tool402PaymentResult{}, err
+		return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 	}
 
 	group, idx, err := usdcSigner.SignUSDCPaymentGroup(ctx, platformSpendEncMnemonic, payTo, assetID, amount, feePayer)
