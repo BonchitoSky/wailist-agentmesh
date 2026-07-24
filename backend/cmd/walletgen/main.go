@@ -22,16 +22,36 @@ func main() {
 	algodURL := flag.String("algod-url", "https://mainnet-api.algonode.cloud", "algod REST endpoint used for the opt-in transaction")
 	algodToken := flag.String("algod-token", "", "algod API token, if the endpoint requires one")
 	network := flag.String("network", "mainnet", "algorand network: mainnet or testnet")
-	assetID := flag.Uint64("asset-id", 31566704, "USDC ASA id to opt into (mainnet 31566704, testnet 10458941)")
+	assetID := flag.Uint64("asset-id", 0, "USDC ASA id to opt into (mainnet 31566704, testnet 10458941); defaults to mainnet if not specified")
 	importMnemonic := flag.String("import-mnemonic", "", "25-word Algorand mnemonic to import instead of generating a fresh account (e.g. one already generated in Pera or Defly)")
 	skipOptIn := flag.Bool("skip-opt-in", false, "skip the USDC opt-in transaction (do this if the account isn't funded with ALGO yet; opt in separately once it is)")
+	optInOnly := flag.String("opt-in-only", "", "an already-encrypted mnemonic printed by a prior walletgen run — opt it into the USDC asset now that the account is funded, skipping generation/import entirely")
 	flag.Parse()
 
 	if *encKey == "" {
 		log.Fatal("-enc-key is required")
 	}
 
+	// Derive asset-id from network if not explicitly set
+	if *assetID == 0 {
+		if *network == "mainnet" {
+			*assetID = 31566704
+		} else {
+			*assetID = 10458941
+		}
+	}
+
 	svc := wallet.NewService(*encKey, *algodURL, *algodToken, *network)
+
+	// Handle opt-in-only mode
+	if *optInOnly != "" {
+		txID, err := svc.OptInAsset(context.Background(), *optInOnly, *assetID)
+		if err != nil {
+			log.Fatalf("USDC opt-in failed: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "Opted into asset %d (txid %s)\n", *assetID, txID)
+		return
+	}
 
 	var address, encMnemonic string
 	var err error
@@ -50,7 +70,7 @@ func main() {
 	if !*skipOptIn {
 		txID, err := svc.OptInAsset(context.Background(), encMnemonic, *assetID)
 		if err != nil {
-			log.Fatalf("USDC opt-in failed (fund the address with a small amount of ALGO first, then re-run with the same -import-mnemonic and -skip-opt-in=false): %v", err)
+			log.Fatalf("USDC opt-in failed (fund the address with a small amount of ALGO first, then re-run with -opt-in-only \"%s\"): %v", encMnemonic, err)
 		}
 		fmt.Fprintf(os.Stderr, "Opted into asset %d (txid %s)\n", *assetID, txID)
 	}
