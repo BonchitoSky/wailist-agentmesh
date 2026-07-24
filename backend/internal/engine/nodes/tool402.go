@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -153,7 +154,7 @@ type Tool402PaymentResult struct {
 // today's direct-pay-from-the-agent's-own-wallet behavior, gated/charged at
 // the fixed platform fee — it was never GoPlausible-compliant and isn't
 // becoming so.
-func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, relayBaseURL string, checkBalance BalanceChecker) (Tool402PaymentResult, error) {
+func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, checkBalance BalanceChecker) (Tool402PaymentResult, error) {
 	if err := urlValidator(node.Endpoint); err != nil {
 		return Tool402PaymentResult{}, err
 	}
@@ -179,7 +180,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		Accepts []map[string]any `json:"accepts"`
 	}
 	if json.Unmarshal(body, &v2Challenge) == nil && len(v2Challenge.Accepts) > 0 {
-		return executeTool402V2Relay(ctx, node, usdcSigner, platformSpendEncMnemonic, relayBaseURL, checkBalance)
+		return executeTool402V2Relay(ctx, node, usdcSigner, platformSpendEncMnemonic, expectedAssetID, relayBaseURL, checkBalance)
 	}
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing.
@@ -200,7 +201,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	return out, nil
 }
 
-func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, relayBaseURL string, checkBalance BalanceChecker) (Tool402PaymentResult, error) {
+func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, checkBalance BalanceChecker) (Tool402PaymentResult, error) {
 	if platformSpendEncMnemonic == "" || usdcSigner == nil {
 		return Tool402PaymentResult{Response: map[string]any{"error": "payment required but no platform spend wallet configured"}}, nil
 	}
@@ -229,8 +230,17 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	if extra, ok := accept["extra"].(map[string]any); ok {
 		feePayer, _ = extra["feePayer"].(string)
 	}
-	assetID, _ := strconv.ParseUint(assetStr, 10, 64)
-	amount, _ := strconv.ParseUint(amountStr, 10, 64)
+	assetID, err := strconv.ParseUint(assetStr, 10, 64)
+	if err != nil {
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: invalid asset id %q", assetStr)
+	}
+	if assetID != expectedAssetID {
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: unexpected asset id %d, want %d", assetID, expectedAssetID)
+	}
+	amount, err := strconv.ParseUint(amountStr, 10, 64)
+	if err != nil || amount == 0 || amount > math.MaxInt64 {
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: invalid settlement amount %q", amountStr)
+	}
 
 	// USDC's 6 decimals match credit_balance_usd_micros' scale exactly —
 	// the relay's asset base-unit amount converts to USD micros 1:1.

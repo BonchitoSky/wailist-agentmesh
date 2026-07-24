@@ -193,7 +193,7 @@ func TestX402V2TargetRoutesThroughRelay(t *testing.T) {
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
 	checkBalance := func(context.Context, int64) error { return nil }
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", relay.URL, checkBalance)
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestX402LegacyTargetBypassesRelay(t *testing.T) {
 	usdcSigner := &mockUSDCGroupSigner{}
 
 	checkBalance := func(context.Context, int64) error { return nil }
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", relay.URL, checkBalance)
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestX402V2TargetWithAmpersandInQueryString(t *testing.T) {
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
 	checkBalance := func(context.Context, int64) error { return nil }
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", relay.URL, checkBalance)
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
 
 	// maxAmountRequired (100000) is under the flat-fee-sized ceiling this
 	// checkBalance allows, so this call should succeed and pay.
-	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", relay.URL, checkBalance)
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -366,7 +366,7 @@ func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
 		}
 		return nil
 	}
-	_, err = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", relay.URL, strictCheck)
+	_, err = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, strictCheck)
 	if err == nil {
 		t.Fatal("want insufficient-credits error when real amount exceeds balance")
 	}
