@@ -3,6 +3,7 @@ package nodes_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -191,7 +192,8 @@ func TestX402V2TargetRoutesThroughRelay(t *testing.T) {
 	signer := &mockSigner{txID: "unused-legacy-path"}
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
-	result, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, relay.URL)
+	checkBalance := func(context.Context, int64) error { return nil }
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", relay.URL, checkBalance)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -201,9 +203,15 @@ func TestX402V2TargetRoutesThroughRelay(t *testing.T) {
 	if !relayHit {
 		t.Fatal("want relay to have been called")
 	}
-	m, ok := result.(map[string]any)
+	if paymentResult.SettledUSDMicros != 100000 {
+		t.Fatalf("want settled amount 100000 (matches maxAmountRequired), got %d", paymentResult.SettledUSDMicros)
+	}
+	if paymentResult.DebitKind != models.DebitKindX402RelayCost {
+		t.Fatalf("want debit kind %q, got %q", models.DebitKindX402RelayCost, paymentResult.DebitKind)
+	}
+	m, ok := paymentResult.Response.(map[string]any)
 	if !ok || m["data"] != "relayed paid response" {
-		t.Fatalf("want relayed response, got %v", result)
+		t.Fatalf("want relayed response, got %v", paymentResult.Response)
 	}
 }
 
@@ -232,14 +240,21 @@ func TestX402LegacyTargetBypassesRelay(t *testing.T) {
 	signer := &mockSigner{txID: "TX-SIGNED-123"}
 	usdcSigner := &mockUSDCGroupSigner{}
 
-	result, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, relay.URL)
+	checkBalance := func(context.Context, int64) error { return nil }
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", relay.URL, checkBalance)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if relayHit {
 		t.Fatal("legacy target must bypass the relay entirely")
 	}
-	m := result.(map[string]any)
+	if paymentResult.SettledUSDMicros != models.X402PlatformFeeUSDMicros {
+		t.Fatalf("want flat fee %d, got %d", models.X402PlatformFeeUSDMicros, paymentResult.SettledUSDMicros)
+	}
+	if paymentResult.DebitKind != models.DebitKindX402PlatformFee {
+		t.Fatalf("want debit kind %q, got %q", models.DebitKindX402PlatformFee, paymentResult.DebitKind)
+	}
+	m := paymentResult.Response.(map[string]any)
 	if m["txId"] != "TX-SIGNED-123" {
 		t.Fatalf("want legacy direct-pay path unchanged, got %v", m)
 	}
@@ -276,7 +291,8 @@ func TestX402V2TargetWithAmpersandInQueryString(t *testing.T) {
 	signer := &mockSigner{txID: "unused-legacy-path"}
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
-	result, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, relay.URL)
+	checkBalance := func(context.Context, int64) error { return nil }
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", relay.URL, checkBalance)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -286,8 +302,75 @@ func TestX402V2TargetWithAmpersandInQueryString(t *testing.T) {
 		t.Fatalf("want target param %q, got %q (was truncated at &)", endpointWithQuery, capturedTargetParam)
 	}
 
-	m, ok := result.(map[string]any)
+	m, ok := paymentResult.Response.(map[string]any)
 	if !ok || m["data"] != "relayed paid response" {
-		t.Fatalf("want relayed response, got %v", result)
+		t.Fatalf("want relayed response, got %v", paymentResult.Response)
+	}
+}
+
+// TestX402V2RelayPreflightUsesRealAmount verifies the balance check gates on
+// the relay's real maxAmountRequired, not the flat platform fee — a
+// checkBalance that only tolerates the flat fee must reject a costlier call.
+func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	var paid bool
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			paid = true
+			w.Write([]byte(`{"data":"relayed paid response"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"PLATFORMADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer relay.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	var checkedAmount int64
+	checkBalance := func(_ context.Context, amount int64) error {
+		checkedAmount = amount
+		if amount > 500_000 {
+			return fmt.Errorf("insufficient credits")
+		}
+		return nil
+	}
+
+	// maxAmountRequired (100000) is under the flat-fee-sized ceiling this
+	// checkBalance allows, so this call should succeed and pay.
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", relay.URL, checkBalance)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if checkedAmount != 100000 {
+		t.Fatalf("want checkBalance called with real amount 100000, got %d", checkedAmount)
+	}
+	if !paid {
+		t.Fatal("want relay to have been paid")
+	}
+
+	// Now make checkBalance reject anything over 50000 — below the real
+	// 100000 cost — and verify the payment never happens.
+	paid = false
+	strictCheck := func(_ context.Context, amount int64) error {
+		if amount > 50_000 {
+			return fmt.Errorf("insufficient credits")
+		}
+		return nil
+	}
+	_, err = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", relay.URL, strictCheck)
+	if err == nil {
+		t.Fatal("want insufficient-credits error when real amount exceeds balance")
+	}
+	if paid {
+		t.Fatal("want no payment sent when preflight rejects the real amount")
 	}
 }

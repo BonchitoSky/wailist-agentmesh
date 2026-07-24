@@ -18,9 +18,10 @@ import (
 // add a platform-key toggle, which is where this stops being true
 // unconditionally). Tool nodes are billable only for the "http" template
 // — "calc" and "datetime" are pure local computation, no different from
-// Trigger/End, and stay free. Tool402 is metered separately (a $0.50
-// flat fee gated on whether a payment actually happened at runtime, not
-// on static config), so it always returns false here.
+// Trigger/End, and stay free. Tool402 is metered separately — relay-path
+// payments charge the real settled amount, legacy direct-pay charges a
+// flat fee, both gated on whether a payment actually happened at runtime,
+// not on static config — so it always returns false here.
 func BillableFlatFee(nodeType models.NodeType, template string) bool {
 	switch nodeType {
 	case models.NodeTypeAgent, models.NodeTypeAction:

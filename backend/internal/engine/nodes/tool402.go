@@ -133,21 +133,34 @@ type USDCGroupSigner interface {
 	SignUSDCPaymentGroup(ctx context.Context, encMnemonic, payTo string, assetID, amountMicros uint64, feePayerAddr string) ([]string, int, error)
 }
 
+// Tool402PaymentResult is what ExecuteTool402V2 returns, so the caller can
+// debit the amount actually charged instead of assuming a fixed fee.
+// SettledUSDMicros is 0 and DebitKind is "" when no payment was sent (e.g.
+// the endpoint didn't require one, or no wallet was configured).
+type Tool402PaymentResult struct {
+	Response         any
+	SettledUSDMicros int64
+	DebitKind        string
+}
+
 // ExecuteTool402V2 is the entry point runner.go calls for tool402 nodes. It
 // inspects the target's 402 quote shape: a real x402 v2 challenge (accepts[])
 // is routed through the AgentMesh relay so both payment legs are real,
-// GoPlausible-settled, and attributable to us as an orchestrator entry. The
-// legacy flat-quote dialect (no accepts[]) bypasses the relay entirely and
-// keeps today's direct-pay behavior unchanged — it was never
-// GoPlausible-compliant and isn't becoming so.
-func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, usdcSigner USDCGroupSigner, relayBaseURL string) (any, error) {
+// GoPlausible-settled, and attributable to us as an orchestrator entry, paid
+// from the platform's own Wallet 1 spend wallet and gated/charged against
+// the triggering user's credits for the real settled amount. The legacy
+// flat-quote dialect (no accepts[]) bypasses the relay entirely and keeps
+// today's direct-pay-from-the-agent's-own-wallet behavior, gated/charged at
+// the fixed platform fee — it was never GoPlausible-compliant and isn't
+// becoming so.
+func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, relayBaseURL string, checkBalance BalanceChecker) (Tool402PaymentResult, error) {
 	if err := urlValidator(node.Endpoint); err != nil {
-		return nil, err
+		return Tool402PaymentResult{}, err
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, node.Endpoint, nil)
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return Tool402PaymentResult{}, err
 	}
 
 	if resp.StatusCode != http.StatusPaymentRequired {
@@ -155,9 +168,9 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
 		var result any
 		if json.Unmarshal(b, &result) == nil {
-			return result, nil
+			return Tool402PaymentResult{Response: result}, nil
 		}
-		return string(b), nil
+		return Tool402PaymentResult{Response: string(b)}, nil
 	}
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
@@ -166,16 +179,30 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		Accepts []map[string]any `json:"accepts"`
 	}
 	if json.Unmarshal(body, &v2Challenge) == nil && len(v2Challenge.Accepts) > 0 {
-		return executeTool402V2Relay(ctx, node, aw, usdcSigner, relayBaseURL)
+		return executeTool402V2Relay(ctx, node, usdcSigner, platformSpendEncMnemonic, relayBaseURL, checkBalance)
 	}
 
-	// Legacy flat-quote dialect: unchanged direct-pay path.
-	return ExecuteTool402(ctx, node, rc, aw, signer)
+	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing.
+	if err := checkBalance(ctx, models.X402PlatformFeeUSDMicros); err != nil {
+		return Tool402PaymentResult{}, err
+	}
+	result, err := ExecuteTool402(ctx, node, rc, aw, signer)
+	if err != nil {
+		return Tool402PaymentResult{}, err
+	}
+	out := Tool402PaymentResult{Response: result}
+	if m, ok := result.(map[string]any); ok {
+		if _, hasTx := m["txId"]; hasTx {
+			out.SettledUSDMicros = models.X402PlatformFeeUSDMicros
+			out.DebitKind = models.DebitKindX402PlatformFee
+		}
+	}
+	return out, nil
 }
 
-func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, aw models.AgentWallet, usdcSigner USDCGroupSigner, relayBaseURL string) (any, error) {
-	if aw.EncryptedMnemonic == "" || usdcSigner == nil {
-		return map[string]any{"error": "payment required but no agent wallet configured"}, nil
+func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, relayBaseURL string, checkBalance BalanceChecker) (Tool402PaymentResult, error) {
+	if platformSpendEncMnemonic == "" || usdcSigner == nil {
+		return Tool402PaymentResult{Response: map[string]any{"error": "payment required but no platform spend wallet configured"}}, nil
 	}
 
 	relayURL := relayBaseURL + "/x402/relay?target=" + url.QueryEscape(node.Endpoint)
@@ -183,7 +210,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, aw mod
 	quoteReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
 	quoteResp, err := toolHTTPClient.Do(quoteReq)
 	if err != nil {
-		return nil, fmt.Errorf("x402 relay quote failed: %w", err)
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay quote failed: %w", err)
 	}
 	quoteBody, _ := io.ReadAll(io.LimitReader(quoteResp.Body, httpResponseLimit))
 	quoteResp.Body.Close()
@@ -192,7 +219,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, aw mod
 		Accepts []map[string]any `json:"accepts"`
 	}
 	if json.Unmarshal(quoteBody, &relayChallenge) != nil || len(relayChallenge.Accepts) == 0 {
-		return nil, fmt.Errorf("x402 relay: invalid challenge response")
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: invalid challenge response")
 	}
 	accept := relayChallenge.Accepts[0]
 	payTo, _ := accept["payTo"].(string)
@@ -205,9 +232,15 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, aw mod
 	assetID, _ := strconv.ParseUint(assetStr, 10, 64)
 	amount, _ := strconv.ParseUint(amountStr, 10, 64)
 
-	group, idx, err := usdcSigner.SignUSDCPaymentGroup(ctx, aw.EncryptedMnemonic, payTo, assetID, amount, feePayer)
+	// USDC's 6 decimals match credit_balance_usd_micros' scale exactly —
+	// the relay's asset base-unit amount converts to USD micros 1:1.
+	if err := checkBalance(ctx, int64(amount)); err != nil {
+		return Tool402PaymentResult{}, err
+	}
+
+	group, idx, err := usdcSigner.SignUSDCPaymentGroup(ctx, platformSpendEncMnemonic, payTo, assetID, amount, feePayer)
 	if err != nil {
-		return nil, fmt.Errorf("x402 relay payment signing failed: %w", err)
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay payment signing failed: %w", err)
 	}
 	xPayment, _ := json.Marshal(map[string]any{
 		"x402Version": 2, "scheme": "exact",
@@ -218,14 +251,17 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, aw mod
 	payReq.Header.Set("X-Payment", string(xPayment))
 	payResp, err := toolHTTPClient.Do(payReq)
 	if err != nil {
-		return nil, fmt.Errorf("x402 relay payment request failed: %w", err)
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay payment request failed: %w", err)
 	}
 	defer payResp.Body.Close()
 	finalBody, _ := io.ReadAll(io.LimitReader(payResp.Body, httpResponseLimit))
 
+	out := Tool402PaymentResult{SettledUSDMicros: int64(amount), DebitKind: models.DebitKindX402RelayCost}
 	var result any
 	if json.Unmarshal(finalBody, &result) == nil {
-		return result, nil
+		out.Response = result
+	} else {
+		out.Response = string(finalBody)
 	}
-	return string(finalBody), nil
+	return out, nil
 }

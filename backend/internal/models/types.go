@@ -213,6 +213,7 @@ type DebitEntry struct {
 const (
 	DebitKindByokFlatFee     = "byok_flat_fee"
 	DebitKindX402PlatformFee = "x402_platform_fee"
+	DebitKindX402RelayCost   = "x402_relay_cost"
 )
 
 const (
