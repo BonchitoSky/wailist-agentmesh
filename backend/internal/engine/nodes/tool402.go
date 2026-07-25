@@ -143,12 +143,18 @@ type X402RelayConfig struct {
 	PlatformSpendEncMnemonic string
 	ExpectedAssetID          uint64
 	RelayBaseURL             string
+	// Ledger reserves/commits/releases credits for real on-chain tool402
+	// payments made through this config. See PaymentLedger.
+	Ledger PaymentLedger
 }
 
-// Tool402PaymentResult is what ExecuteTool402V2 returns, so the caller can
-// debit the amount actually charged instead of assuming a fixed fee.
-// SettledUSDMicros is 0 and DebitKind is "" when no payment was sent (e.g.
-// the endpoint didn't require one, or no wallet was configured).
+// Tool402PaymentResult is what ExecuteTool402V2 returns. SettledUSDMicros
+// and DebitKind describe a charge that has ALREADY been committed via the
+// caller-supplied PaymentLedger by the time this returns — callers report
+// these for logging/audit purposes and must not debit again. Both are zero
+// when no payment was sent (e.g. the endpoint didn't require one, no wallet
+// was configured, or a reservation was taken but released because the
+// payment never actually settled).
 type Tool402PaymentResult struct {
 	Response         any
 	SettledUSDMicros int64
@@ -165,7 +171,7 @@ type Tool402PaymentResult struct {
 // today's direct-pay-from-the-agent's-own-wallet behavior, gated/charged at
 // the fixed platform fee — it was never GoPlausible-compliant and isn't
 // becoming so.
-func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, checkBalance BalanceChecker) (Tool402PaymentResult, error) {
+func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger) (Tool402PaymentResult, error) {
 	if err := urlValidator(node.Endpoint); err != nil {
 		return Tool402PaymentResult{}, err
 	}
@@ -191,15 +197,31 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		Accepts []map[string]any `json:"accepts"`
 	}
 	if json.Unmarshal(body, &v2Challenge) == nil && len(v2Challenge.Accepts) > 0 {
-		return executeTool402V2Relay(ctx, node, usdcSigner, platformSpendEncMnemonic, expectedAssetID, relayBaseURL, checkBalance)
+		return executeTool402V2Relay(ctx, node, usdcSigner, platformSpendEncMnemonic, expectedAssetID, relayBaseURL, ledger)
 	}
 
-	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing.
-	if err := checkBalance(ctx, models.X402PlatformFeeUSDMicros); err != nil {
-		return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
+	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing,
+	// paid from the agent's own wallet (not Wallet 1). If no wallet is
+	// configured, ExecuteTool402 degrades gracefully without attempting a
+	// payment at all — check that first so a reservation is never taken for
+	// a call that can't possibly pay.
+	if aw.EncryptedMnemonic == "" || signer == nil {
+		result, err := ExecuteTool402(ctx, node, rc, aw, signer)
+		if err != nil {
+			return Tool402PaymentResult{}, err
+		}
+		return Tool402PaymentResult{Response: result}, nil
+	}
+	if reserve := ledger.Reserve; reserve != nil {
+		if err := reserve(ctx, models.X402PlatformFeeUSDMicros); err != nil {
+			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
+		}
 	}
 	result, err := ExecuteTool402(ctx, node, rc, aw, signer)
 	if err != nil {
+		if release := ledger.Release; release != nil {
+			release(ctx, models.X402PlatformFeeUSDMicros)
+		}
 		return Tool402PaymentResult{}, err
 	}
 	out := Tool402PaymentResult{Response: result}
@@ -207,12 +229,21 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		if _, hasTx := m["txId"]; hasTx {
 			out.SettledUSDMicros = models.X402PlatformFeeUSDMicros
 			out.DebitKind = models.DebitKindX402PlatformFee
+			if commit := ledger.Commit; commit != nil {
+				commit(ctx, node.ID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
+			}
+			return out, nil
 		}
+	}
+	// No payment was actually sent (e.g. the retried request came back
+	// without a txId) -- release the reservation, nothing to charge for.
+	if release := ledger.Release; release != nil {
+		release(ctx, models.X402PlatformFeeUSDMicros)
 	}
 	return out, nil
 }
 
-func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, checkBalance BalanceChecker) (Tool402PaymentResult, error) {
+func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger) (Tool402PaymentResult, error) {
 	if platformSpendEncMnemonic == "" || usdcSigner == nil {
 		return Tool402PaymentResult{Response: map[string]any{"error": "payment required but no platform spend wallet configured"}}, nil
 	}
@@ -255,12 +286,27 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 
 	// USDC's 6 decimals match credit_balance_usd_micros' scale exactly —
 	// the relay's asset base-unit amount converts to USD micros 1:1.
-	if err := checkBalance(ctx, int64(amount)); err != nil {
-		return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
+	//
+	// Reserve (atomically decrement) the exact amount now, before signing —
+	// not just check it — so a second call racing this one (another
+	// iteration of the same agent's tool loop, or a concurrent standalone
+	// tool402 node) can't also pass a check against the same stale balance
+	// and cause the platform to pay out more than the user can cover in
+	// aggregate.
+	if reserve := ledger.Reserve; reserve != nil {
+		if err := reserve(ctx, int64(amount)); err != nil {
+			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
+		}
+	}
+	releaseReservation := func() {
+		if release := ledger.Release; release != nil {
+			release(ctx, int64(amount))
+		}
 	}
 
 	group, idx, err := usdcSigner.SignUSDCPaymentGroup(ctx, platformSpendEncMnemonic, payTo, assetID, amount, feePayer)
 	if err != nil {
+		releaseReservation()
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay payment signing failed: %w", err)
 	}
 	xPayment, _ := json.Marshal(map[string]any{
@@ -272,6 +318,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	payReq.Header.Set("X-Payment", string(xPayment))
 	payResp, err := toolHTTPClient.Do(payReq)
 	if err != nil {
+		releaseReservation()
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay payment request failed: %w", err)
 	}
 	defer payResp.Body.Close()
@@ -284,12 +331,24 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	} else {
 		out.Response = string(finalBody)
 	}
-	// Only mark as settled if the relay actually accepted the payment.
-	// If the relay rejects (expired/invalid payment, verification failure, etc.)
-	// and returns non-2xx, nothing was confirmed settled on-chain, so don't bill.
-	if payResp.StatusCode >= 200 && payResp.StatusCode < 300 {
+	// Bill based on whether the INBOUND leg (Wallet 1 -> Wallet 2) actually
+	// settled, not on the relay's overall HTTP status. By the time this
+	// response exists, the relay has already irreversibly moved that money
+	// via the facilitator if X-Inbound-Settled is set — the outbound leg
+	// (Wallet 2 -> the caller-controlled target) can still fail afterward
+	// (the target errors, or rejects), and per x402relay.go's payTargetAndRespond
+	// there is no refund path for that leg. Gating billing on the final
+	// composite status instead of the inbound settlement would let a
+	// malicious target accept payment and then deliberately return a
+	// non-2xx response to avoid ever being billed, while still being paid.
+	if payResp.Header.Get("X-Inbound-Settled") == "true" {
 		out.SettledUSDMicros = int64(amount)
 		out.DebitKind = models.DebitKindX402RelayCost
+		if commit := ledger.Commit; commit != nil {
+			commit(ctx, node.ID, int64(amount), models.DebitKindX402RelayCost)
+		}
+	} else {
+		releaseReservation()
 	}
 	return out, nil
 }

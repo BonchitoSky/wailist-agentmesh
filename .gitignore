@@ -52,6 +52,7 @@ frontend/next-env.d.ts
 
 # backend
 /backend/server
+/backend/walletgen
 /backend/*.env
 /backend/.env
 *.test

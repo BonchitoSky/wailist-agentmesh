@@ -630,6 +630,63 @@ func (s *Store) DebitCredits(ctx context.Context, userID string, amountUSDMicros
 	return tx.Commit(ctx)
 }
 
+// ReserveCredits atomically checks a user's balance covers amountUSDMicros
+// and, if so, immediately decrements it — without yet writing a debit_ledger
+// row. x402 payments split the check from the real payment attempt by a
+// network round trip (sign, relay, wait for settlement); reserving the
+// balance up front, at the same atomic-decrement primitive DebitCredits
+// already uses, closes the gap where concurrent or sequential calls within
+// one node execution could all pass a check against the same stale balance.
+// Pair with CommitReservedDebit once the payment is confirmed settled, or
+// ReleaseReservedCredits if it never happened.
+func (s *Store) ReserveCredits(ctx context.Context, userID string, amountUSDMicros int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var balance int64
+	if err := tx.QueryRow(ctx, `
+		SELECT credit_balance_usd_micros FROM users WHERE id = $1 FOR UPDATE
+	`, userID).Scan(&balance); err != nil {
+		return err
+	}
+	if balance < amountUSDMicros {
+		return ErrInsufficientCredits
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros - $1 WHERE id = $2
+	`, amountUSDMicros, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// CommitReservedDebit records the debit_ledger audit row for a
+// ReserveCredits reservation that turned into a real, settled charge. The
+// balance was already decremented at reservation time, so this only writes
+// the audit trail — it must never be called with an amount that wasn't
+// already reserved.
+func (s *Store) CommitReservedDebit(ctx context.Context, userID string, amountUSDMicros int64, kind, workflowID, runID, nodeID string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO debit_ledger (user_id, workflow_id, run_id, node_id, kind, amount_usd_micros)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, userID, workflowID, runID, nodeID, kind, amountUSDMicros)
+	return err
+}
+
+// ReleaseReservedCredits credits back a ReserveCredits reservation that
+// never became a real charge (the payment attempt failed, or was never
+// confirmed settled, before any money moved). No debit_ledger row: nothing
+// was ever actually charged, so there is nothing there to reverse.
+func (s *Store) ReleaseReservedCredits(ctx context.Context, userID string, amountUSDMicros int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1 WHERE id = $2
+	`, amountUSDMicros, userID)
+	return err
+}
+
 // ListDebitLedger returns every debit_ledger row for a run, oldest first.
 // Used by the credits/usage dashboard and by tests asserting exactly which
 // charges a run produced.

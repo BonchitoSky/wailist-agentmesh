@@ -156,6 +156,7 @@ func TestExecuteAgentAttachedTool402RoutesThroughRelay(t *testing.T) {
 
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Payment") != "" {
+			w.Header().Set("X-Inbound-Settled", "true")
 			w.Write([]byte(`{"data":"paid tool response"}`))
 			return
 		}
@@ -204,6 +205,7 @@ func TestExecuteAgentAttachedTool402RoutesThroughRelay(t *testing.T) {
 		PlatformSpendEncMnemonic: "platform-enc-mnemonic",
 		ExpectedAssetID:          10458941,
 		RelayBaseURL:             relay.URL,
+		Ledger:                   noopLedger(),
 	}
 
 	result, err := nodes.ExecuteAgent(context.Background(), node, attach, aw, nil, rc, checkBalance, relayCfg)

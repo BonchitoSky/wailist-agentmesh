@@ -201,6 +201,17 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
+	// Signals to the orchestrator's own tool402 caller (tool402.go) that the
+	// inbound leg (Wallet 1 -> Wallet 2, via the facilitator above) has
+	// irreversibly settled, independent of whatever the outbound leg to
+	// target below does. Must be set before any WriteHeader call in this
+	// response — payTargetAndRespond is the first thing that writes a
+	// status/body from here on. The caller bills on this header, not on the
+	// final composite status: a target that accepts the outbound payment and
+	// then deliberately returns a non-2xx response must not be able to dodge
+	// billing while still being paid (see payTargetAndRespond's no-refund-path
+	// note) — the money already left Wallet 1 by this point regardless.
+	w.Header().Set("X-Inbound-Settled", "true")
 	d.payTargetAndRespond(w, r, target, ledgerRow.ID, quote)
 }
 

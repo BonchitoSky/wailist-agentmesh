@@ -163,6 +163,17 @@ func (m *mockUSDCGroupSigner) SignUSDCPaymentGroup(_ context.Context, _, _ strin
 	return m.group, m.idx, nil
 }
 
+// noopLedger is a permissive PaymentLedger for tests that need a real
+// payment to go through without asserting anything about reserve/commit/
+// release themselves.
+func noopLedger() nodes.PaymentLedger {
+	return nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { return nil },
+		Commit:  func(context.Context, string, int64, string) {},
+		Release: func(context.Context, int64) {},
+	}
+}
+
 // TestX402V2TargetRoutesThroughRelay verifies that a target advertising the
 // real x402 v2 shape (accepts[]) is never paid directly — the agent pays the
 // relay instead, which is what earns orchestrator-entry attribution.
@@ -178,6 +189,7 @@ func TestX402V2TargetRoutesThroughRelay(t *testing.T) {
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		relayHit = true
 		if r.Header.Get("X-Payment") != "" {
+			w.Header().Set("X-Inbound-Settled", "true")
 			w.Write([]byte(`{"data":"relayed paid response"}`))
 			return
 		}
@@ -192,8 +204,7 @@ func TestX402V2TargetRoutesThroughRelay(t *testing.T) {
 	signer := &mockSigner{txID: "unused-legacy-path"}
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
-	checkBalance := func(context.Context, int64) error { return nil }
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, noopLedger())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,8 +251,7 @@ func TestX402LegacyTargetBypassesRelay(t *testing.T) {
 	signer := &mockSigner{txID: "TX-SIGNED-123"}
 	usdcSigner := &mockUSDCGroupSigner{}
 
-	checkBalance := func(context.Context, int64) error { return nil }
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, noopLedger())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -275,6 +285,7 @@ func TestX402V2TargetWithAmpersandInQueryString(t *testing.T) {
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedTargetParam = r.URL.Query().Get("target")
 		if r.Header.Get("X-Payment") != "" {
+			w.Header().Set("X-Inbound-Settled", "true")
 			w.Write([]byte(`{"data":"relayed paid response"}`))
 			return
 		}
@@ -291,8 +302,7 @@ func TestX402V2TargetWithAmpersandInQueryString(t *testing.T) {
 	signer := &mockSigner{txID: "unused-legacy-path"}
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
-	checkBalance := func(context.Context, int64) error { return nil }
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, noopLedger())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -322,6 +332,7 @@ func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Payment") != "" {
 			paid = true
+			w.Header().Set("X-Inbound-Settled", "true")
 			w.Write([]byte(`{"data":"relayed paid response"}`))
 			return
 		}
@@ -336,37 +347,45 @@ func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
 	var checkedAmount int64
-	checkBalance := func(_ context.Context, amount int64) error {
-		checkedAmount = amount
-		if amount > 500_000 {
-			return fmt.Errorf("insufficient credits")
-		}
-		return nil
+	ledger := nodes.PaymentLedger{
+		Reserve: func(_ context.Context, amount int64) error {
+			checkedAmount = amount
+			if amount > 500_000 {
+				return fmt.Errorf("insufficient credits")
+			}
+			return nil
+		},
+		Commit:  func(context.Context, string, int64, string) {},
+		Release: func(context.Context, int64) {},
 	}
 
 	// maxAmountRequired (100000) is under the flat-fee-sized ceiling this
-	// checkBalance allows, so this call should succeed and pay.
-	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
+	// ledger.Reserve allows, so this call should succeed and pay.
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, ledger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if checkedAmount != 100000 {
-		t.Fatalf("want checkBalance called with real amount 100000, got %d", checkedAmount)
+		t.Fatalf("want ledger.Reserve called with real amount 100000, got %d", checkedAmount)
 	}
 	if !paid {
 		t.Fatal("want relay to have been paid")
 	}
 
-	// Now make checkBalance reject anything over 50000 — below the real
-	// 100000 cost — and verify the payment never happens.
+	// Now make Reserve reject anything over 50000 — below the real 100000
+	// cost — and verify the payment never happens.
 	paid = false
-	strictCheck := func(_ context.Context, amount int64) error {
-		if amount > 50_000 {
-			return fmt.Errorf("insufficient credits")
-		}
-		return nil
+	strictLedger := nodes.PaymentLedger{
+		Reserve: func(_ context.Context, amount int64) error {
+			if amount > 50_000 {
+				return fmt.Errorf("insufficient credits")
+			}
+			return nil
+		},
+		Commit:  func(context.Context, string, int64, string) {},
+		Release: func(context.Context, int64) {},
 	}
-	_, err = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, strictCheck)
+	_, err = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, strictLedger)
 	if err == nil {
 		t.Fatal("want insufficient-credits error when real amount exceeds balance")
 	}
@@ -404,8 +423,14 @@ func TestX402V2RelayRejectsPayment(t *testing.T) {
 	signer := &mockSigner{txID: "unused"}
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
-	checkBalance := func(context.Context, int64) error { return nil }
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, checkBalance)
+	var reserved, released bool
+	var committed bool
+	ledger := nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { reserved = true; return nil },
+		Commit:  func(context.Context, string, int64, string) { committed = true },
+		Release: func(context.Context, int64) { released = true },
+	}
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, ledger)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -426,5 +451,18 @@ func TestX402V2RelayRejectsPayment(t *testing.T) {
 	}
 	if paymentResult.DebitKind != "" {
 		t.Fatalf("want DebitKind empty (payment rejected), got %q", paymentResult.DebitKind)
+	}
+
+	// The reservation must have been taken (before signing) and then
+	// released (no X-Inbound-Settled on the relay's response), never
+	// committed to a permanent charge.
+	if !reserved {
+		t.Fatal("want the balance to have been reserved before signing")
+	}
+	if !released {
+		t.Fatal("want the reservation to have been released since nothing settled")
+	}
+	if committed {
+		t.Fatal("want no commit — the payment was rejected, nothing settled")
 	}
 }

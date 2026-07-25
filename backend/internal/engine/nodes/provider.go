@@ -132,9 +132,27 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			continue
 		}
 		toolNode := t
-		if checkBalance != nil && BillableFlatFee(toolNode.Type, toolNode.Template) {
-			if err := checkBalance(ctx, models.ByokFlatFeeUSDMicros); err != nil {
-				return nil, toolNode, nil, &ErrBalanceBlocked{Err: err}
+		if checkBalance != nil {
+			// Cheap, conservative guard before any network call to the tool's
+			// endpoint: reject outright if the balance can't even cover the
+			// worst-case flat-fee floor, so an unfunded caller can't drive
+			// unbounded outbound HTTP requests (SSRF/DoS-amplification risk)
+			// merely by attaching tool nodes it can never pay for. The real,
+			// exact-amount gate for tool402 relay-dialect payments still runs
+			// separately inside ExecuteTool402V2 once the true cost is known
+			// (which can be less than this floor) — this is a floor, not the
+			// final word.
+			var feeAmount int64
+			switch {
+			case toolNode.Type == models.NodeTypeTool402:
+				feeAmount = models.X402PlatformFeeUSDMicros
+			case BillableFlatFee(toolNode.Type, toolNode.Template):
+				feeAmount = models.ByokFlatFeeUSDMicros
+			}
+			if feeAmount > 0 {
+				if err := checkBalance(ctx, feeAmount); err != nil {
+					return nil, toolNode, nil, &ErrBalanceBlocked{Err: err}
+				}
 			}
 		}
 		// Append LLM-chosen args as query params onto the endpoint URL
@@ -150,7 +168,7 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			}
 		}
 		if t.Type == models.NodeTypeTool402 {
-			paymentResult, err := ExecuteTool402V2(ctx, toolNode, rc, aw, signer, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, checkBalance)
+			paymentResult, err := ExecuteTool402V2(ctx, toolNode, rc, aw, signer, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, relayCfg.Ledger)
 			if err != nil {
 				return nil, toolNode, nil, err
 			}

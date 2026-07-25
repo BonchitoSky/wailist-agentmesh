@@ -64,6 +64,35 @@ func (r *Runner) debitOrLog(ctx context.Context, wf models.Workflow, run models.
 	}
 }
 
+// newPaymentLedger builds the reserve/commit/release closures a real
+// on-chain tool402 payment (either dialect, standalone or agent-attached)
+// uses to atomically decrement the user's balance at the moment a payment
+// is committed to, before it's attempted — instead of checking balance and
+// only debiting afterward, which would let multiple calls within the same
+// node execution (an agent's sequential tool loop, or concurrent standalone
+// tool402 nodes in the same topology level) all pass a check against the
+// same stale balance and collectively overspend past what the user can
+// cover. See nodes.PaymentLedger.
+func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.PaymentLedger {
+	return nodes.PaymentLedger{
+		Reserve: func(cctx context.Context, amountUSDMicros int64) error {
+			return r.store.ReserveCredits(cctx, wf.UserID, amountUSDMicros)
+		},
+		Commit: func(cctx context.Context, nodeID string, amountUSDMicros int64, kind string) {
+			if err := r.store.CommitReservedDebit(cctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
+				log.Printf("commit reserved debit failed: user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
+					wf.UserID, wf.ID, run.ID, nodeID, kind, amountUSDMicros, err)
+			}
+		},
+		Release: func(cctx context.Context, amountUSDMicros int64) {
+			if err := r.store.ReleaseReservedCredits(cctx, wf.UserID, amountUSDMicros); err != nil {
+				log.Printf("release reserved credits failed: user=%s workflow=%s run=%s amount=%d: %v",
+					wf.UserID, wf.ID, run.ID, amountUSDMicros, err)
+			}
+		},
+	}
+}
+
 // Start creates a cancellable context for the run, registers it, and launches
 // Run in a goroutine. Replaces the previous pattern of calling Run directly.
 func (r *Runner) Start(wf models.Workflow, run models.Run) {
@@ -249,6 +278,7 @@ func (r *Runner) executeNode(
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 			ExpectedAssetID:          r.usdcAssetID,
 			RelayBaseURL:             r.relayBaseURL,
+			Ledger:                   r.newPaymentLedger(wf, run),
 		}
 		result, err := nodes.ExecuteAgent(ctx, node, attachMap[node.ID], aw, r.walletSvc, rc, checkBalance, relayCfg)
 		if err != nil {
@@ -266,16 +296,14 @@ func (r *Runner) executeNode(
 		}
 		r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
 		if m, ok := result.(map[string]any); ok {
-			if payments, ok := m["x402Payments"].([]map[string]any); ok {
-				for _, p := range payments {
-					nodeID, _ := p["nodeId"].(string)
-					amount, _ := p["settledUsdMicros"].(int64)
-					kind, _ := p["debitKind"].(string)
-					if amount > 0 {
-						r.debitOrLog(ctx, wf, run, nodeID, amount, kind)
-					}
-				}
-			}
+			// x402Payments entries are already reserved+committed via
+			// relayCfg.Ledger from inside ExecuteAgent's tool-calling loop, at
+			// the moment each payment settled — not batched here. Batching the
+			// debit until after the whole agent turn completes would let every
+			// iteration of the loop check the same stale balance and
+			// collectively overspend past what the user can cover; see
+			// newPaymentLedger. This entry is retained in the result only so
+			// Run() can still publish a log/SSE event per payment below.
 			if nodeIDs, ok := m["billedFlatFeeNodeIds"].([]string); ok {
 				for _, nodeID := range nodeIDs {
 					r.debitOrLog(ctx, wf, run, nodeID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
@@ -317,16 +345,20 @@ func (r *Runner) executeNode(
 		// only implements WalletSigner, and ExecuteTool402V2 falls back to a
 		// graceful "no wallet configured" result rather than paying via relay.
 		usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
-		checkBalance := func(cctx context.Context, amount int64) error {
-			return r.preflightCheck(cctx, wf, amount)
+		// Cheap, conservative guard before any network call to node.Endpoint —
+		// see the matching comment in provider.go's executeFunctionCall. The
+		// real, exact-amount reservation happens inside ExecuteTool402V2 via
+		// ledger below.
+		if err := r.preflightCheck(ctx, wf, models.X402PlatformFeeUSDMicros); err != nil {
+			return nil, err
 		}
-		paymentResult, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, usdcSigner, r.platformSpendEncMnemonic, r.usdcAssetID, r.relayBaseURL, checkBalance)
+		ledger := r.newPaymentLedger(wf, run)
+		paymentResult, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, usdcSigner, r.platformSpendEncMnemonic, r.usdcAssetID, r.relayBaseURL, ledger)
 		if err != nil {
 			return nil, err
 		}
-		if paymentResult.SettledUSDMicros > 0 {
-			r.debitOrLog(ctx, wf, run, node.ID, paymentResult.SettledUSDMicros, paymentResult.DebitKind)
-		}
+		// Already reserved+committed via ledger inside ExecuteTool402V2, at
+		// the moment the payment settled — see newPaymentLedger.
 		return paymentResult.Response, nil
 	case models.NodeTypeAction:
 		billable := nodes.BillableFlatFee(node.Type, node.Template)

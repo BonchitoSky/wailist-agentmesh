@@ -70,7 +70,12 @@ func main() {
 	if !*skipOptIn {
 		txID, err := svc.OptInAsset(context.Background(), encMnemonic, *assetID)
 		if err != nil {
-			log.Fatalf("USDC opt-in failed (fund the address with a small amount of ALGO first, then re-run with -opt-in-only \"%s\"): %v", encMnemonic, err)
+			// Print the encrypted mnemonic on its own line rather than
+			// interpolated into the error text, so it's a clean value to
+			// copy for the -opt-in-only retry instead of being embedded in a
+			// quoted, wrapped log line.
+			fmt.Println(encMnemonic)
+			log.Fatalf("USDC opt-in failed: %v (fund the address with a small amount of ALGO first, then re-run with -opt-in-only using the encrypted mnemonic printed above)", err)
 		}
 		fmt.Fprintf(os.Stderr, "Opted into asset %d (txid %s)\n", *assetID, txID)
 	}
