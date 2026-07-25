@@ -46,6 +46,29 @@ func (s *Service) DecryptMnemonic(encMnemonic string) (string, error) {
 	return Decrypt(encMnemonic, s.encKey)
 }
 
+// AddressForEncMnemonic decrypts encMnemonic and derives the Algorand
+// address it controls. Used at startup to verify an operator-supplied
+// address env var actually matches the operator-supplied encrypted
+// mnemonic env var it's paired with -- pasting the right mnemonic under the
+// wrong address label (or vice versa) would otherwise go undetected until
+// a payment silently signs from a different account than the one the rest
+// of the system believes it's using.
+func (s *Service) AddressForEncMnemonic(encMnemonic string) (string, error) {
+	mn, err := s.DecryptMnemonic(encMnemonic)
+	if err != nil {
+		return "", err
+	}
+	privKey, err := mnemonic.ToPrivateKey(mn)
+	if err != nil {
+		return "", err
+	}
+	acc, err := crypto.AccountFromPrivateKey(privKey)
+	if err != nil {
+		return "", err
+	}
+	return acc.Address.String(), nil
+}
+
 func (s *Service) Balance(ctx context.Context, address string) (uint64, error) {
 	client, err := algod.MakeClient(s.algodURL, s.algodToken)
 	if err != nil {

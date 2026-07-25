@@ -368,14 +368,15 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	} else {
 		out.Response = string(finalBody)
 	}
-	// Bill based on whether the INBOUND leg (Wallet 1 -> Wallet 2) actually
-	// settled, not on the relay's overall HTTP status. By the time this
-	// response exists, the relay has already irreversibly moved that money
-	// via the facilitator if X-Inbound-Settled is set — the outbound leg
-	// (Wallet 2 -> the caller-controlled target) can still fail afterward
-	// (the target errors, or rejects), and per x402relay.go's payTargetAndRespond
-	// there is no refund path for that leg. Gating billing on the final
-	// composite status instead of the inbound settlement would let a
+	// Bill based on X-Inbound-Settled, not the relay's overall HTTP status.
+	// The relay only sets this header once both (a) the inbound leg (Wallet
+	// 1 -> Wallet 2) has irreversibly settled via the facilitator, and (b) a
+	// real signed outbound payment group now exists as a submittable claim
+	// (see x402relay.go's payTargetAndRespond) — so a signing failure on the
+	// platform's side never bills the caller, but once a group is signed the
+	// outbound leg to the caller-controlled target can still fail afterward
+	// (the target errors, or rejects) with no refund path, and that must
+	// still bill: gating on the final composite status instead would let a
 	// malicious target accept payment and then deliberately return a
 	// non-2xx response to avoid ever being billed, while still being paid.
 	if payResp.Header.Get("X-Inbound-Settled") == "true" {

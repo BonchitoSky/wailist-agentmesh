@@ -216,17 +216,6 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
-	// Signals to the orchestrator's own tool402 caller (tool402.go) that the
-	// inbound leg (Wallet 1 -> Wallet 2, via the facilitator above) has
-	// irreversibly settled, independent of whatever the outbound leg to
-	// target below does. Must be set before any WriteHeader call in this
-	// response — payTargetAndRespond is the first thing that writes a
-	// status/body from here on. The caller bills on this header, not on the
-	// final composite status: a target that accepts the outbound payment and
-	// then deliberately returns a non-2xx response must not be able to dodge
-	// billing while still being paid (see payTargetAndRespond's no-refund-path
-	// note) — the money already left Wallet 1 by this point regardless.
-	w.Header().Set("X-Inbound-Settled", "true")
 	d.payTargetAndRespond(w, r, target, ledgerRow.ID, quote)
 }
 
@@ -278,6 +267,27 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 		respond.Error(w, http.StatusInternalServerError, "failed to sign outbound payment: "+err.Error())
 		return
 	}
+
+	// Signals to the orchestrator's own tool402 caller (tool402.go) that the
+	// inbound leg (Wallet 1 -> Wallet 2, via the facilitator in
+	// relaySettleAndForward) has irreversibly settled AND a real signed
+	// outbound payment group now exists, independent of whatever the
+	// target's HTTP response below says. Deliberately set here, after
+	// signing succeeds, rather than earlier in relaySettleAndForward right
+	// after the inbound leg settles: at that point there is no signed group
+	// yet, and a signing failure (bad payTo, algod outage, ...) means the
+	// target receives nothing at all -- billing the caller in that case
+	// would be a real over-charge, not the "money already moved so it's
+	// fair to bill" case this header exists to represent. Once a group is
+	// signed here, it's a submittable claim regardless of what the target's
+	// HTTP response says, which is what makes billing on this header (not on
+	// payResp.StatusCode below) safe: a target that accepts payment and then
+	// deliberately returns non-2xx must not be able to dodge billing while
+	// still being paid. Must be set before any WriteHeader call from this
+	// point on — the paid request/response handling below is the first thing
+	// that writes a status/body.
+	w.Header().Set("X-Inbound-Settled", "true")
+
 	xPaymentOut, _ := json.Marshal(map[string]any{
 		"x402Version": 2, "scheme": "exact", "network": d.RelayNetwork,
 		"payload": map[string]any{"paymentGroup": group, "paymentIndex": idx},

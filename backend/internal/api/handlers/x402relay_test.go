@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -319,19 +320,16 @@ func TestX402RelayUsesSingleQuoteForBothSettlementAndOutboundPayment(t *testing.
 // The fake target here claims asset "99999999" (not d.USDCAssetID,
 // 10458941) consistently on every unauthenticated fetch — so this is not the
 // two-different-fetches fund-drain vector from the test above, just a single
-// quote that names the wrong asset throughout. Under the fix, the relay must
-// catch this before ever calling the USDC signer or making a paid request to
-// the target, and must record the outbound settlement as failed.
-// TestX402RelayRejectsOutboundPaymentInWrongAsset verifies the relay refuses
-// a target that quotes an asset other than d.USDCAssetID before ever
-// settling the caller's inbound payment -- not just before paying the
-// target. Checking this only in payTargetAndRespond (after
-// RecordInboundSettlement) would have set X-Inbound-Settled on the
-// response and let tool402.go bill the caller in full for a call that was
-// never going to reach the target; catching it in relaySettleAndForward,
-// before the facilitator's Verify/Settle are ever called, means neither the
-// inbound leg nor an outbound-settlement row exist at all -- there is
-// nothing to bill and nothing to reconcile.
+// quote that names the wrong asset throughout.
+//
+// The check now runs in relaySettleAndForward, before the facilitator's
+// Verify/Settle are ever called — not just before paying the target in
+// payTargetAndRespond. Checking it only in payTargetAndRespond (after
+// RecordInboundSettlement) would have set X-Inbound-Settled on the response
+// and let tool402.go bill the caller in full for a call that was never
+// going to reach the target; catching it earlier means neither the inbound
+// leg nor an outbound-settlement row exist at all — there is nothing to
+// bill and nothing to reconcile.
 func TestX402RelayRejectsOutboundPaymentInWrongAsset(t *testing.T) {
 	var targetGotPaidRequest bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -400,6 +398,78 @@ func TestX402RelayRejectsOutboundPaymentInWrongAsset(t *testing.T) {
 
 	if _, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-WRONGASSET-"+target.URL); err == nil {
 		t.Fatal("want no settlement row at all -- the inbound leg was never settled, so there is nothing to record")
+	}
+}
+
+// TestX402RelayDoesNotBillWhenOutboundSigningFails is a regression test: the
+// relay used to set X-Inbound-Settled as soon as the inbound leg settled,
+// before the outbound payment to target was ever signed. If signing then
+// failed (bad payTo, an algod outage, ...) the target received nothing at
+// all, but the header was already set -- tool402.go would still commit the
+// full amount, over-billing the caller for a call where no money reached
+// the target and no submittable claim against the platform wallet was ever
+// created. The header must only be set after SignUSDCPaymentGroup succeeds.
+func TestX402RelayDoesNotBillWhenOutboundSigningFails(t *testing.T) {
+	var targetGotPaidRequest bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			targetGotPaidRequest = true
+			w.Write([]byte(`{"data":"paid response from target"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		json.NewEncoder(w).Encode(map[string]any{
+			"accepts": []map[string]any{{"payTo": "TARGETADDR", "asset": "10458941", "maxAmountRequired": "50000"}},
+		})
+	}))
+	defer target.Close()
+
+	store := newTestStoreForHandlers(t)
+
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/verify" {
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": "INBOUND-TX-SIGNFAIL-" + target.URL})
+	}))
+	defer facilitator.Close()
+
+	signer := &fakeUSDCSigner{err: fmt.Errorf("invalid receiver address")}
+	d := &handlers.Deps{
+		Store:                     store,
+		PlatformWalletAddress:     "PLATFORMADDR",
+		PlatformWalletEncMnemonic: "enc-mnemonic",
+		FacilitatorClient:         x402.NewFacilitatorClient(facilitator.URL),
+		USDCAssetID:               10458941,
+		RelayNetwork:              "algorand:testnet",
+		RelayFeePayer:             "FEEPAYERADDR",
+		USDCSigner:                signer,
+	}
+
+	payload, _ := json.Marshal(map[string]any{"x402Version": 2, "scheme": "exact", "network": "algorand:testnet"})
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay?target="+target.URL, nil)
+	req.Header.Set("X-Payment", string(payload))
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	if w.Code == http.StatusOK {
+		t.Fatalf("want relay to report the signing failure, got 200: %s", w.Body.String())
+	}
+	if w.Header().Get("X-Inbound-Settled") == "true" {
+		t.Fatal("want X-Inbound-Settled unset when outbound signing fails -- no signed payment group exists, so the caller must not be billed")
+	}
+	if targetGotPaidRequest {
+		t.Fatal("want the relay to never send a paid request to the target when signing the outbound payment failed")
+	}
+
+	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-SIGNFAIL-"+target.URL)
+	if err != nil {
+		t.Fatalf("want the inbound settlement row to still exist (that leg genuinely settled): %v", err)
+	}
+	if row.Status != "failed" {
+		t.Fatalf("want the outbound leg recorded as failed, got status %q", row.Status)
 	}
 }
 

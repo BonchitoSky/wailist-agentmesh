@@ -3,11 +3,13 @@ package engine_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/db"
@@ -59,10 +61,12 @@ func TestOrchestratorRoundTripBothLegsSettle(t *testing.T) {
 	// Fake facilitator: records which paths get hit (only the inbound leg
 	// goes through this client — the relay pays the target directly via the
 	// USDC signer, not through FacilitatorClient) and settles with a txid
-	// keyed off target.URL, which gets a fresh random port every run, so
-	// rerunning this test against a real, persistent Postgres never collides
-	// with a previous run's inbound_tx_id (which has a uniqueness
-	// constraint).
+	// unique per test run (inbound_tx_id has a uniqueness constraint).
+	// target.URL's ephemeral port CAN be reused across runs against a real,
+	// persistent Postgres once enough ports have cycled, so a txid keyed off
+	// it alone is not actually collision-proof over a long-lived test DB —
+	// append a monotonic suffix rather than relying on port uniqueness.
+	inboundTxID := fmt.Sprintf("INBOUND-TX-%s-%d", target.URL, time.Now().UnixNano())
 	var facilitatorCalls []string
 	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		facilitatorCalls = append(facilitatorCalls, r.URL.Path)
@@ -70,7 +74,7 @@ func TestOrchestratorRoundTripBothLegsSettle(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": "INBOUND-TX-" + target.URL})
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
 	}))
 	defer facilitator.Close()
 
@@ -153,7 +157,7 @@ func TestOrchestratorRoundTripBothLegsSettle(t *testing.T) {
 	// amount — confirming the ledger row this whole flow is supposed to
 	// produce actually exists and is correct, not just that an HTTP 200 came
 	// back.
-	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-"+target.URL)
+	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), inboundTxID)
 	if err != nil {
 		t.Fatalf("want to find the recorded ledger row: %v", err)
 	}

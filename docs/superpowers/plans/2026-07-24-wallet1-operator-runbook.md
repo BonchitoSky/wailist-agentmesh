@@ -43,19 +43,27 @@ aggregate, not a literal per-purchase transfer.
 
 Billing keys off an `X-Inbound-Settled` response header the relay sets once
 the caller's inbound payment (Wallet 1 -> Wallet 2) has genuinely settled via
-the facilitator — not off the relay's final HTTP status, so a target can't
-dodge being billed by returning a bad status after accepting payment. But if
-the orchestrator's own call to the relay times out (90s) before any response
-arrives at all — a target stalling on its own response for that long, on top
-of the relay's own facilitator round trips — the orchestrator cannot see
-that header and defensively treats it as an unsettled, unbilled attempt,
-even though the inbound leg (and possibly the outbound leg too) may have
-completed on-chain in the background. This is a known, accepted gap: closing
-it fully requires the orchestrator to reconcile against the relay's own
-`x402_relay_settlements` table after a transport failure, which is a larger
-change than fits with the amount of on-chain money currently at stake.
-Watch this table (per-target `status` = `pending_outbound`/`settled`/`failed`)
-if relay call timeouts start showing up in logs.
+the facilitator and a real signed outbound payment group exists — not off
+the relay's final HTTP status, so a target can't dodge being billed by
+returning a bad status after accepting payment. But if the orchestrator's
+own call to the relay times out (90s) before any response arrives at all,
+the orchestrator cannot see that header and defensively treats it as an
+unsettled, unbilled attempt, even though the inbound leg (and possibly the
+outbound leg too) may have completed on-chain in the background. The
+target itself is bounded by its own ~10s budget inside the relay, so the
+realistic causes of the orchestrator's 90s budget being exceeded are
+unbounded latency inside the relay handler itself (e.g. a slow database
+round trip on the settlement write) or an intermediate proxy/edge timeout
+sitting between the orchestrator and `BASE_URL` (the orchestrator calls its
+own public URL to reach the relay) — confirm whatever sits in front of the
+backend (Railway's edge, any reverse proxy) has its own request timeout set
+above 90s, or this gap widens silently. This is a known, accepted gap:
+closing it fully requires the orchestrator to reconcile against the relay's
+own `x402_relay_settlements` table after a transport failure, which is a
+larger change than fits with the amount of on-chain money currently at
+stake. Watch this table (per-target `status` =
+`pending_outbound`/`settled`/`failed`) if relay call timeouts start showing
+up in logs.
 
 ## What changed in the payment flow
 

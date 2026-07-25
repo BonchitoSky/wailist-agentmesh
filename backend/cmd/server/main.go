@@ -50,6 +50,11 @@ func main() {
 	if platformSpendWalletAddr == "" || platformSpendWalletEncMnemonic == "" {
 		log.Fatal("PLATFORM_SPEND_WALLET_ADDRESS and PLATFORM_SPEND_WALLET_ENC_MNEMONIC must both be set — Wallet 1 pays every relayed x402 call on behalf of users' credit balances, so it is provisioned once out-of-band via cmd/walletgen, never auto-generated at startup")
 	}
+	if derivedAddr, err := walletSvc.AddressForEncMnemonic(platformSpendWalletEncMnemonic); err != nil {
+		log.Fatalf("PLATFORM_SPEND_WALLET_ENC_MNEMONIC does not decrypt/derive a valid Algorand address: %v", err)
+	} else if derivedAddr != platformSpendWalletAddr {
+		log.Fatalf("PLATFORM_SPEND_WALLET_ADDRESS (%s) does not match the address derived from PLATFORM_SPEND_WALLET_ENC_MNEMONIC (%s) — these must be the same wallet", platformSpendWalletAddr, derivedAddr)
+	}
 
 	usdcAssetID := uint64(10458941) // testnet default
 	relayNetwork := "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=" // testnet default
