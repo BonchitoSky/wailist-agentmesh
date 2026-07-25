@@ -15,6 +15,15 @@
    terminal scrollback.
 5. Wallet 2 (`PLATFORM_WALLET_ADDRESS`) is unchanged — it already exists
    and keeps settling the inbound leg and paying downstream targets.
+6. The server now verifies at boot that `PLATFORM_SPEND_WALLET_ADDRESS`
+   actually matches the address derived from
+   `PLATFORM_SPEND_WALLET_ENC_MNEMONIC` (and the same for the
+   `PLATFORM_WALLET_*` pair) — a mismatched address/mnemonic pairing fails
+   startup immediately with a clear error rather than silently signing from
+   an unexpected account.
+7. Optionally set `MAX_RELAY_OUTBOUND_USD_MICROS` (defaults to 5000000,
+   i.e. $5.00) to cap the maximum single outbound relay payment — see the
+   price-drift limitation below for why this exists.
 
 ## Ongoing: manual sweep
 
@@ -64,6 +73,49 @@ larger change than fits with the amount of on-chain money currently at
 stake. Watch this table (per-target `status` =
 `pending_outbound`/`settled`/`failed`) if relay call timeouts start showing
 up in logs.
+
+## Known limitation: quote price-drift between the relay's two target fetches
+
+The relay fetches a target's x402 price quote twice per call cycle,
+necessarily as two separate HTTP requests at different times: once in
+`relayInboundChallenge` (the public, no-payment challenge preview) and again
+in `relaySettleAndForward` (the authoritative fetch used to enforce and
+record the actual settlement). If a target answers cheap on the first fetch
+and expensive on the second, the relay would enforce/pay the second
+(higher) amount from Wallet 2 while the caller's inbound payment — verified
+against the first, lower quote by the caller's own client before it ever
+signs anything — only covers the first amount. This is externally
+reachable by anyone hitting the public, unauthenticated relay route, not
+just an orchestrator user, and the only thing preventing a target from
+actually exploiting it is the GoPlausible facilitator rejecting a payload
+that doesn't cover its own enforced `MaxAmountRequired` in `/verify` — there
+is no local defense against this scenario. `MAX_RELAY_OUTBOUND_USD_MICROS`
+(default $5.00, see env var) bounds worst-case loss per call to a fixed
+ceiling regardless of facilitator behavior, but does not close the gap
+structurally — a full fix would require the caller-visible challenge and
+the settle-time enforcement to be pinned to the same quote, which the
+current two-request design doesn't support.
+
+## Known limitation: a hard process kill during an in-flight payment can strand credits
+
+Reserving a user's credits for a real x402 payment (`db.ReserveCredits`)
+decrements their balance immediately, with no durable record of the
+reservation itself — only a later Commit writes the permanent
+`debit_ledger` audit row, and a later Release restores the balance if the
+payment never completes. Both are protected against a normal Go panic
+anywhere in the call path (a deferred cleanup releases the reservation
+before the panic propagates) and against the triggering request's context
+being cancelled or timing out (they run on `context.WithoutCancel` with
+their own budget). Neither protects against the process itself being
+killed outright (`SIGKILL`, an OOM kill, a host crash) between Reserve and
+Commit/Release — there is no way for application code to run a compensating
+action after the process no longer exists. This is a narrow window (single
+in-flight payment, bounded by `relayHTTPClient`'s 90s timeout) but a real
+one; a graceful-shutdown drain (waiting for in-flight runs before exiting
+on a normal deploy) would close the common, non-crash case but was judged
+out of scope for this feature branch — it's a process-lifecycle change,
+not a payment-logic one. Track this in the same place as the timeout gap
+above if it becomes an operational concern.
 
 ## What changed in the payment flow
 

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/db"
@@ -137,6 +138,13 @@ func TestX402RelayPaysTargetFromPlatformWalletAfterInboundSettles(t *testing.T) 
 
 	store := newTestStoreForHandlers(t) // TEST_DATABASE_URL-gated, see helper below
 
+	// inbound_tx_id has a uniqueness constraint; target.URL's ephemeral port
+	// can be reused across test runs against a long-lived Postgres, so a
+	// txid keyed off it alone is not collision-proof over time -- suffix
+	// with a monotonic timestamp (matches the fix applied to
+	// x402_orchestrator_integration_test.go).
+	inboundTxID := fmt.Sprintf("INBOUND-TX-%s-%d", target.URL, time.Now().UnixNano())
+
 	// Captures the paymentRequirements the relay sent on /verify and /settle
 	// so the test can assert the real target-quoted amount (50000, from the
 	// fake target above) was actually threaded through and enforced, rather
@@ -154,7 +162,7 @@ func TestX402RelayPaysTargetFromPlatformWalletAfterInboundSettles(t *testing.T) 
 			return
 		}
 		json.Unmarshal(body, &settleReqs)
-		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": "INBOUND-TX-" + target.URL})
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
 	}))
 	defer facilitator.Close()
 
@@ -193,7 +201,7 @@ func TestX402RelayPaysTargetFromPlatformWalletAfterInboundSettles(t *testing.T) 
 		t.Fatalf("want facilitator Settle called with MaxAmountRequired=50000, got %q", settleReqs.PaymentRequirements.MaxAmountRequired)
 	}
 
-	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-"+target.URL)
+	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), inboundTxID)
 	if err != nil {
 		t.Fatalf("want to find the recorded ledger row: %v", err)
 	}
@@ -248,6 +256,7 @@ func TestX402RelayUsesSingleQuoteForBothSettlementAndOutboundPayment(t *testing.
 
 	store := newTestStoreForHandlers(t)
 
+	inboundTxID := fmt.Sprintf("INBOUND-TX-SINGLEQUOTE-%s-%d", target.URL, time.Now().UnixNano())
 	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		if r.URL.Path == "/verify" {
@@ -255,7 +264,7 @@ func TestX402RelayUsesSingleQuoteForBothSettlementAndOutboundPayment(t *testing.
 			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": "INBOUND-TX-SINGLEQUOTE-" + target.URL})
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
 	}))
 	defer facilitator.Close()
 
@@ -282,7 +291,7 @@ func TestX402RelayUsesSingleQuoteForBothSettlementAndOutboundPayment(t *testing.
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-SINGLEQUOTE-"+target.URL)
+	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), inboundTxID)
 	if err != nil {
 		t.Fatalf("want to find the recorded ledger row: %v", err)
 	}
@@ -347,6 +356,7 @@ func TestX402RelayRejectsOutboundPaymentInWrongAsset(t *testing.T) {
 
 	store := newTestStoreForHandlers(t)
 
+	inboundTxID := fmt.Sprintf("INBOUND-TX-WRONGASSET-%s-%d", target.URL, time.Now().UnixNano())
 	var facilitatorHitPaths []string
 	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		facilitatorHitPaths = append(facilitatorHitPaths, r.URL.Path)
@@ -356,7 +366,7 @@ func TestX402RelayRejectsOutboundPaymentInWrongAsset(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": "INBOUND-TX-WRONGASSET-" + target.URL})
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
 	}))
 	defer facilitator.Close()
 
@@ -396,7 +406,7 @@ func TestX402RelayRejectsOutboundPaymentInWrongAsset(t *testing.T) {
 		t.Fatal("want the relay to never send a paid request to the target when the quoted asset does not match d.USDCAssetID")
 	}
 
-	if _, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-WRONGASSET-"+target.URL); err == nil {
+	if _, err := store.GetX402RelaySettlementByInboundTx(context.Background(), inboundTxID); err == nil {
 		t.Fatal("want no settlement row at all -- the inbound leg was never settled, so there is nothing to record")
 	}
 }
@@ -426,12 +436,13 @@ func TestX402RelayDoesNotBillWhenOutboundSigningFails(t *testing.T) {
 
 	store := newTestStoreForHandlers(t)
 
+	inboundTxID := fmt.Sprintf("INBOUND-TX-SIGNFAIL-%s-%d", target.URL, time.Now().UnixNano())
 	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/verify" {
 			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": "INBOUND-TX-SIGNFAIL-" + target.URL})
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
 	}))
 	defer facilitator.Close()
 
@@ -464,7 +475,7 @@ func TestX402RelayDoesNotBillWhenOutboundSigningFails(t *testing.T) {
 		t.Fatal("want the relay to never send a paid request to the target when signing the outbound payment failed")
 	}
 
-	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-SIGNFAIL-"+target.URL)
+	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), inboundTxID)
 	if err != nil {
 		t.Fatalf("want the inbound settlement row to still exist (that leg genuinely settled): %v", err)
 	}
@@ -496,12 +507,13 @@ func TestX402RelayRecordsFailedWhenTargetRejectsOutboundPayment(t *testing.T) {
 
 	store := newTestStoreForHandlers(t)
 
+	inboundTxID := fmt.Sprintf("INBOUND-TX-REJECTED-%s-%d", target.URL, time.Now().UnixNano())
 	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/verify" {
 			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": "INBOUND-TX-REJECTED-" + target.URL})
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
 	}))
 	defer facilitator.Close()
 
@@ -527,7 +539,7 @@ func TestX402RelayRecordsFailedWhenTargetRejectsOutboundPayment(t *testing.T) {
 		t.Fatalf("want the relay to surface the target's real rejection status, not claim success, got %d: %s", w.Code, w.Body.String())
 	}
 
-	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-REJECTED-"+target.URL)
+	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), inboundTxID)
 	if err != nil {
 		t.Fatalf("want to find the recorded ledger row: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -43,6 +44,11 @@ func main() {
 	platformWalletEncMnemonic := os.Getenv("PLATFORM_WALLET_ENC_MNEMONIC")
 	if platformWalletAddr == "" || platformWalletEncMnemonic == "" {
 		log.Fatal("PLATFORM_WALLET_ADDRESS and PLATFORM_WALLET_ENC_MNEMONIC must both be set — the platform wallet's payTo address must stay fixed for the whole competition, so it is provisioned once out-of-band, never auto-generated at startup")
+	}
+	if derivedAddr, err := walletSvc.AddressForEncMnemonic(platformWalletEncMnemonic); err != nil {
+		log.Fatalf("PLATFORM_WALLET_ENC_MNEMONIC does not decrypt/derive a valid Algorand address: %v", err)
+	} else if derivedAddr != platformWalletAddr {
+		log.Fatalf("PLATFORM_WALLET_ADDRESS (%s) does not match the address derived from PLATFORM_WALLET_ENC_MNEMONIC (%s) — this wallet's address is published as payTo in every x402 challenge while its mnemonic signs the outbound relay leg, so a mismatch means inbound payments accumulate in one account while a different account signs outbound payments", platformWalletAddr, derivedAddr)
 	}
 
 	platformSpendWalletAddr := os.Getenv("PLATFORM_SPEND_WALLET_ADDRESS")
@@ -103,6 +109,7 @@ func main() {
 		RelayNetwork:              relayNetwork,
 		RelayFeePayer:             relayFeePayer,
 		USDCSigner:                walletSvc,
+		MaxRelayOutboundUSDMicros: envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000), // $5.00 default
 	}
 
 	r := api.NewRouter(deps)
@@ -125,6 +132,22 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envInt64Or parses key as a base-10 int64, falling back to fallback if
+// unset or unparseable (logging a warning in the latter case rather than
+// silently ignoring a misconfigured value).
+func envInt64Or(key string, fallback int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		log.Printf("%s=%q is not a valid integer, using default %d", key, v, fallback)
+		return fallback
+	}
+	return n
 }
 
 // expireStalePendingTransactionsLoop marks abandoned checkouts (order/invoice created,

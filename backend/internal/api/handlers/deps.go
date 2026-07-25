@@ -65,4 +65,15 @@ type Deps struct {
 	RelayNetwork              string
 	RelayFeePayer             string
 	USDCSigner                USDCSigner
+	// MaxRelayOutboundUSDMicros caps a single outbound relay payment
+	// (Wallet 2 -> target). The relay fetches a target's price quote twice
+	// per cycle (once for the public challenge preview, once again at
+	// settle-time to enforce/pay) — a target that answers cheap on the
+	// first fetch and expensive on the second could otherwise cause the
+	// platform to pay out more than the caller's inbound payment ever
+	// covered, bounded only by whatever the GoPlausible facilitator itself
+	// enforces. This is an independent, local backstop bounding worst-case
+	// loss per call to a fixed ceiling regardless of facilitator behavior.
+	// Zero means no cap (not recommended for a production deployment).
+	MaxRelayOutboundUSDMicros int64
 }

@@ -261,6 +261,21 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 		return
 	}
 
+	// Independent local backstop: relayInboundChallenge and
+	// relaySettleAndForward each fetch the target's price quote separately
+	// (necessarily — they're different HTTP requests at different times).
+	// A target that answers cheap on the first fetch and expensive on this
+	// (settle-time, authoritative) second one could cause the platform to
+	// pay out more than the caller's inbound payment ever covered, bounded
+	// only by whatever the facilitator itself enforces on the inbound leg.
+	// Capping the outbound amount here bounds worst-case loss per call to a
+	// fixed ceiling regardless of facilitator behavior.
+	if d.MaxRelayOutboundUSDMicros > 0 && amount > uint64(d.MaxRelayOutboundUSDMicros) {
+		d.Store.RecordOutboundSettlement(ctx, ledgerID, "", "failed")
+		respond.Error(w, http.StatusBadGateway, "target quoted an amount exceeding the relay's per-call cap")
+		return
+	}
+
 	group, idx, err := d.USDCSigner.SignUSDCPaymentGroup(ctx, d.PlatformWalletEncMnemonic, quote.PayTo, assetID, amount, d.RelayFeePayer)
 	if err != nil {
 		d.Store.RecordOutboundSettlement(ctx, ledgerID, "", "failed")

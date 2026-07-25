@@ -466,3 +466,63 @@ func TestX402V2RelayRejectsPayment(t *testing.T) {
 		t.Fatal("want no commit — the payment was rejected, nothing settled")
 	}
 }
+
+type panickingUSDCGroupSigner struct{}
+
+func (p *panickingUSDCGroupSigner) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
+	panic("simulated panic mid-payment")
+}
+
+// TestX402V2RelayReleasesReservationOnPanic is a regression test: a
+// reservation taken by Reserve is a real balance decrement with no durable
+// record of its own (no debit_ledger row exists until Commit runs). If a
+// panic unwinds through executeTool402V2Relay after Reserve succeeds but
+// before Commit or Release runs -- here simulated via a signer whose
+// SignUSDCPaymentGroup panics instead of erroring -- the reservation must
+// still be released via a deferred cleanup, or the user's credits are
+// permanently and silently stranded with nothing to reconcile against.
+func TestX402V2RelayReleasesReservationOnPanic(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"PLATFORMADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer relay.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &panickingUSDCGroupSigner{}
+
+	var reserved, released, committed bool
+	ledger := nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { reserved = true; return nil },
+		Commit:  func(context.Context, string, int64, string) { committed = true },
+		Release: func(context.Context, int64) { released = true },
+	}
+
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatal("want the panic to propagate out of ExecuteTool402V2, got none")
+			}
+		}()
+		nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, ledger)
+		t.Fatal("unreachable: ExecuteTool402V2 should have panicked")
+	}()
+
+	if !reserved {
+		t.Fatal("want the balance to have been reserved before the panic")
+	}
+	if !released {
+		t.Fatal("want the reservation released via deferred cleanup despite the panic — otherwise the balance is permanently stranded")
+	}
+	if committed {
+		t.Fatal("want no commit — the payment never completed")
+	}
+}

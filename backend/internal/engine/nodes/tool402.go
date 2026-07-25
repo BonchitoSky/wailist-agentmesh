@@ -254,8 +254,25 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 		}
 	}
+	// settled tracks whether the reservation above has already been
+	// resolved (via Commit or Release) by the normal control flow below. If
+	// a panic unwinds through ExecuteTool402 before that happens (any
+	// runtime panic, not just an explicit error return), the balance would
+	// otherwise stay permanently decremented with no debit_ledger row and
+	// no way to reconcile it -- releasing here on the way out (before
+	// re-panicking, so the original panic/stack trace still propagates and
+	// this is not mistaken for a handled error) closes that window.
+	settled := false
+	defer func() {
+		if !settled {
+			if release := ledger.Release; release != nil {
+				release(ctx, models.X402PlatformFeeUSDMicros)
+			}
+		}
+	}()
 	result, err := ExecuteTool402(ctx, node, rc, aw, signer)
 	if err != nil {
+		settled = true
 		if release := ledger.Release; release != nil {
 			release(ctx, models.X402PlatformFeeUSDMicros)
 		}
@@ -266,6 +283,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		if _, hasTx := m["txId"]; hasTx {
 			out.SettledUSDMicros = models.X402PlatformFeeUSDMicros
 			out.DebitKind = models.DebitKindX402PlatformFee
+			settled = true
 			if commit := ledger.Commit; commit != nil {
 				commit(ctx, node.ID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
 			}
@@ -274,6 +292,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	}
 	// No payment was actually sent (e.g. the retried request came back
 	// without a txId) -- release the reservation, nothing to charge for.
+	settled = true
 	if release := ledger.Release; release != nil {
 		release(ctx, models.X402PlatformFeeUSDMicros)
 	}
@@ -335,7 +354,21 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 		}
 	}
+	// settled tracks whether the reservation above has already been
+	// resolved (via Commit or Release) by the normal control flow below —
+	// see the identical pattern and rationale in ExecuteTool402V2's legacy
+	// branch above. Covers a panic unwinding through the signing call, the
+	// relay HTTP round trip, or response parsing before Commit/Release runs.
+	settled := false
+	defer func() {
+		if !settled {
+			if release := ledger.Release; release != nil {
+				release(ctx, int64(amount))
+			}
+		}
+	}()
 	releaseReservation := func() {
+		settled = true
 		if release := ledger.Release; release != nil {
 			release(ctx, int64(amount))
 		}
@@ -382,6 +415,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	if payResp.Header.Get("X-Inbound-Settled") == "true" {
 		out.SettledUSDMicros = int64(amount)
 		out.DebitKind = models.DebitKindX402RelayCost
+		settled = true
 		if commit := ledger.Commit; commit != nil {
 			commit(ctx, node.ID, int64(amount), models.DebitKindX402RelayCost)
 		}
