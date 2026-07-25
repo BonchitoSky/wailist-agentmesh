@@ -6,12 +6,49 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/agentmesh/backend/internal/models"
 )
+
+// relayHTTPClient is used only for the two calls to our own /x402/relay
+// endpoint (the quote fetch and the paid retry). It shares toolHTTPClient's
+// SSRF-safe dialer (dialFn, tool.go) but needs a longer timeout: the relay
+// handler's own worst-case latency for a single request can exceed
+// toolHTTPClient's 10s budget by itself — up to ~10s re-fetching the
+// target's quote, up to 20s each for the facilitator's Verify and Settle
+// calls (internal/x402/facilitator.go), plus the outbound payment request
+// to target (another ~10s budget). A caller-side timeout shorter than the
+// callee's own worst case means "the orchestrator gave up waiting" and
+// "the inbound leg genuinely never settled" become indistinguishable from
+// a transport error, which is unsafe to resolve either way: assuming
+// settlement risks billing for a payment that never happened, and assuming
+// no settlement risks never billing for one that did (the underlying
+// vector the X-Inbound-Settled header exists to close). Sized with
+// headroom above the relay's own worst case rather than exactly matching
+// it, so ordinary slow-but-real responses aren't cut off right at the
+// boundary.
+var relayHTTPClient = &http.Client{
+	Timeout: 90 * time.Second,
+	Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialFn(ctx, network, addr)
+		},
+	},
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if err := validateURL(req.URL.String()); err != nil {
+			return err
+		}
+		if len(via) >= 5 {
+			return fmt.Errorf("too many redirects")
+		}
+		return nil
+	},
+}
 
 // WalletSigner signs and submits an Algorand payment transaction.
 // Satisfied by *wallet.Service.
@@ -251,7 +288,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	relayURL := relayBaseURL + "/x402/relay?target=" + url.QueryEscape(node.Endpoint)
 
 	quoteReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
-	quoteResp, err := toolHTTPClient.Do(quoteReq)
+	quoteResp, err := relayHTTPClient.Do(quoteReq)
 	if err != nil {
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay quote failed: %w", err)
 	}
@@ -316,7 +353,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 
 	payReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
 	payReq.Header.Set("X-Payment", string(xPayment))
-	payResp, err := toolHTTPClient.Do(payReq)
+	payResp, err := relayHTTPClient.Do(payReq)
 	if err != nil {
 		releaseReservation()
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay payment request failed: %w", err)

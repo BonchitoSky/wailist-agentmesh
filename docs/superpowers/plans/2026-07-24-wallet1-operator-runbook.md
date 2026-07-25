@@ -39,6 +39,24 @@ already decoupled (credits are a database tally), so Wallet 1 can be
 funded through any means — it just needs to hold enough balance in
 aggregate, not a literal per-purchase transfer.
 
+## Known limitation: slow/unresponsive relay targets
+
+Billing keys off an `X-Inbound-Settled` response header the relay sets once
+the caller's inbound payment (Wallet 1 -> Wallet 2) has genuinely settled via
+the facilitator — not off the relay's final HTTP status, so a target can't
+dodge being billed by returning a bad status after accepting payment. But if
+the orchestrator's own call to the relay times out (90s) before any response
+arrives at all — a target stalling on its own response for that long, on top
+of the relay's own facilitator round trips — the orchestrator cannot see
+that header and defensively treats it as an unsettled, unbilled attempt,
+even though the inbound leg (and possibly the outbound leg too) may have
+completed on-chain in the background. This is a known, accepted gap: closing
+it fully requires the orchestrator to reconcile against the relay's own
+`x402_relay_settlements` table after a transport failure, which is a larger
+change than fits with the amount of on-chain money currently at stake.
+Watch this table (per-target `status` = `pending_outbound`/`settled`/`failed`)
+if relay call timeouts start showing up in logs.
+
 ## What changed in the payment flow
 
 - Every tool402 node hitting a real x402 v2 endpoint (`accepts[]` present)

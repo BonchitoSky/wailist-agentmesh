@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -688,6 +689,7 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 
 	runner, store := newTestRunnerWithRelay(t, relay.URL)
 	nodes.SetOpenAIBaseURL(llmSrv.URL)
+	defer nodes.SetOpenAIBaseURL("https://api.openai.com")
 
 	email := fmt.Sprintf("relay-inbound-settled-%d@example.com", time.Now().UnixNano())
 	user, err := store.CreateUser(ctx, email, "hash")
@@ -762,11 +764,16 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 }
 
 // TestSequentialRelayToolCallsCannotOverspendPastBalance is a regression
-// test for a TOCTOU race: without immediately reserving each real payment's
-// exact amount before it's attempted, every iteration of the agent's
-// tool-calling loop would check the same stale (not-yet-decremented)
-// balance, letting the platform pay out more in aggregate, from Wallet 1,
-// than the user's credit balance ever actually covered.
+// test for the original C2 symptom -- batching every x402 debit until after
+// the whole agent turn completed, instead of debiting synchronously as each
+// payment settles. It proves the second of two sequential relay calls never
+// pays. With this fund level (600000, cost 250000/call) the second call is
+// actually intercepted by the restored upfront floor preflight
+// (X402PlatformFeeUSDMicros, 500000 > the 350000 left after the first
+// payment) rather than by ReserveCredits itself, since the two calls are
+// strictly sequential within one agent loop, not concurrent --
+// TestConcurrentTool402NodesCannotOverspend below exercises ReserveCredits'
+// atomicity directly.
 func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 	ctx := context.Background()
 
@@ -809,6 +816,7 @@ func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 
 	runner, store := newTestRunnerWithRelay(t, relay.URL)
 	nodes.SetOpenAIBaseURL(llmSrv.URL)
+	defer nodes.SetOpenAIBaseURL("https://api.openai.com")
 
 	email := fmt.Sprintf("relay-sequential-overspend-%d@example.com", time.Now().UnixNano())
 	user, err := store.CreateUser(ctx, email, "hash")
@@ -870,6 +878,121 @@ func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 	wantBalance := int64(600_000 - 10_000 - 250_000)
 	if balance != wantBalance {
 		t.Fatalf("want balance %d (exactly one payment + the agent's own fee, no overspend), got %d", wantBalance, balance)
+	}
+
+	entries, err := store.ListDebitLedger(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayEntries := 0
+	for _, e := range entries {
+		if e.Kind == models.DebitKindX402RelayCost {
+			relayEntries++
+		}
+	}
+	if relayEntries != 1 {
+		t.Fatalf("want exactly 1 x402_relay_cost ledger entry, got %d (entries: %+v)", relayEntries, entries)
+	}
+}
+
+// TestConcurrentTool402NodesCannotOverspend is a regression test for the
+// concurrent half of the TOCTOU C2 fix: two standalone tool402 nodes with no
+// edge between them execute in the same topological level, in separate
+// goroutines (see runner.go's Run, which launches one goroutine per node per
+// level and waits for the whole level before advancing). Without
+// ReserveCredits' atomic SELECT...FOR UPDATE, both goroutines could read the
+// same pre-decrement balance and both pay -- this proves only one can.
+//
+// Cost (400000) and starting balance (600000) are deliberately chosen so
+// both goroutines' cheap upfront floor preflight (X402PlatformFeeUSDMicros,
+// 500000) can plausibly pass before either has reserved anything -- both
+// read the same original 600000 balance, since the floor check happens
+// before either node's outbound HTTP round trip to the relay, well before
+// either Reserve call. That leaves ReserveCredits' atomicity, not the floor
+// gate, as what actually has to block the second payment: 600000 covers one
+// 400000 reservation but not two.
+func TestConcurrentTool402NodesCannotOverspend(t *testing.T) {
+	ctx := context.Background()
+
+	var relayPaidHits int32
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			atomic.AddInt32(&relayPaidHits, 1)
+			w.Header().Set("X-Inbound-Settled", "true")
+			w.Write([]byte(`{"data":"paid tool response"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"PLATFORMADDR","asset":"10458941","maxAmountRequired":"400000"}]}`))
+	}))
+	defer relay.Close()
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"400000"}]}`))
+	}))
+	defer target.Close()
+
+	runner, store := newTestRunnerWithRelay(t, relay.URL)
+
+	email := fmt.Sprintf("relay-concurrent-overspend-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Covers one 400000 relay payment (plus the 500000 floor preflight, read
+	// before either reservation happens) but not two concurrent ones.
+	fundUser(t, store, user.ID, 600_000)
+
+	wf, err := store.CreateWorkflow(ctx, "Relay Concurrent Overspend Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	// x1 and x2 are both standalone tool402 nodes fed directly from the
+	// trigger with no edge between them -- TopologicalSort places both in
+	// the same level, so runner.go's Run executes them concurrently.
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL},
+			{ID: "x2", Type: models.NodeTypeTool402, Endpoint: target.URL},
+			{ID: "n3", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "x1", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "n1", To: "x2", Kind: models.EdgeKindFlow},
+			{ID: "e3", From: "x1", To: "n3", Kind: models.EdgeKindFlow},
+			{ID: "e4", From: "x2", To: "n3", Kind: models.EdgeKindFlow},
+		},
+	}
+	wf, _ = store.UpdateWorkflow(ctx, wf.ID, wf.Name, graph)
+
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := sse.NewBroker()
+	broker.Create(run.ID)
+
+	runner.Start(wf, run)
+	waitForRunDone(t, store, run.ID)
+	// One of the two nodes fails (balance exhausted by the other), so the
+	// overall run fails -- that's expected and not what this test is
+	// checking; the invariant under test is that at most one payment ever
+	// actually reaches the relay.
+
+	if got := atomic.LoadInt32(&relayPaidHits); got != 1 {
+		t.Fatalf("want exactly 1 real payment sent to the relay despite 2 concurrent nodes racing the same balance, got %d", got)
+	}
+
+	balance, err := store.GetCreditBalance(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 200_000 {
+		t.Fatalf("want balance 200000 (exactly one 400000 payment against a 600000 balance, no overspend), got %d", balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)

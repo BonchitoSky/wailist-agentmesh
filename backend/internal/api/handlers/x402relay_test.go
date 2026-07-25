@@ -322,6 +322,16 @@ func TestX402RelayUsesSingleQuoteForBothSettlementAndOutboundPayment(t *testing.
 // quote that names the wrong asset throughout. Under the fix, the relay must
 // catch this before ever calling the USDC signer or making a paid request to
 // the target, and must record the outbound settlement as failed.
+// TestX402RelayRejectsOutboundPaymentInWrongAsset verifies the relay refuses
+// a target that quotes an asset other than d.USDCAssetID before ever
+// settling the caller's inbound payment -- not just before paying the
+// target. Checking this only in payTargetAndRespond (after
+// RecordInboundSettlement) would have set X-Inbound-Settled on the
+// response and let tool402.go bill the caller in full for a call that was
+// never going to reach the target; catching it in relaySettleAndForward,
+// before the facilitator's Verify/Settle are ever called, means neither the
+// inbound leg nor an outbound-settlement row exist at all -- there is
+// nothing to bill and nothing to reconcile.
 func TestX402RelayRejectsOutboundPaymentInWrongAsset(t *testing.T) {
 	var targetGotPaidRequest bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -339,7 +349,9 @@ func TestX402RelayRejectsOutboundPaymentInWrongAsset(t *testing.T) {
 
 	store := newTestStoreForHandlers(t)
 
+	var facilitatorHitPaths []string
 	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		facilitatorHitPaths = append(facilitatorHitPaths, r.URL.Path)
 		body, _ := io.ReadAll(r.Body)
 		if r.URL.Path == "/verify" {
 			_ = body
@@ -372,7 +384,13 @@ func TestX402RelayRejectsOutboundPaymentInWrongAsset(t *testing.T) {
 	if w.Code == http.StatusOK {
 		t.Fatalf("want relay to refuse to pay the target in a non-USDC asset, got 200: %s", w.Body.String())
 	}
+	if w.Header().Get("X-Inbound-Settled") == "true" {
+		t.Fatal("want X-Inbound-Settled unset -- nothing settled, the caller must not be billed")
+	}
 
+	if len(facilitatorHitPaths) != 0 {
+		t.Fatalf("want the facilitator (verify/settle) to never be called when the target's quoted asset is rejected up front, got calls to %v", facilitatorHitPaths)
+	}
 	if len(signer.calls) != 0 {
 		t.Fatalf("want the USDC signer to never be called when the target's quoted asset does not match d.USDCAssetID, got %d call(s): %+v", len(signer.calls), signer.calls)
 	}
@@ -380,12 +398,8 @@ func TestX402RelayRejectsOutboundPaymentInWrongAsset(t *testing.T) {
 		t.Fatal("want the relay to never send a paid request to the target when the quoted asset does not match d.USDCAssetID")
 	}
 
-	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-WRONGASSET-"+target.URL)
-	if err != nil {
-		t.Fatalf("want to find the recorded ledger row: %v", err)
-	}
-	if row.Status != "failed" {
-		t.Fatalf("want the outbound settlement recorded as failed when the asset mismatch is caught, got status %q", row.Status)
+	if _, err := store.GetX402RelaySettlementByInboundTx(context.Background(), "INBOUND-TX-WRONGASSET-"+target.URL); err == nil {
+		t.Fatal("want no settlement row at all -- the inbound leg was never settled, so there is nothing to record")
 	}
 }
 

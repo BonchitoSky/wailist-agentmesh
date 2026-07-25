@@ -162,6 +162,21 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
+	// quote.Asset comes straight from the target's own (caller-supplied,
+	// unauthenticated) 402 response and is only ever used later, for the
+	// OUTBOUND leg to target — the inbound leg below always settles in
+	// d.USDCAssetID regardless of what the target claims. Checked here,
+	// before ever verifying/settling the inbound payment, so a target that
+	// can never be paid (wrong/unsupported asset) is rejected before the
+	// caller's inbound payment is collected at all — settling inbound first
+	// and only discovering this in payTargetAndRespond would already have
+	// set X-Inbound-Settled, billing the caller in full for a call that was
+	// never going to reach the target.
+	if quoteAssetID, err := strconv.ParseUint(quote.Asset, 10, 64); err != nil || quoteAssetID != d.USDCAssetID {
+		respond.Error(w, http.StatusBadGateway, "target quoted an unexpected asset id")
+		return
+	}
+
 	reqs := x402.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           d.RelayNetwork,
@@ -247,14 +262,10 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 	assetID, _ := strconv.ParseUint(quote.Asset, 10, 64)
 	amount, _ := strconv.ParseUint(quote.MaxAmountRequired, 10, 64)
 
-	// quote.Asset comes straight from the target's own (caller-supplied,
-	// unauthenticated) 402 response. The inbound settlement side is already
-	// anchored to the platform's own asset id (reqs.Asset =
-	// strconv.FormatUint(d.USDCAssetID, 10) in relaySettleAndForward), but
-	// nothing enforced that here — a malicious target could consistently
-	// quote a different asset id (one it controls, or one with no value at
-	// all) and the platform wallet would sign and broadcast a real payment
-	// in that asset. Refuse before ever touching the signer.
+	// Defense in depth: relaySettleAndForward already rejects a mismatched
+	// quote.Asset before ever settling the inbound leg, so this should be
+	// unreachable — but if it's ever wrong, refuse before touching the
+	// signer rather than trust a caller-supplied, unauthenticated value.
 	if assetID != d.USDCAssetID {
 		d.Store.RecordOutboundSettlement(ctx, ledgerID, "", "failed")
 		respond.Error(w, http.StatusBadGateway, "target quoted an unexpected asset id")

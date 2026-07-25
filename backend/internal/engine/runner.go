@@ -64,6 +64,12 @@ func (r *Runner) debitOrLog(ctx context.Context, wf models.Workflow, run models.
 	}
 }
 
+// ledgerCompensationTimeout bounds Commit/Release calls once they're
+// detached from the triggering request's context (see newPaymentLedger) —
+// long enough for a single locked UPDATE, short enough not to hang a
+// terminating process indefinitely.
+const ledgerCompensationTimeout = 10 * time.Second
+
 // newPaymentLedger builds the reserve/commit/release closures a real
 // on-chain tool402 payment (either dialect, standalone or agent-attached)
 // uses to atomically decrement the user's balance at the moment a payment
@@ -73,21 +79,39 @@ func (r *Runner) debitOrLog(ctx context.Context, wf models.Workflow, run models.
 // tool402 nodes in the same topology level) all pass a check against the
 // same stale balance and collectively overspend past what the user can
 // cover. See nodes.PaymentLedger.
+//
+// Commit and Release are compensating actions for money that has already
+// moved (or a reservation that must be undone) — they run with
+// context.WithoutCancel, not the caller's cctx. If they inherited a
+// cancelled/deadline-exceeded context (e.g. Runner.Stop firing mid-payment,
+// or the outbound HTTP call timing out), the resulting DB call would be a
+// no-op that neither writes the debit_ledger row nor restores the reserved
+// balance, silently stranding the reservation as a permanent, unledgered
+// credit loss. UpdateRunLog already establishes this same
+// context.Background()-after-cancellation convention elsewhere in Run.
 func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.PaymentLedger {
 	return nodes.PaymentLedger{
 		Reserve: func(cctx context.Context, amountUSDMicros int64) error {
 			return r.store.ReserveCredits(cctx, wf.UserID, amountUSDMicros)
 		},
 		Commit: func(cctx context.Context, nodeID string, amountUSDMicros int64, kind string) {
-			if err := r.store.CommitReservedDebit(cctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
-				log.Printf("commit reserved debit failed: user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
+			bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
+			defer cancel()
+			if err := r.store.CommitReservedDebit(bctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
+				msg := fmt.Sprintf("CRITICAL: commit reserved debit failed (balance already decremented, no ledger row written): user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
 					wf.UserID, wf.ID, run.ID, nodeID, kind, amountUSDMicros, err)
+				log.Print(msg)
+				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 			}
 		},
 		Release: func(cctx context.Context, amountUSDMicros int64) {
-			if err := r.store.ReleaseReservedCredits(cctx, wf.UserID, amountUSDMicros); err != nil {
-				log.Printf("release reserved credits failed: user=%s workflow=%s run=%s amount=%d: %v",
+			bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
+			defer cancel()
+			if err := r.store.ReleaseReservedCredits(bctx, wf.UserID, amountUSDMicros); err != nil {
+				msg := fmt.Sprintf("CRITICAL: release reserved credits failed (balance permanently stranded): user=%s workflow=%s run=%s amount=%d: %v",
 					wf.UserID, wf.ID, run.ID, amountUSDMicros, err)
+				log.Print(msg)
+				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 			}
 		},
 	}

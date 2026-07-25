@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -653,7 +654,7 @@ func (s *Store) ReserveCredits(ctx context.Context, userID string, amountUSDMicr
 		return err
 	}
 	if balance < amountUSDMicros {
-		return ErrInsufficientCredits
+		return fmt.Errorf("insufficient credits: balance %d micros, need %d micros: %w", balance, amountUSDMicros, ErrInsufficientCredits)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros - $1 WHERE id = $2
