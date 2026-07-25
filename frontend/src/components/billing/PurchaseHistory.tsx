@@ -18,6 +18,19 @@ const dateFmt = new Intl.DateTimeFormat("en", {
   timeStyle: "short",
 });
 
+const rowBtnStyle: React.CSSProperties = {
+  height: 28,
+  padding: "0 12px",
+  borderRadius: "var(--r-2)",
+  border: "1px solid var(--border-strong)",
+  background: "transparent",
+  color: "var(--fg-muted)",
+  fontSize: 12,
+  fontWeight: 500,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
 // Mock billing history sourced from the local credits store. Newest first.
 export function PurchaseHistory({
   onBuyAgain,
@@ -55,83 +68,79 @@ export function PurchaseHistory({
                 key={p.id}
                 style={{
                   display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 16,
+                  flexDirection: "column",
+                  gap: 8,
                   padding: "12px 16px",
                   borderTop: i === 0 ? "none" : "1px solid var(--border-soft)",
                 }}
               >
-                <div style={{ minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 13,
-                      color: "var(--fg)",
-                      fontWeight: 500,
-                    }}
-                  >
-                    ₹{p.amountINR.toFixed(2)}
-                    <span style={{ color: "var(--fg-dim)", fontWeight: 400 }}>
-                      {" · "}
-                      {METHOD_LABELS[p.method]}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "var(--fg-dim)",
-                      fontFamily: "var(--font-mono)",
-                      marginTop: 2,
-                    }}
-                  >
-                    {dateFmt.format(new Date(p.createdAt))}
-                  </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                {/* Amount + credits granted + status */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
                   <span
                     style={{
                       fontSize: 13,
+                      fontWeight: 600,
+                      color: "var(--fg)",
                       fontFamily: "var(--font-mono)",
-                      color: "var(--accent)",
-                      whiteSpace: "nowrap",
+                      fontVariantNumeric: "tabular-nums",
                     }}
                   >
-                    +${p.creditsUSD.toFixed(2)}
+                    ₹{p.amountINR.toFixed(2)}
                   </span>
-                  <Pill tone="ok">Paid</Pill>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 13,
+                        fontFamily: "var(--font-mono)",
+                        color: "var(--accent)",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      +${p.creditsUSD.toFixed(2)}
+                    </span>
+                    <Pill tone="ok">Paid</Pill>
+                  </div>
+                </div>
+
+                {/* Method · date */}
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "var(--fg-dim)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  {METHOD_LABELS[p.method]} ·{" "}
+                  {dateFmt.format(new Date(p.createdAt))}
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: "flex", gap: 8 }}>
                   <button
                     type="button"
                     onClick={() => setReceipt(p)}
-                    style={{
-                      height: 26,
-                      padding: "0 10px",
-                      borderRadius: "var(--r-2)",
-                      border: "1px solid var(--border-strong)",
-                      background: "transparent",
-                      color: "var(--fg-muted)",
-                      fontSize: 12,
-                      fontWeight: 500,
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                    }}
+                    style={rowBtnStyle}
                   >
                     Receipt
                   </button>
                   <button
                     type="button"
                     onClick={() => onBuyAgain(p.amountINR)}
-                    style={{
-                      height: 26,
-                      padding: "0 10px",
-                      borderRadius: "var(--r-2)",
-                      border: "1px solid var(--border-strong)",
-                      background: "transparent",
-                      color: "var(--fg-muted)",
-                      fontSize: 12,
-                      fontWeight: 500,
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                    }}
+                    style={rowBtnStyle}
                   >
                     Buy again
                   </button>
