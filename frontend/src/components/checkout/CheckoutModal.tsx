@@ -56,8 +56,10 @@ export function CheckoutModal({
 
   const totals = useMemo(() => computeTotals(items), [items]);
 
-  const handlePaid = () => {
-    setConfirmation(addPurchase({ amountINR: totals.total, method }));
+  const handlePaid = (creditsUSDOverride?: number) => {
+    setConfirmation(
+      addPurchase({ amountINR: totals.total, method, creditsUSDOverride }),
+    );
   };
 
   // Drive the native dialog. showModal() gives focus trapping and the backdrop

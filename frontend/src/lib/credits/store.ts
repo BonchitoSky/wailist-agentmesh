@@ -95,11 +95,18 @@ function newId(): string {
 
 // Record a successful top-up: grants credits (base + bonus) and prepends the
 // purchase to history. Returns the created record.
+//
+// `creditsUSDOverride` lets a caller that already knows the real, authoritative
+// credited amount (e.g. a backend-verified payment) supply it directly instead
+// of falling through to the local mock-FX estimate. Providers without a real
+// backend yet (e.g. the NOWPayments stub) omit it and get the mock amount.
 export function addPurchase(input: {
   amountINR: number;
   method: PaymentMethod;
+  creditsUSDOverride?: number;
 }): Purchase {
-  const creditsUSD = creditsForTopup(input.amountINR);
+  const creditsUSD =
+    input.creditsUSDOverride ?? creditsForTopup(input.amountINR);
   const purchase: Purchase = {
     id: newId(),
     createdAt: new Date().toISOString(),

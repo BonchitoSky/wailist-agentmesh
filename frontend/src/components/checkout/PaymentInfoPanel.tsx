@@ -31,18 +31,21 @@ export function PaymentInfoPanel({
   onMethodChange: (method: PaymentMethod) => void;
   amountINR: number;
   payable: boolean;
-  onPaid: () => void;
+  onPaid: (creditsUSDOverride?: number) => void;
 }) {
   const [status, setStatus] = useState<PayStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
-  const finish = () => {
+  const finish = (creditsUSDOverride?: number) => {
     setStatus("success");
-    onPaid();
+    onPaid(creditsUSDOverride);
   };
 
   const razorpay = useRazorpayCheckout({
-    onSuccess: () => finish(),
+    // creditedUsdMicros is the real, backend-verified credited amount for this
+    // real payment — pass it through rather than letting the wallet fall back
+    // to its local mock-FX estimate (see store.addPurchase's creditsUSDOverride).
+    onSuccess: (creditedUsdMicros) => finish(creditedUsdMicros / 1e6),
     onError: (msg) => {
       setError(msg);
       setStatus("idle");
