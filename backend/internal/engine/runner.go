@@ -15,6 +15,7 @@ import (
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/x402"
 )
 
 type Runner struct {
@@ -25,17 +26,51 @@ type Runner struct {
 	relayBaseURL             string
 	platformSpendEncMnemonic string
 	usdcAssetID              uint64
+
+	// The fields below carry what reserveAndFundRun (Task 5) needs to size
+	// and settle a run-level lump-sum inbound x402 payment and, later, pay
+	// real targets in-process from Wallet 2. They mirror fields that already
+	// exist as local variables in cmd/server/main.go and as flat fields on
+	// handlers.Deps (populated there for the public relay handler) — kept
+	// flat and separate here as a stopgap rather than introducing a bundled
+	// config type, since designing that bundle (X402Config) is Task 6's job,
+	// not this one.
+	platformWalletAddress     string
+	platformWalletEncMnemonic string
+	facilitatorClient         *x402.FacilitatorClient
+	relayNetwork              string
+	relayFeePayer             string
+	maxRelayOutboundUSDMicros int64
 }
 
-func NewRunner(store *db.Store, broker *sse.Broker, walletSvc nodes.WalletSigner, relayBaseURL string, platformSpendEncMnemonic string, usdcAssetID uint64) *Runner {
+func NewRunner(
+	store *db.Store,
+	broker *sse.Broker,
+	walletSvc nodes.WalletSigner,
+	relayBaseURL string,
+	platformSpendEncMnemonic string,
+	usdcAssetID uint64,
+	platformWalletAddress string,
+	platformWalletEncMnemonic string,
+	facilitatorClient *x402.FacilitatorClient,
+	relayNetwork string,
+	relayFeePayer string,
+	maxRelayOutboundUSDMicros int64,
+) *Runner {
 	return &Runner{
-		store:                    store,
-		broker:                   broker,
-		walletSvc:                walletSvc,
-		registry:                 newRunRegistry(),
-		relayBaseURL:             relayBaseURL,
-		platformSpendEncMnemonic: platformSpendEncMnemonic,
-		usdcAssetID:              usdcAssetID,
+		store:                     store,
+		broker:                    broker,
+		walletSvc:                 walletSvc,
+		registry:                  newRunRegistry(),
+		relayBaseURL:              relayBaseURL,
+		platformSpendEncMnemonic:  platformSpendEncMnemonic,
+		usdcAssetID:               usdcAssetID,
+		platformWalletAddress:     platformWalletAddress,
+		platformWalletEncMnemonic: platformWalletEncMnemonic,
+		facilitatorClient:         facilitatorClient,
+		relayNetwork:              relayNetwork,
+		relayFeePayer:             relayFeePayer,
+		maxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
 	}
 }
 
@@ -159,6 +194,89 @@ func newRunLevelLedger(pool int64, wf models.Workflow, run models.Run, store *db
 		defer mu.Unlock()
 		return remaining
 	}
+}
+
+// reserveAndFundRun sizes and reserves a single run-level credit hold for
+// agentNode's attached tool402 tools, then settles that exact amount as one
+// real inbound x402 payment (Wallet 1 -> Wallet 2) before the agent's
+// tool-calling loop starts. Size = sum of REAL, freshly-fetched quotes for
+// each attached v2 tool402 node — never padded.
+//
+// An agent with no attached tool402 nodes, or only legacy-dialect ones,
+// gets estimate=0 — a no-op returning the existing per-call
+// newPaymentLedger and an empty runFundingID, so ExecuteAgent's tool402
+// calls take the completely unmodified per-call public-relay path (the
+// isV2 dispatch in ExecuteTool402V2 gates on runFundingID == "").
+func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run models.Run, attach models.AttachConfig) (nodes.PaymentLedger, string, func(context.Context), error) {
+	var estimate int64
+	for _, tool := range attach.Tools {
+		if tool.Type != models.NodeTypeTool402 {
+			continue
+		}
+		isV2, amount, err := nodes.ProbeX402Price(ctx, tool.Endpoint)
+		if err != nil || !isV2 {
+			continue // unreachable/legacy-dialect tools stay on their existing billing path
+		}
+		estimate += amount
+	}
+
+	if estimate == 0 {
+		return r.newPaymentLedger(wf, run), "", func(context.Context) {}, nil
+	}
+
+	if err := r.store.ReserveCredits(ctx, wf.UserID, estimate); err != nil {
+		return nodes.PaymentLedger{}, "", nil, err
+	}
+
+	usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
+	fundCfg := nodes.RunPreFundConfig{
+		USDCSigner:               usdcSigner,
+		PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
+		Facilitator:              r.facilitatorClient,
+		PlatformWalletAddress:    r.platformWalletAddress,
+		RelayNetwork:             r.relayNetwork,
+		RelayFeePayer:            r.relayFeePayer,
+		ExpectedAssetID:          r.usdcAssetID,
+		PublicBaseURL:            r.relayBaseURL,
+	}
+	txID, err := nodes.FundRunReserve(ctx, fundCfg, run.ID, estimate)
+	if err != nil {
+		bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ledgerCompensationTimeout)
+		defer cancel()
+		if relErr := r.store.ReleaseReservedCredits(bctx, wf.UserID, estimate); relErr != nil {
+			log.Printf("CRITICAL: run pre-fund failed AND release failed (balance stranded): user=%s workflow=%s run=%s amount=%d fundErr=%v releaseErr=%v",
+				wf.UserID, wf.ID, run.ID, estimate, err, relErr)
+			go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("run pre-fund+release both failed: user=%s amount=%d", wf.UserID, estimate))
+		}
+		return nodes.PaymentLedger{}, "", nil, fmt.Errorf("x402 run funding failed: %w", err)
+	}
+
+	funding, err := r.store.RecordRunFunding(ctx, run.ID, txID, estimate)
+	if err != nil {
+		// Real money already moved on-chain — this is a bookkeeping failure,
+		// not a payment failure. Do NOT release the DB reservation (the
+		// on-chain settle genuinely happened); alert so an operator can
+		// reconcile the missing audit row by hand.
+		log.Printf("CRITICAL: run funding settled on-chain (tx %s) but RecordRunFunding failed: %v", txID, err)
+		go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("run funding tx %s settled but not recorded: %v", txID, err))
+	}
+
+	ledger, remaining := newRunLevelLedger(estimate, wf, run, r.store)
+	cleanup := func(cctx context.Context) {
+		unused := remaining()
+		if unused <= 0 {
+			return
+		}
+		bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
+		defer cancel()
+		if err := r.store.ReleaseReservedCredits(bctx, wf.UserID, unused); err != nil {
+			msg := fmt.Sprintf("CRITICAL: run-level release failed (balance permanently stranded): user=%s workflow=%s run=%s amount=%d: %v",
+				wf.UserID, wf.ID, run.ID, unused, err)
+			log.Print(msg)
+			go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+		}
+	}
+	return ledger, funding.ID, cleanup, nil
 }
 
 // Start creates a cancellable context for the run, registers it, and launches
@@ -336,6 +454,13 @@ func (r *Runner) executeNode(
 		checkBalance := func(cctx context.Context, amount int64) error {
 			return r.preflightCheck(cctx, wf, amount)
 		}
+		attach := attachMap[node.ID]
+		runLedger, runFundingID, cleanupRunFund, err := r.reserveAndFundRun(ctx, wf, run, attach)
+		if err != nil {
+			return nil, err
+		}
+		defer cleanupRunFund(ctx)
+
 		// r.walletSvc's dynamic type (*wallet.Service) also satisfies
 		// USDCGroupSigner (same nil-safe assertion as the NodeTypeTool402
 		// case below) — an agent-attached tool402 call routes through the
@@ -346,9 +471,29 @@ func (r *Runner) executeNode(
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 			ExpectedAssetID:          r.usdcAssetID,
 			RelayBaseURL:             r.relayBaseURL,
-			Ledger:                   r.newPaymentLedger(wf, run),
+			Ledger:                   runLedger,
+			RunFundingID:             runFundingID, // "" => existing unmodified per-call public-relay path
+			Wallet2: nodes.Wallet2PayConfig{
+				USDCSigner:                usdcSigner,
+				PlatformWalletEncMnemonic: r.platformWalletEncMnemonic,
+				USDCAssetID:               r.usdcAssetID,
+				RelayFeePayer:             r.relayFeePayer,
+				RelayNetwork:              r.relayNetwork,
+				MaxRelayOutboundUSDMicros: r.maxRelayOutboundUSDMicros,
+			},
+			RecordSettlement: func(cctx context.Context, target string, amountUSDMicros int64, settled bool) error {
+				row, err := r.store.RecordRunFundedSettlement(cctx, runFundingID, target, amountUSDMicros)
+				if err != nil {
+					return err
+				}
+				status := "failed"
+				if settled {
+					status = "settled"
+				}
+				return r.store.RecordOutboundSettlement(cctx, row.ID, "", status)
+			},
 		}
-		result, err := nodes.ExecuteAgent(ctx, node, attachMap[node.ID], aw, r.walletSvc, rc, checkBalance, relayCfg)
+		result, err := nodes.ExecuteAgent(ctx, node, attach, aw, r.walletSvc, rc, checkBalance, relayCfg)
 		if err != nil {
 			// A *nodes.ErrBalanceBlocked failure means the agent's own LLM
 			// turn already completed and only ran into insufficient balance

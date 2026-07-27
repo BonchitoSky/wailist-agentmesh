@@ -183,6 +183,22 @@ type X402RelayConfig struct {
 	// Ledger reserves/commits/releases credits for real on-chain tool402
 	// payments made through this config. See PaymentLedger.
 	Ledger PaymentLedger
+
+	// RunFundingID is set (non-empty) the moment the agent's run has already
+	// settled a single lump-sum inbound x402 payment covering its attached
+	// v2 tool402 nodes (Task 5's reserveAndFundRun) — a property of the RUN,
+	// not of any one node's dialect. "" means no run-level pre-fund happened
+	// (no attached v2 tools, or the estimate came back 0), so v2 calls keep
+	// taking the existing per-call public-relay path unchanged.
+	RunFundingID string
+	// Wallet2 carries what's needed to pay a real target directly from
+	// Wallet 2, in-process, once RunFundingID is set. See Wallet2PayConfig.
+	Wallet2 Wallet2PayConfig
+	// RecordSettlement records one run-funded per-call settlement audit row
+	// (x402_relay_settlements, run_funding_id-linked). amountUSDMicros must
+	// be the real settled amount — RecordRunFundedSettlement takes it at
+	// INSERT time since there is no later call that backfills it.
+	RecordSettlement func(ctx context.Context, target string, amountUSDMicros int64, settled bool) error
 }
 
 // Tool402PaymentResult is what ExecuteTool402V2 returns. SettledUSDMicros
@@ -304,6 +320,17 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		return Tool402PaymentResult{Response: rawResponse}, nil
 	}
 	if isV2 {
+		// RunFundingID is a property of the agent's RUN (set the moment the
+		// agent has at least one v2 tool402 attached), not of this node's
+		// dialect — nested inside isV2 so a legacy-dialect call attached to
+		// the same agent as a v2 one still falls through, unmodified, to the
+		// direct-pay branch below regardless of whether the run has a
+		// funding id. Gating on RunFundingID before checking isV2 would
+		// wrongly route a legacy-dialect call into executeTool402RunLevel,
+		// which only knows how to handle v2 targets.
+		if relayCfg.RunFundingID != "" {
+			return executeTool402RunLevel(ctx, node, relayCfg)
+		}
 		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, relayCfg.Ledger)
 	}
 
@@ -493,4 +520,52 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		releaseReservation()
 	}
 	return out, nil
+}
+
+// executeTool402RunLevel pays a real target directly from Wallet 2,
+// in-process — no HTTP round trip to our own public relay, no fresh
+// inbound settle (that already happened once, in bulk, via
+// reserveAndFundRun before this agent's loop started). Reserve/Commit/
+// Release still go through cfg.Ledger exactly like the per-call path;
+// the only difference is what's behind those calls (an in-memory pool
+// instead of a DB round trip per call).
+func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X402RelayConfig) (Tool402PaymentResult, error) {
+	// Re-fetches the quote even though the dispatch in ExecuteTool402V2 just
+	// probed this endpoint to decide isV2 — deliberate, not redundant: this
+	// is the same "freshest quote right before signing" pattern
+	// executeTool402V2Relay already follows for the per-call path (fetch at
+	// dispatch time to route, fetch again right before paying), matching
+	// this codebase's existing, documented price-drift-aware design rather
+	// than trusting a quote that's already one round trip stale.
+	isV2, quote, err := ProbeX402Quote(ctx, node.Endpoint)
+	if err != nil {
+		return Tool402PaymentResult{}, err
+	}
+	if !isV2 {
+		return Tool402PaymentResult{Response: map[string]any{"error": "endpoint no longer speaks x402 v2"}}, nil
+	}
+	amount, _ := strconv.ParseInt(quote.MaxAmountRequired, 10, 64)
+
+	if err := cfg.Ledger.Reserve(ctx, amount); err != nil {
+		return Tool402PaymentResult{}, err
+	}
+
+	result, payErr := PayTargetFromWallet2(ctx, cfg.Wallet2, node.Endpoint, quote)
+	recordErr := cfg.RecordSettlement(ctx, node.Endpoint, amount, result.Settled)
+
+	if payErr != nil || recordErr != nil {
+		cfg.Ledger.Release(ctx, amount)
+		if payErr != nil {
+			return Tool402PaymentResult{}, payErr
+		}
+		return Tool402PaymentResult{}, fmt.Errorf("run-level settlement record failed: %w", recordErr)
+	}
+
+	cfg.Ledger.Commit(ctx, node.ID, amount, models.DebitKindX402RelayCost)
+
+	var response any
+	if err := json.Unmarshal(result.ResponseBody, &response); err != nil {
+		response = string(result.ResponseBody)
+	}
+	return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost}, nil
 }

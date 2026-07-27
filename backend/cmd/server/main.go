@@ -79,7 +79,14 @@ func main() {
 		nowPaymentsClient.UseSandbox()
 	}
 
-	runner := engine.NewRunner(store, broker, walletSvc, envOr("BASE_URL", "http://localhost:8080"), platformSpendWalletEncMnemonic, usdcAssetID)
+	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000) // $5.00 default
+
+	runner := engine.NewRunner(
+		store, broker, walletSvc,
+		envOr("BASE_URL", "http://localhost:8080"), platformSpendWalletEncMnemonic, usdcAssetID,
+		platformWalletAddr, platformWalletEncMnemonic, facilitatorClient,
+		relayNetwork, relayFeePayer, maxRelayOutboundUSDMicros,
+	)
 
 	go expireStalePendingTransactionsLoop(ctx, store)
 
@@ -109,7 +116,7 @@ func main() {
 		RelayNetwork:              relayNetwork,
 		RelayFeePayer:             relayFeePayer,
 		USDCSigner:                walletSvc,
-		MaxRelayOutboundUSDMicros: envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000), // $5.00 default
+		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
 	}
 
 	r := api.NewRouter(deps)

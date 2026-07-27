@@ -10,6 +10,7 @@ import (
 	"github.com/agentmesh/backend/internal/engine"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/x402"
 )
 
 type noopSigner struct{}
@@ -40,7 +41,7 @@ func newTestRunnerWithRelay(t *testing.T, relayBaseURL string) (*engine.Runner, 
 	}
 	t.Cleanup(store.Close)
 	broker := sse.NewBroker()
-	return engine.NewRunner(store, broker, &fakeRelaySigner{}, relayBaseURL, "platform-enc-mnemonic", uint64(10458941)), store
+	return engine.NewRunner(store, broker, &fakeRelaySigner{}, relayBaseURL, "platform-enc-mnemonic", uint64(10458941), "", "", nil, "", "", 0), store
 }
 
 func newTestRunner(t *testing.T) (*engine.Runner, *db.Store) {
@@ -55,7 +56,36 @@ func newTestRunner(t *testing.T) (*engine.Runner, *db.Store) {
 	}
 	t.Cleanup(store.Close)
 	broker := sse.NewBroker()
-	return engine.NewRunner(store, broker, &noopSigner{}, "http://localhost:8080", "", uint64(10458941)), store
+	return engine.NewRunner(store, broker, &noopSigner{}, "http://localhost:8080", "", uint64(10458941), "", "", nil, "", "", 0), store
+}
+
+// newTestRunnerWithRunFunding builds a Runner with the full run-level
+// x402 pre-funding path wired up (platform wallet address/mnemonic,
+// facilitator client, relay network/fee payer) — needed by tests that
+// exercise reserveAndFundRun's real settle-then-in-process-payout flow
+// (Task 5), unlike newTestRunner/newTestRunnerWithRelay above which only
+// need the legacy per-call paths and leave these fields zero-valued.
+// maxRelayOutboundUSDMicros is left at 0 (no cap) — none of these tests
+// need to exercise the outbound cap.
+func newTestRunnerWithRunFunding(t *testing.T, relayBaseURL, facilitatorURL string) (*engine.Runner, *db.Store) {
+	t.Helper()
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	store, err := db.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	broker := sse.NewBroker()
+	return engine.NewRunner(
+		store, broker, &fakeRelaySigner{},
+		relayBaseURL, "platform-spend-enc-mnemonic", uint64(10458941),
+		"PLATFORMADDR", "platform-wallet-enc-mnemonic",
+		x402.NewFacilitatorClient(facilitatorURL),
+		"algorand:testnet", "FEEPAYERADDR", 0,
+	), store
 }
 
 // TestStopReturnsFalseWhenNotRunning verifies that Stop returns false

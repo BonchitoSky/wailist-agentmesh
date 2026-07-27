@@ -788,3 +788,50 @@ func (s *Store) RecordRunFundedSettlement(ctx context.Context, runFundingID, tar
 	`, targetURL, runFundingID, amountAssetMicros).Scan(&row.ID, &row.TargetURL, &row.InboundTxID, &row.OutboundTxID, &row.AmountAssetMicros, &row.Status, &row.CreatedAt)
 	return row, err
 }
+
+// ListX402RunFundingsByRun returns every x402_run_fundings row for a given
+// run, oldest first. Used by tests asserting exactly one run-level pre-fund
+// happened per agent run (Task 5's reserveAndFundRun).
+func (s *Store) ListX402RunFundingsByRun(ctx context.Context, runID string) ([]models.X402RunFunding, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, run_id, inbound_tx_id, amount_asset_micros, created_at
+		FROM x402_run_fundings WHERE run_id = $1 ORDER BY created_at ASC
+	`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.X402RunFunding
+	for rows.Next() {
+		var row models.X402RunFunding
+		if err := rows.Scan(&row.ID, &row.RunID, &row.InboundTxID, &row.AmountAssetMicros, &row.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// ListX402RelaySettlementsByRunFunding returns every x402_relay_settlements
+// row attributed to a given run-level bulk funding (run_funding_id), oldest
+// first. Used by tests asserting exactly which per-call settlements a
+// run-funded agent turn produced.
+func (s *Store) ListX402RelaySettlementsByRunFunding(ctx context.Context, runFundingID string) ([]models.X402RelaySettlement, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, target_url, inbound_tx_id, outbound_tx_id, amount_asset_micros, status, created_at
+		FROM x402_relay_settlements WHERE run_funding_id = $1 ORDER BY created_at ASC
+	`, runFundingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.X402RelaySettlement
+	for rows.Next() {
+		var row models.X402RelaySettlement
+		if err := rows.Scan(&row.ID, &row.TargetURL, &row.InboundTxID, &row.OutboundTxID, &row.AmountAssetMicros, &row.Status, &row.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
