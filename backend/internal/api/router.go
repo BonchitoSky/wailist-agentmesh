@@ -37,6 +37,10 @@ func NewRouter(d *handlers.Deps) http.Handler {
 	r.Handle("/x402/relay", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		d.X402Relay(w, r)
 	}))
+	// Static, informational resource for FundRunReserve's PaymentRequirements.Resource —
+	// a real, reachable route on our own domain rather than an opaque identifier string,
+	// matching what a real Bazaar-catalog crawler would expect to find there.
+	r.Get("/x402/relay/run-funding", d.X402RunFundingInfo)
 
 	// Protected routes — JWT required
 	r.Group(func(r chi.Router) {

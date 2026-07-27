@@ -48,6 +48,17 @@ func (d *Deps) X402Relay(w http.ResponseWriter, r *http.Request) {
 	d.relaySettleAndForward(w, r, target, xPayment)
 }
 
+// X402RunFundingInfo is the static, informational resource FundRunReserve's
+// PaymentRequirements.Resource points at — a real, reachable route on our own
+// domain rather than an opaque identifier string. No payment logic, no auth:
+// purely informational, matching what a real Bazaar-catalog crawler would
+// expect to find at a `resource` URL.
+func (d *Deps) X402RunFundingInfo(w http.ResponseWriter, r *http.Request) {
+	respond.JSON(w, http.StatusOK, map[string]string{
+		"description": "AgentMesh workflow run funding pool — internal pre-settlement for downstream x402 tool calls, not directly payable via this route",
+	})
+}
+
 // targetPriceQuote is the subset of a target's x402 402 response the relay
 // cares about.
 type targetPriceQuote struct {
