@@ -18,6 +18,31 @@ func (n *noopSigner) SignAndSendPayment(_ context.Context, _, _ string, _ uint64
 	return "", nil
 }
 
+// fakeRelaySigner additionally satisfies nodes.USDCGroupSigner (unlike
+// noopSigner), so a Runner built with it will actually route tool402 relay-
+// dialect payments through the relay/Wallet 1 path instead of degrading
+// gracefully with "no platform spend wallet configured".
+type fakeRelaySigner struct{ noopSigner }
+
+func (f *fakeRelaySigner) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
+	return []string{"g0", "g1"}, 0, nil
+}
+
+func newTestRunnerWithRelay(t *testing.T, relayBaseURL string) (*engine.Runner, *db.Store) {
+	t.Helper()
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	store, err := db.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	broker := sse.NewBroker()
+	return engine.NewRunner(store, broker, &fakeRelaySigner{}, relayBaseURL, "platform-enc-mnemonic", uint64(10458941)), store
+}
+
 func newTestRunner(t *testing.T) (*engine.Runner, *db.Store) {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
@@ -30,7 +55,7 @@ func newTestRunner(t *testing.T) (*engine.Runner, *db.Store) {
 	}
 	t.Cleanup(store.Close)
 	broker := sse.NewBroker()
-	return engine.NewRunner(store, broker, &noopSigner{}), store
+	return engine.NewRunner(store, broker, &noopSigner{}, "http://localhost:8080", "", uint64(10458941)), store
 }
 
 // TestStopReturnsFalseWhenNotRunning verifies that Stop returns false

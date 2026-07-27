@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/agentmesh/backend/internal/models"
@@ -629,6 +631,63 @@ func (s *Store) DebitCredits(ctx context.Context, userID string, amountUSDMicros
 	return tx.Commit(ctx)
 }
 
+// ReserveCredits atomically checks a user's balance covers amountUSDMicros
+// and, if so, immediately decrements it — without yet writing a debit_ledger
+// row. x402 payments split the check from the real payment attempt by a
+// network round trip (sign, relay, wait for settlement); reserving the
+// balance up front, at the same atomic-decrement primitive DebitCredits
+// already uses, closes the gap where concurrent or sequential calls within
+// one node execution could all pass a check against the same stale balance.
+// Pair with CommitReservedDebit once the payment is confirmed settled, or
+// ReleaseReservedCredits if it never happened.
+func (s *Store) ReserveCredits(ctx context.Context, userID string, amountUSDMicros int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var balance int64
+	if err := tx.QueryRow(ctx, `
+		SELECT credit_balance_usd_micros FROM users WHERE id = $1 FOR UPDATE
+	`, userID).Scan(&balance); err != nil {
+		return err
+	}
+	if balance < amountUSDMicros {
+		return fmt.Errorf("insufficient credits: balance %d micros, need %d micros: %w", balance, amountUSDMicros, ErrInsufficientCredits)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros - $1 WHERE id = $2
+	`, amountUSDMicros, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// CommitReservedDebit records the debit_ledger audit row for a
+// ReserveCredits reservation that turned into a real, settled charge. The
+// balance was already decremented at reservation time, so this only writes
+// the audit trail — it must never be called with an amount that wasn't
+// already reserved.
+func (s *Store) CommitReservedDebit(ctx context.Context, userID string, amountUSDMicros int64, kind, workflowID, runID, nodeID string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO debit_ledger (user_id, workflow_id, run_id, node_id, kind, amount_usd_micros)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, userID, workflowID, runID, nodeID, kind, amountUSDMicros)
+	return err
+}
+
+// ReleaseReservedCredits credits back a ReserveCredits reservation that
+// never became a real charge (the payment attempt failed, or was never
+// confirmed settled, before any money moved). No debit_ledger row: nothing
+// was ever actually charged, so there is nothing there to reverse.
+func (s *Store) ReleaseReservedCredits(ctx context.Context, userID string, amountUSDMicros int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1 WHERE id = $2
+	`, amountUSDMicros, userID)
+	return err
+}
+
 // ListDebitLedger returns every debit_ledger row for a run, oldest first.
 // Used by the credits/usage dashboard and by tests asserting exactly which
 // charges a run produced.
@@ -650,4 +709,46 @@ func (s *Store) ListDebitLedger(ctx context.Context, runID string) ([]models.Deb
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// --- X402 Relay Settlement methods ---
+
+// ErrDuplicateSettlement is returned when an inbound settlement's txid has already
+// been recorded — a replayed X-PAYMENT payload must never be processed twice.
+var ErrDuplicateSettlement = errors.New("duplicate settlement txid")
+
+func (s *Store) RecordInboundSettlement(ctx context.Context, targetURL, inboundTxID string, amountAssetMicros int64) (models.X402RelaySettlement, error) {
+	var row models.X402RelaySettlement
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO x402_relay_settlements (target_url, inbound_tx_id, amount_asset_micros)
+		VALUES ($1, $2, $3)
+		RETURNING id, target_url, inbound_tx_id, outbound_tx_id, amount_asset_micros, status, created_at
+	`, targetURL, inboundTxID, amountAssetMicros).Scan(
+		&row.ID, &row.TargetURL, &row.InboundTxID, &row.OutboundTxID, &row.AmountAssetMicros, &row.Status, &row.CreatedAt,
+	)
+	if err != nil && strings.Contains(err.Error(), "duplicate key value") {
+		return models.X402RelaySettlement{}, ErrDuplicateSettlement
+	}
+	return row, err
+}
+
+func (s *Store) RecordOutboundSettlement(ctx context.Context, id, outboundTxID, status string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE x402_relay_settlements SET outbound_tx_id = $2, status = $3 WHERE id = $1
+	`, id, outboundTxID, status)
+	return err
+}
+
+// GetX402RelaySettlementByInboundTx looks up a relay ledger row by its
+// inbound settlement tx id — used to verify what was actually recorded
+// (e.g. the settled amount) after a relay flow completes.
+func (s *Store) GetX402RelaySettlementByInboundTx(ctx context.Context, inboundTxID string) (models.X402RelaySettlement, error) {
+	var row models.X402RelaySettlement
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, target_url, inbound_tx_id, outbound_tx_id, amount_asset_micros, status, created_at
+		FROM x402_relay_settlements WHERE inbound_tx_id = $1
+	`, inboundTxID).Scan(
+		&row.ID, &row.TargetURL, &row.InboundTxID, &row.OutboundTxID, &row.AmountAssetMicros, &row.Status, &row.CreatedAt,
+	)
+	return row, err
 }

@@ -213,9 +213,20 @@ type DebitEntry struct {
 const (
 	DebitKindByokFlatFee     = "byok_flat_fee"
 	DebitKindX402PlatformFee = "x402_platform_fee"
+	DebitKindX402RelayCost   = "x402_relay_cost"
 )
 
 const (
 	ByokFlatFeeUSDMicros     int64 = 10_000  // $0.01
 	X402PlatformFeeUSDMicros int64 = 500_000 // $0.50
 )
+
+type X402RelaySettlement struct {
+	ID                string    `json:"id"`
+	TargetURL         string    `json:"targetUrl"`
+	InboundTxID       string    `json:"inboundTxId"`
+	OutboundTxID      *string   `json:"outboundTxId,omitempty"`
+	AmountAssetMicros int64     `json:"amountAssetMicros"`
+	Status            string    `json:"status"`
+	CreatedAt         time.Time `json:"createdAt"`
+}

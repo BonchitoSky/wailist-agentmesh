@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -16,6 +17,7 @@ import (
 	"github.com/agentmesh/backend/internal/payments"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/wallet"
+	"github.com/agentmesh/backend/internal/x402"
 )
 
 func main() {
@@ -38,6 +40,38 @@ func main() {
 		envOr("ALGORAND_NETWORK", "testnet"),
 	)
 
+	platformWalletAddr := os.Getenv("PLATFORM_WALLET_ADDRESS")
+	platformWalletEncMnemonic := os.Getenv("PLATFORM_WALLET_ENC_MNEMONIC")
+	if platformWalletAddr == "" || platformWalletEncMnemonic == "" {
+		log.Fatal("PLATFORM_WALLET_ADDRESS and PLATFORM_WALLET_ENC_MNEMONIC must both be set — the platform wallet's payTo address must stay fixed for the whole competition, so it is provisioned once out-of-band, never auto-generated at startup")
+	}
+	if derivedAddr, err := walletSvc.AddressForEncMnemonic(platformWalletEncMnemonic); err != nil {
+		log.Fatalf("PLATFORM_WALLET_ENC_MNEMONIC does not decrypt/derive a valid Algorand address: %v", err)
+	} else if derivedAddr != platformWalletAddr {
+		log.Fatalf("PLATFORM_WALLET_ADDRESS (%s) does not match the address derived from PLATFORM_WALLET_ENC_MNEMONIC (%s) — this wallet's address is published as payTo in every x402 challenge while its mnemonic signs the outbound relay leg, so a mismatch means inbound payments accumulate in one account while a different account signs outbound payments", platformWalletAddr, derivedAddr)
+	}
+
+	platformSpendWalletAddr := os.Getenv("PLATFORM_SPEND_WALLET_ADDRESS")
+	platformSpendWalletEncMnemonic := os.Getenv("PLATFORM_SPEND_WALLET_ENC_MNEMONIC")
+	if platformSpendWalletAddr == "" || platformSpendWalletEncMnemonic == "" {
+		log.Fatal("PLATFORM_SPEND_WALLET_ADDRESS and PLATFORM_SPEND_WALLET_ENC_MNEMONIC must both be set — Wallet 1 pays every relayed x402 call on behalf of users' credit balances, so it is provisioned once out-of-band via cmd/walletgen, never auto-generated at startup")
+	}
+	if derivedAddr, err := walletSvc.AddressForEncMnemonic(platformSpendWalletEncMnemonic); err != nil {
+		log.Fatalf("PLATFORM_SPEND_WALLET_ENC_MNEMONIC does not decrypt/derive a valid Algorand address: %v", err)
+	} else if derivedAddr != platformSpendWalletAddr {
+		log.Fatalf("PLATFORM_SPEND_WALLET_ADDRESS (%s) does not match the address derived from PLATFORM_SPEND_WALLET_ENC_MNEMONIC (%s) — these must be the same wallet", platformSpendWalletAddr, derivedAddr)
+	}
+
+	usdcAssetID := uint64(10458941) // testnet default
+	relayNetwork := "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=" // testnet default
+	relayFeePayer := "ZMFK2OI7ZBD2U27ISERZC4S6LKM6WMFJPZQ4MYNJDZ2VNBNMBA67RA22AA"
+	if envOr("ALGORAND_NETWORK", "testnet") == "mainnet" {
+		usdcAssetID = 31566704
+		relayNetwork = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="
+	}
+
+	facilitatorClient := x402.NewFacilitatorClient(envOr("FACILITATOR_URL", "https://facilitator.goplausible.xyz"))
+
 	razorpayClient := payments.NewRazorpayClient(mustEnv("RAZORPAY_KEY_ID"), mustEnv("RAZORPAY_KEY_SECRET"), mustEnv("RAZORPAY_WEBHOOK_SECRET"))
 
 	nowPaymentsClient := payments.NewNOWPaymentsClient(mustEnv("NOWPAYMENTS_API_KEY"), mustEnv("NOWPAYMENTS_IPN_SECRET"))
@@ -45,7 +79,7 @@ func main() {
 		nowPaymentsClient.UseSandbox()
 	}
 
-	runner := engine.NewRunner(store, broker, walletSvc)
+	runner := engine.NewRunner(store, broker, walletSvc, envOr("BASE_URL", "http://localhost:8080"), platformSpendWalletEncMnemonic, usdcAssetID)
 
 	go expireStalePendingTransactionsLoop(ctx, store)
 
@@ -67,6 +101,15 @@ func main() {
 		Razorpay:      razorpayClient,
 		RazorpayKeyID: razorpayClient.KeyID,
 		NOWPayments:   nowPaymentsClient,
+
+		PlatformWalletAddress:     platformWalletAddr,
+		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
+		FacilitatorClient:         facilitatorClient,
+		USDCAssetID:               usdcAssetID,
+		RelayNetwork:              relayNetwork,
+		RelayFeePayer:             relayFeePayer,
+		USDCSigner:                walletSvc,
+		MaxRelayOutboundUSDMicros: envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000), // $5.00 default
 	}
 
 	r := api.NewRouter(deps)
@@ -89,6 +132,22 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// envInt64Or parses key as a base-10 int64, falling back to fallback if
+// unset or unparseable (logging a warning in the latter case rather than
+// silently ignoring a misconfigured value).
+func envInt64Or(key string, fallback int64) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		log.Printf("%s=%q is not a valid integer, using default %d", key, v, fallback)
+		return fallback
+	}
+	return n
 }
 
 // expireStalePendingTransactionsLoop marks abandoned checkouts (order/invoice created,
