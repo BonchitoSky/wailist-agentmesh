@@ -224,9 +224,21 @@ const (
 type X402RelaySettlement struct {
 	ID                string    `json:"id"`
 	TargetURL         string    `json:"targetUrl"`
-	InboundTxID       string    `json:"inboundTxId"`
+	InboundTxID       *string   `json:"inboundTxId,omitempty"`
 	OutboundTxID      *string   `json:"outboundTxId,omitempty"`
 	AmountAssetMicros int64     `json:"amountAssetMicros"`
 	Status            string    `json:"status"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
+// X402RunFunding is a single real GoPlausible-facilitated inbound payment
+// (Wallet 1 -> Wallet 2) that pre-funds a whole run's worth of downstream
+// x402 tool calls, instead of settling one inbound payment per call. Mirrors
+// x402_run_fundings' columns exactly.
+type X402RunFunding struct {
+	ID                string    `json:"id"`
+	RunID             string    `json:"runId"`
+	InboundTxID       string    `json:"inboundTxId"`
+	AmountAssetMicros int64     `json:"amountAssetMicros"`
 	CreatedAt         time.Time `json:"createdAt"`
 }

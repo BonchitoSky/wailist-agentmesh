@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -259,76 +260,49 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, target, ledgerID string, quote targetPriceQuote) {
 	ctx := r.Context()
 
-	assetID, _ := strconv.ParseUint(quote.Asset, 10, 64)
-	amount, _ := strconv.ParseUint(quote.MaxAmountRequired, 10, 64)
-
-	// Defense in depth: relaySettleAndForward already rejects a mismatched
-	// quote.Asset before ever settling the inbound leg, so this should be
-	// unreachable — but if it's ever wrong, refuse before touching the
-	// signer rather than trust a caller-supplied, unauthenticated value.
-	if assetID != d.USDCAssetID {
-		d.Store.RecordOutboundSettlement(ctx, ledgerID, "", "failed")
-		respond.Error(w, http.StatusBadGateway, "target quoted an unexpected asset id")
-		return
+	cfg := nodes.Wallet2PayConfig{
+		USDCSigner:                d.USDCSigner,
+		PlatformWalletEncMnemonic: d.PlatformWalletEncMnemonic,
+		USDCAssetID:               d.USDCAssetID,
+		RelayFeePayer:             d.RelayFeePayer,
+		RelayNetwork:              d.RelayNetwork,
+		MaxRelayOutboundUSDMicros: d.MaxRelayOutboundUSDMicros,
 	}
-
-	// Independent local backstop: relayInboundChallenge and
-	// relaySettleAndForward each fetch the target's price quote separately
-	// (necessarily — they're different HTTP requests at different times).
-	// A target that answers cheap on the first fetch and expensive on this
-	// (settle-time, authoritative) second one could cause the platform to
-	// pay out more than the caller's inbound payment ever covered, bounded
-	// only by whatever the facilitator itself enforces on the inbound leg.
-	// Capping the outbound amount here bounds worst-case loss per call to a
-	// fixed ceiling regardless of facilitator behavior.
-	if d.MaxRelayOutboundUSDMicros > 0 && amount > uint64(d.MaxRelayOutboundUSDMicros) {
-		d.Store.RecordOutboundSettlement(ctx, ledgerID, "", "failed")
-		respond.Error(w, http.StatusBadGateway, "target quoted an amount exceeding the relay's per-call cap")
-		return
-	}
-
-	group, idx, err := d.USDCSigner.SignUSDCPaymentGroup(ctx, d.PlatformWalletEncMnemonic, quote.PayTo, assetID, amount, d.RelayFeePayer)
-	if err != nil {
-		d.Store.RecordOutboundSettlement(ctx, ledgerID, "", "failed")
-		respond.Error(w, http.StatusInternalServerError, "failed to sign outbound payment: "+err.Error())
-		return
-	}
+	result, err := nodes.PayTargetFromWallet2(ctx, cfg, target, nodes.TargetQuote{
+		PayTo: quote.PayTo, Asset: quote.Asset, MaxAmountRequired: quote.MaxAmountRequired,
+	})
 
 	// Signals to the orchestrator's own tool402 caller (tool402.go) that the
 	// inbound leg (Wallet 1 -> Wallet 2, via the facilitator in
 	// relaySettleAndForward) has irreversibly settled AND a real signed
 	// outbound payment group now exists, independent of whatever the
-	// target's HTTP response below says. Deliberately set here, after
-	// signing succeeds, rather than earlier in relaySettleAndForward right
-	// after the inbound leg settles: at that point there is no signed group
-	// yet, and a signing failure (bad payTo, algod outage, ...) means the
-	// target receives nothing at all -- billing the caller in that case
-	// would be a real over-charge, not the "money already moved so it's
-	// fair to bill" case this header exists to represent. Once a group is
-	// signed here, it's a submittable claim regardless of what the target's
-	// HTTP response says, which is what makes billing on this header (not on
-	// payResp.StatusCode below) safe: a target that accepts payment and then
-	// deliberately returns non-2xx must not be able to dodge billing while
-	// still being paid. Must be set before any WriteHeader call from this
-	// point on — the paid request/response handling below is the first thing
-	// that writes a status/body.
-	w.Header().Set("X-Inbound-Settled", "true")
+	// target's HTTP response says. result.Signed becomes true the instant
+	// PayTargetFromWallet2's SignUSDCPaymentGroup call succeeds -- the exact
+	// moment this handler used to set the header inline, before its own
+	// paid request to target. A signing failure (bad payTo, algod outage,
+	// ...) means the target receives nothing at all -- billing the caller
+	// in that case would be a real over-charge, not the "money already
+	// moved so it's fair to bill" case this header exists to represent.
+	// Once a group is signed, it's a submittable claim regardless of what
+	// the target's HTTP response says, which is what makes billing on this
+	// flag (not on the target's status code) safe: a target that accepts
+	// payment and then deliberately returns non-2xx must not be able to
+	// dodge billing while still being paid. Must be set before any
+	// WriteHeader call below.
+	if result.Signed {
+		w.Header().Set("X-Inbound-Settled", "true")
+	}
 
-	xPaymentOut, _ := json.Marshal(map[string]any{
-		"x402Version": 2, "scheme": "exact", "network": d.RelayNetwork,
-		"payload": map[string]any{"paymentGroup": group, "paymentIndex": idx},
-	})
-
-	payReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	payReq.Header.Set("X-Payment", string(xPaymentOut))
-	payResp, err := nodes.SafeHTTPClient().Do(payReq)
 	if err != nil {
 		d.Store.RecordOutboundSettlement(ctx, ledgerID, "", "failed")
-		respond.Error(w, http.StatusBadGateway, "paid request to target failed: "+err.Error())
+		status := http.StatusBadGateway
+		var payErr *nodes.Wallet2PayError
+		if errors.As(err, &payErr) {
+			status = payErr.StatusCode
+		}
+		respond.Error(w, status, err.Error())
 		return
 	}
-	defer payResp.Body.Close()
-	finalBody, _ := io.ReadAll(io.LimitReader(payResp.Body, 5<<20))
 
 	// The target's paid response must actually succeed for the outbound leg
 	// to count as settled — a 402/4xx/5xx here means the platform wallet's
@@ -341,12 +315,12 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 	// there is no facilitator-issued outbound transaction id available at
 	// this call site with the current design.
 	status := "settled"
-	if payResp.StatusCode < 200 || payResp.StatusCode >= 300 {
+	if !result.Settled {
 		status = "failed"
 	}
 	d.Store.RecordOutboundSettlement(ctx, ledgerID, "", status)
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(payResp.StatusCode)
-	w.Write(finalBody)
+	w.WriteHeader(result.StatusCode)
+	w.Write(result.ResponseBody)
 }

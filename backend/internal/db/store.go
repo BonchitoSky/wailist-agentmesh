@@ -752,3 +752,39 @@ func (s *Store) GetX402RelaySettlementByInboundTx(ctx context.Context, inboundTx
 	)
 	return row, err
 }
+
+// RecordRunFunding inserts one x402_run_fundings audit row for a real,
+// already-settled inbound payment (Wallet 1 -> Wallet 2) that pre-funds a
+// whole run's worth of downstream x402 tool calls, instead of one inbound
+// settlement per call.
+func (s *Store) RecordRunFunding(ctx context.Context, runID, inboundTxID string, amountAssetMicros int64) (models.X402RunFunding, error) {
+	var f models.X402RunFunding
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO x402_run_fundings (run_id, inbound_tx_id, amount_asset_micros)
+		VALUES ($1, $2, $3)
+		RETURNING id, run_id, inbound_tx_id, amount_asset_micros, created_at
+	`, runID, inboundTxID, amountAssetMicros).Scan(&f.ID, &f.RunID, &f.InboundTxID, &f.AmountAssetMicros, &f.CreatedAt)
+	return f, err
+}
+
+// RecordRunFundedSettlement inserts an x402_relay_settlements audit row
+// attributed to an existing run-level bulk settlement (run_funding_id)
+// instead of a fresh per-call inbound one (inbound_tx_id). Takes
+// amountAssetMicros directly at INSERT time — RecordOutboundSettlement only
+// ever updates outbound_tx_id/status, never amount_asset_micros, so there is
+// no later call that could backfill a placeholder value here.
+// RecordInboundSettlement (the existing per-call equivalent) already sets
+// the real amount at INSERT time for the same reason — this mirrors that,
+// not a new pattern. status is left unset so it defaults to
+// 'pending_outbound', matching RecordInboundSettlement's behavior;
+// RecordOutboundSettlement's later call must pass "settled" or "failed" to
+// satisfy the table's status CHECK constraint.
+func (s *Store) RecordRunFundedSettlement(ctx context.Context, runFundingID, targetURL string, amountAssetMicros int64) (models.X402RelaySettlement, error) {
+	var row models.X402RelaySettlement
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO x402_relay_settlements (target_url, run_funding_id, amount_asset_micros)
+		VALUES ($1, $2, $3)
+		RETURNING id, target_url, inbound_tx_id, outbound_tx_id, amount_asset_micros, status, created_at
+	`, targetURL, runFundingID, amountAssetMicros).Scan(&row.ID, &row.TargetURL, &row.InboundTxID, &row.OutboundTxID, &row.AmountAssetMicros, &row.Status, &row.CreatedAt)
+	return row, err
+}
