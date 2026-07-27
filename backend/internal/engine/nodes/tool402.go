@@ -243,7 +243,18 @@ func probeTool402Endpoint(ctx context.Context, endpoint string) (isV2 bool, notP
 	payTo, _ := accept["payTo"].(string)
 	asset, _ := accept["asset"].(string)
 	amountStr, _ := accept["maxAmountRequired"].(string)
-	amount, _ := strconv.ParseInt(amountStr, 10, 64)
+	amount, parseErr := strconv.ParseInt(amountStr, 10, 64)
+	// This is a real v2 challenge (accepts[] present) -- a missing or
+	// unparseable maxAmountRequired here is a malformed challenge, not a
+	// genuinely free tool. Silently returning MaxAmountRequired: 0 in that
+	// case would be indistinguishable from a real zero-cost quote, and
+	// Task 5 sizes both a credit reservation and a real on-chain payment
+	// off this value -- a silent 0 there is a money-correctness bug. Report
+	// it as an error instead; isV2 still reflects reality (it IS a v2
+	// challenge) even though the quote itself is zero-valued.
+	if parseErr != nil || amount <= 0 {
+		return true, false, nil, x402Quote{}, fmt.Errorf("x402: invalid or missing maxAmountRequired %q in v2 challenge", amountStr)
+	}
 	return true, false, nil, x402Quote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount}, nil
 }
 

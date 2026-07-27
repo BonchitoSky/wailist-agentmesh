@@ -66,6 +66,95 @@ func TestX402ParseQuote(t *testing.T) {
 	}
 }
 
+// TestX402ProbeQuoteValid verifies that ProbeX402Quote (and by extension
+// ProbeX402Price) correctly parses a well-formed real v2 challenge's
+// payTo/asset/maxAmountRequired, exercising probeTool402Endpoint directly
+// rather than only through ExecuteTool402V2 (which never surfaces the parsed
+// quote to its caller).
+func TestX402ProbeQuoteValid(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"250000"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isV2 {
+		t.Fatal("want isV2=true for a real accepts[] challenge")
+	}
+	if quote.PayTo != "TARGETADDR" {
+		t.Fatalf("want payTo TARGETADDR, got %q", quote.PayTo)
+	}
+	if quote.Asset != "10458941" {
+		t.Fatalf("want asset 10458941, got %q", quote.Asset)
+	}
+	if quote.MaxAmountRequired != "250000" {
+		t.Fatalf("want maxAmountRequired 250000, got %q", quote.MaxAmountRequired)
+	}
+
+	priceIsV2, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error from ProbeX402Price: %v", err)
+	}
+	if !priceIsV2 {
+		t.Fatal("want isV2=true from ProbeX402Price")
+	}
+	if amount != 250000 {
+		t.Fatalf("want amount 250000, got %d", amount)
+	}
+}
+
+// TestX402ProbeQuoteMalformedAmount verifies that a real v2 challenge
+// (accepts[] present) whose maxAmountRequired is non-numeric produces an
+// error rather than silently parsing to amount=0 — a silent 0 would be
+// indistinguishable from a genuinely free tool, and Task 5 sizes a real
+// credit reservation and on-chain payment off this value.
+func TestX402ProbeQuoteMalformedAmount(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"not-a-number"}]}`))
+	}))
+	defer srv.Close()
+
+	_, _, err := nodes.ProbeX402Quote(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("want an error for a malformed (non-numeric) maxAmountRequired, got nil")
+	}
+
+	_, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("want an error from ProbeX402Price for a malformed maxAmountRequired, got nil")
+	}
+	if amount != 0 {
+		t.Fatalf("want zero-valued amount alongside the error, got %d", amount)
+	}
+}
+
+// TestX402ProbeQuoteMissingAmount verifies that a real v2 challenge with
+// maxAmountRequired missing entirely (not merely malformed) is treated the
+// same as a malformed one: an error, not a silent zero. There's no reason a
+// missing field should be trusted more than a garbled one — both are
+// evidence of a broken/non-compliant challenge, and either way Task 5 must
+// not size a reservation or payment off an unverified zero.
+func TestX402ProbeQuoteMissingAmount(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, _, err := nodes.ProbeX402Quote(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("want an error for a missing maxAmountRequired, got nil")
+	}
+	if !isV2 {
+		t.Fatal("want isV2=true still reported — it IS a real v2 challenge, just malformed")
+	}
+}
+
 // TestX402PaymentSigned verifies the full sign-and-retry flow: the runner
 // receives a 402, calls the signer, and retries with X-Payment-Txid.
 func TestX402PaymentSigned(t *testing.T) {
