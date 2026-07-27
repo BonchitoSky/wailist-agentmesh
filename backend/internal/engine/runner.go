@@ -117,6 +117,50 @@ func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.Paym
 	}
 }
 
+// newRunLevelLedger builds an in-memory credit pool for a single run,
+// atomically tracking reservations against a fixed budget instead of hitting
+// the DB per-call. Reserve decrements the pool; Commit writes the permanent
+// audit row (DB-backed, same as newPaymentLedger); Release credits back the
+// in-memory balance (unlike newPaymentLedger, which also calls the DB). See
+// nodes.PaymentLedger for the full contract.
+func newRunLevelLedger(pool int64, wf models.Workflow, run models.Run, store *db.Store) (nodes.PaymentLedger, func() int64) {
+	var mu sync.Mutex
+	remaining := pool
+
+	ledger := nodes.PaymentLedger{
+		Reserve: func(_ context.Context, amountUSDMicros int64) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if amountUSDMicros > remaining {
+				return fmt.Errorf("run pre-fund pool exhausted: need %d, %d left of %d reserved for this run: %w",
+					amountUSDMicros, remaining, pool, db.ErrInsufficientCredits)
+			}
+			remaining -= amountUSDMicros
+			return nil
+		},
+		Commit: func(cctx context.Context, nodeID string, amountUSDMicros int64, kind string) {
+			bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
+			defer cancel()
+			if err := store.CommitReservedDebit(bctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
+				msg := fmt.Sprintf("CRITICAL: commit reserved debit failed (run pre-fund pool already decremented, no ledger row written): user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
+					wf.UserID, wf.ID, run.ID, nodeID, kind, amountUSDMicros, err)
+				log.Print(msg)
+				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+			}
+		},
+		Release: func(_ context.Context, amountUSDMicros int64) {
+			mu.Lock()
+			defer mu.Unlock()
+			remaining += amountUSDMicros
+		},
+	}
+	return ledger, func() int64 {
+		mu.Lock()
+		defer mu.Unlock()
+		return remaining
+	}
+}
+
 // Start creates a cancellable context for the run, registers it, and launches
 // Run in a goroutine. Replaces the previous pattern of calling Run directly.
 func (r *Runner) Start(wf models.Workflow, run models.Run) {

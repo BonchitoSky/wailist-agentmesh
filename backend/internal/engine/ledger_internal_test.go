@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -107,5 +108,71 @@ func TestPaymentLedgerCommitAndReleaseSurviveCancelledContext(t *testing.T) {
 	}
 	if entries[0].AmountUSDMicros != 250_000 || entries[0].Kind != models.DebitKindX402RelayCost {
 		t.Fatalf("want a 250000 x402_relay_cost entry, got %+v", entries[0])
+	}
+}
+
+// TestRunLevelLedgerExhaustsPoolNotDBBalance verifies that an in-memory
+// run-level ledger correctly enforces a fixed credit pool independent of the
+// DB balance, and that Release restores the in-memory pool (but not the DB,
+// since the DB balance was never touched).
+func TestRunLevelLedgerExhaustsPoolNotDBBalance(t *testing.T) {
+	wf := models.Workflow{
+		ID:     "wf-1",
+		UserID: "user-1",
+	}
+	run := models.Run{
+		ID: "run-1",
+	}
+
+	// Create a run-level ledger with a fixed pool of 500000 micros.
+	ledger, getRemaining := newRunLevelLedger(500000, wf, run, nil)
+
+	ctx := context.Background()
+
+	// Reserve 300000 — should succeed, leaving 200000.
+	err := ledger.Reserve(ctx, 300000)
+	if err != nil {
+		t.Fatalf("first reserve failed: %v", err)
+	}
+	if remaining := getRemaining(); remaining != 200000 {
+		t.Errorf("after first reserve: want 200000 remaining, got %d", remaining)
+	}
+
+	// Reserve another 300000 — should fail (only 200000 left).
+	// Must assert that the error wraps db.ErrInsufficientCredits.
+	err = ledger.Reserve(ctx, 300000)
+	if err == nil {
+		t.Fatal("second reserve should have failed but didn't")
+	}
+	if !errors.Is(err, db.ErrInsufficientCredits) {
+		t.Errorf("want error wrapping ErrInsufficientCredits, got: %v", err)
+	}
+	// Pool should not have changed after the failed reserve.
+	if remaining := getRemaining(); remaining != 200000 {
+		t.Errorf("after failed reserve: want 200000 remaining, got %d", remaining)
+	}
+
+	// Reserve 200000 — should succeed, pool now empty.
+	err = ledger.Reserve(ctx, 200000)
+	if err != nil {
+		t.Fatalf("third reserve failed: %v", err)
+	}
+	if remaining := getRemaining(); remaining != 0 {
+		t.Errorf("after third reserve: want 0 remaining, got %d", remaining)
+	}
+
+	// Release 100000 back to the pool.
+	ledger.Release(ctx, 100000)
+	if remaining := getRemaining(); remaining != 100000 {
+		t.Errorf("after release: want 100000 remaining, got %d", remaining)
+	}
+
+	// Reserve 100000 — should succeed now (exactly fills the released space).
+	err = ledger.Reserve(ctx, 100000)
+	if err != nil {
+		t.Fatalf("reserve after release failed: %v", err)
+	}
+	if remaining := getRemaining(); remaining != 0 {
+		t.Errorf("after reserve after release: want 0 remaining, got %d", remaining)
 	}
 }
