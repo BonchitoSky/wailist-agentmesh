@@ -622,3 +622,146 @@ func TestX402V2RelayReleasesReservationOnPanic(t *testing.T) {
 		t.Fatal("want no commit — the payment never completed")
 	}
 }
+
+// TestX402RunLevelCommitsNotReleasesOnTargetNetworkFailure is a regression
+// test for the run-level path (RunFundingID != "", dispatched by
+// ExecuteTool402V2 into executeTool402RunLevel): PayTargetFromWallet2's
+// Signed field becomes true the instant a real payment group is signed and
+// submitted from Wallet 2 -- real money has already moved -- and stays true
+// even when the subsequent HTTP call to the target fails at the network
+// level (see Wallet2PayResult's doc comment in walletpay.go). Before this
+// fix, executeTool402RunLevel released the ledger reservation whenever
+// payErr != nil, regardless of Signed, which would understate real spend:
+// a later call in the same agent turn could Reserve phantom headroom this
+// pool doesn't actually have. This test hijacks and closes the connection
+// on the paid request specifically (the quote probe beforehand must still
+// succeed normally) to simulate a genuine transport failure after signing.
+func TestX402RunLevelCommitsNotReleasesOnTargetNetworkFailure(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("test server does not support hijacking")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.Close()
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	var reservedAmount int64
+	var released, committed bool
+	var committedAmount int64
+	ledger := nodes.PaymentLedger{
+		Reserve: func(_ context.Context, amount int64) error { reservedAmount = amount; return nil },
+		Commit:  func(_ context.Context, _ string, amount int64, _ string) { committed = true; committedAmount = amount },
+		Release: func(context.Context, int64) { released = true },
+	}
+
+	var recordSettlementCalled bool
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID: "test-run-funding-1",
+		Ledger:       ledger,
+		Wallet2: nodes.Wallet2PayConfig{
+			USDCSigner:                usdcSigner,
+			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+			USDCAssetID:               uint64(10458941),
+			RelayFeePayer:             "FEEPAYERADDR",
+			RelayNetwork:              "algorand:testnet",
+		},
+		RecordSettlement: func(_ context.Context, _ string, _ int64, _ bool) error {
+			recordSettlementCalled = true
+			return nil
+		},
+	}
+
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+	if err == nil {
+		t.Fatal("want an error surfaced for the network failure reaching the target")
+	}
+	if reservedAmount != 100000 {
+		t.Fatalf("want 100000 reserved, got %d", reservedAmount)
+	}
+	if !recordSettlementCalled {
+		t.Fatal("want RecordSettlement to still be called even though the target request failed at the network level")
+	}
+	if released {
+		t.Fatal("want the reservation NEVER released -- money already left Wallet 2 once the payment group was signed")
+	}
+	if !committed || committedAmount != 100000 {
+		t.Fatalf("want the reservation committed for 100000 (money already left Wallet 2), got committed=%v amount=%d", committed, committedAmount)
+	}
+}
+
+// TestX402RunLevelCommitsNotReleasesOnRecordSettlementFailure is the second
+// half of the same regression: when the outbound payment succeeds (the
+// target responds 2xx) but the audit-write call (RecordSettlement, e.g.
+// RecordRunFundedSettlement/RecordOutboundSettlement in production) fails
+// for an unrelated reason (DB blip), the ledger reservation must still be
+// Committed, never Released -- this is a bookkeeping failure, not a payment
+// failure, matching the identical distinction reserveAndFundRun already
+// makes when RecordRunFunding fails after a successful FundRunReserve.
+func TestX402RunLevelCommitsNotReleasesOnRecordSettlementFailure(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			w.Write([]byte(`{"data":"paid tool response"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	var released, committed bool
+	var committedAmount int64
+	ledger := nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { return nil },
+		Commit:  func(_ context.Context, _ string, amount int64, _ string) { committed = true; committedAmount = amount },
+		Release: func(context.Context, int64) { released = true },
+	}
+
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID: "test-run-funding-2",
+		Ledger:       ledger,
+		Wallet2: nodes.Wallet2PayConfig{
+			USDCSigner:                usdcSigner,
+			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+			USDCAssetID:               uint64(10458941),
+			RelayFeePayer:             "FEEPAYERADDR",
+			RelayNetwork:              "algorand:testnet",
+		},
+		RecordSettlement: func(context.Context, string, int64, bool) error {
+			return errors.New("db unavailable")
+		},
+	}
+
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+	if err != nil {
+		t.Fatalf("want nil error -- a failed audit write doesn't undo a real settled payment, got %v", err)
+	}
+	if released {
+		t.Fatal("want the reservation NEVER released -- the payment settled, only the audit write failed")
+	}
+	if !committed || committedAmount != 100000 {
+		t.Fatalf("want the reservation committed for 100000 despite the RecordSettlement failure, got committed=%v amount=%d", committed, committedAmount)
+	}
+	if paymentResult.SettledUSDMicros != 100000 {
+		t.Fatalf("want SettledUSDMicros 100000, got %d", paymentResult.SettledUSDMicros)
+	}
+}

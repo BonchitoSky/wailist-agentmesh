@@ -1278,6 +1278,169 @@ func TestAgentBranchingBetweenTwoPricedToolsDoesNotBlockMidRun(t *testing.T) {
 	}
 }
 
+// TestExactBalanceRunLevelAttachedCallsNotBlockedByFloorGuard is the
+// regression test for the gap TestAgentBranchingBetweenTwoPricedToolsDoesNotBlockMidRun
+// above deliberately masks: that test funds the user with 1300000 against a
+// 750000 estimate, leaving 550000 of live DB balance after
+// reserveAndFundRun's upfront ReserveCredits -- comfortably above
+// executeFunctionCall's flat 500000 floor guard, so it never actually
+// exercises the floor guard's own live-DB-balance check post-reservation.
+//
+// This test instead funds the user with EXACTLY enough to cover the run:
+// the agent's own flat fee (10000) plus the sum of both attached tools'
+// real quotes (100000 + 100000 = 200000), for a total of 210000. Once
+// reserveAndFundRun reserves the 200000 estimate up front, the live DB
+// balance left for the rest of the run is only 10000 -- far below the
+// floor guard's 500000 threshold. Before the fix, executeFunctionCall's
+// floor guard re-checked this live DB balance before every attached
+// tool402 dispatch regardless of RunFundingID, so it would spuriously
+// block both attached calls with *nodes.ErrBalanceBlocked even though the
+// run-level in-memory pool (sized off the same 200000 estimate) has ample
+// headroom for exactly what's left to spend. The fix skips that live-DB
+// floor check specifically when RunFundingID != "", since
+// reserveAndFundRun's upfront ReserveCredits already satisfied it once.
+func TestExactBalanceRunLevelAttachedCallsNotBlockedByFloorGuard(t *testing.T) {
+	ctx := context.Background()
+
+	toolA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			w.Write([]byte(`{"data":"tool a result"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TOOLAADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer toolA.Close()
+
+	toolB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			w.Write([]byte(`{"data":"tool b result"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TOOLBADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer toolB.Close()
+
+	inboundTxID := fmt.Sprintf("RUNFUND-EXACTBAL-%d", time.Now().UnixNano())
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/verify" {
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
+	}))
+	defer facilitator.Close()
+
+	llmCallCount := 0
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCallCount++
+		w.Header().Set("Content-Type", "application/json")
+		if llmCallCount == 1 {
+			json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]any{
+					"role": "assistant",
+					"tool_calls": []map[string]any{
+						{"id": "call_1", "type": "function", "function": map[string]any{"name": "tool_a", "arguments": "{}"}},
+					},
+				}}},
+			})
+			return
+		}
+		if llmCallCount == 2 {
+			json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]any{
+					"role": "assistant",
+					"tool_calls": []map[string]any{
+						{"id": "call_2", "type": "function", "function": map[string]any{"name": "tool_b", "arguments": "{}"}},
+					},
+				}}},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": "done"}}},
+		})
+	}))
+	defer llmSrv.Close()
+
+	runner, store := newTestRunnerWithRunFunding(t, "http://localhost:65535", facilitator.URL)
+	nodes.SetOpenAIBaseURL(llmSrv.URL)
+	defer nodes.SetOpenAIBaseURL("https://api.openai.com")
+
+	email := fmt.Sprintf("run-fund-exact-balance-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exactly enough: 10000 (agent's own flat fee) + 200000 (sum of both
+	// tools' real quotes) -- no headroom above the estimate, so the live DB
+	// balance after reserveAndFundRun's upfront reservation is only 10000,
+	// deliberately below the old floor guard's 500000 threshold.
+	fundUser(t, store, user.ID, 210_000)
+
+	wf, err := store.CreateWorkflow(ctx, "Run Fund Exact Balance Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "p1", Type: models.NodeTypeProvider, Template: "openai", APIKey: "test-key", Model: "gpt-4o"},
+			{ID: "a1", Type: models.NodeTypeAgent},
+			{ID: "toolA", Type: models.NodeTypeTool402, Name: "tool_a", Endpoint: toolA.URL},
+			{ID: "toolB", Type: models.NodeTypeTool402, Name: "tool_b", Endpoint: toolB.URL},
+			{ID: "n3", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "a1", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "a1", To: "n3", Kind: models.EdgeKindFlow},
+			{ID: "e3", From: "p1", To: "a1", Kind: models.EdgeKindAttach, ToPort: "model"},
+			{ID: "e4", From: "toolA", To: "a1", Kind: models.EdgeKindAttach, ToPort: "tools"},
+			{ID: "e5", From: "toolB", To: "a1", Kind: models.EdgeKindAttach, ToPort: "tools"},
+		},
+	}
+	wf, _ = store.UpdateWorkflow(ctx, wf.ID, wf.Name, graph)
+
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := sse.NewBroker()
+	broker.Create(run.ID)
+
+	runner.Start(wf, run)
+	final := waitForRunDone(t, store, run.ID)
+	if final.Status != models.RunStatusSuccess {
+		t.Fatalf("want success (an exactly-funded run's attached calls must not be spuriously blocked by the floor guard) got %s", final.Status)
+	}
+
+	balance, err := store.GetCreditBalance(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBalance := int64(210_000 - 10_000 - 100_000 - 100_000)
+	if balance != wantBalance {
+		t.Fatalf("want balance %d, got %d", wantBalance, balance)
+	}
+
+	entries, err := store.ListDebitLedger(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relayEntries := 0
+	for _, e := range entries {
+		if e.Kind == models.DebitKindX402RelayCost {
+			relayEntries++
+		}
+	}
+	if relayEntries != 2 {
+		t.Fatalf("want exactly 2 x402_relay_cost ledger entries (both tools billed), got %d (entries: %+v)", relayEntries, entries)
+	}
+}
+
 // TestAgentBranchingBetweenTwoPricedToolsBlocksUpfrontWhenBalanceInsufficient
 // is the second case of the same regression: when the user's balance can't
 // cover the sum of both attached tools' real quotes, reserveAndFundRun's

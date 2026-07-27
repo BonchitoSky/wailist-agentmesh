@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/agentmesh/backend/internal/alert"
 	"github.com/agentmesh/backend/internal/models"
 )
 
@@ -551,17 +553,49 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	}
 
 	result, payErr := PayTargetFromWallet2(ctx, cfg.Wallet2, node.Endpoint, quote)
-	recordErr := cfg.RecordSettlement(ctx, node.Endpoint, amount, result.Settled)
 
-	if payErr != nil || recordErr != nil {
+	// Branch on result.Signed, not on payErr != nil -- Signed becomes true
+	// the instant a real payment group is signed and submitted (see
+	// Wallet2PayResult's doc comment in walletpay.go), meaning real money
+	// has already left Wallet 2, and stays true regardless of what happens
+	// afterward (the target unreachable at the network level, a non-2xx
+	// target response, or a failure recording the audit row below).
+	// Releasing the reservation for any of those would understate real
+	// spend: a later call in the same agent turn could then Reserve
+	// phantom headroom this pool doesn't actually have, and cleanup's
+	// end-of-run release-unused-pool-to-DB would over-refund the user
+	// relative to what was genuinely spent.
+	if payErr != nil && !result.Signed {
+		// Money never moved (asset mismatch, over-cap, or a failure signing
+		// the payment group, all checked/attempted before any real payment
+		// was sent) -- release the reservation, nothing was ever spent.
 		cfg.Ledger.Release(ctx, amount)
-		if payErr != nil {
-			return Tool402PaymentResult{}, payErr
-		}
-		return Tool402PaymentResult{}, fmt.Errorf("run-level settlement record failed: %w", recordErr)
+		return Tool402PaymentResult{}, payErr
+	}
+
+	// result.Signed is true past this point: the reservation must be
+	// Committed, never Released, no matter what happens next.
+	recordErr := cfg.RecordSettlement(ctx, node.Endpoint, amount, result.Settled)
+	if recordErr != nil {
+		// A bookkeeping failure, not a payment failure -- real money already
+		// left Wallet 2, so this is not reversible. Alert so an operator can
+		// reconcile the missing audit row by hand, matching the identical
+		// pattern reserveAndFundRun already uses when RecordRunFunding fails
+		// after a successful FundRunReserve.
+		msg := fmt.Sprintf("CRITICAL: run-level x402 payment settled (node %s, target %s, amount %d) but RecordSettlement failed: %v",
+			node.ID, node.Endpoint, amount, recordErr)
+		log.Print(msg)
+		go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 	}
 
 	cfg.Ledger.Commit(ctx, node.ID, amount, models.DebitKindX402RelayCost)
+
+	if payErr != nil {
+		// Target unreachable at the network level -- no response body to
+		// return, nothing else to give the caller but the error. The ledger
+		// above still reflects the real spend via Commit, not Release.
+		return Tool402PaymentResult{}, payErr
+	}
 
 	var response any
 	if err := json.Unmarshal(result.ResponseBody, &response); err != nil {

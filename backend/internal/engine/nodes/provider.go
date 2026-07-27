@@ -145,7 +145,25 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			var feeAmount int64
 			switch {
 			case toolNode.Type == models.NodeTypeTool402:
-				feeAmount = models.X402PlatformFeeUSDMicros
+				// The run-level path (RunFundingID != "") already reserved
+				// this run's full estimated tool402 cost from the live DB
+				// balance up front, in reserveAndFundRun's ReserveCredits
+				// call, before the agent's loop ever started -- and gates
+				// each attached call's real amount against the run-level
+				// in-memory pool inside executeTool402RunLevel via
+				// cfg.Ledger.Reserve. Re-checking the live DB balance here
+				// would double-count that up-front reservation: the
+				// reservation itself can legitimately drive the live
+				// balance down near zero for the run's duration even though
+				// the user had exactly enough to cover the run, and this
+				// floor check would then spuriously block a second/third
+				// attached call the run-level pool has ample headroom for.
+				// The legacy per-call path (RunFundingID == "") never
+				// pre-reserves anything, so it still needs this floor
+				// check exactly as before.
+				if relayCfg.RunFundingID == "" {
+					feeAmount = models.X402PlatformFeeUSDMicros
+				}
 			case BillableFlatFee(toolNode.Type, toolNode.Template):
 				feeAmount = models.ByokFlatFeeUSDMicros
 			}
