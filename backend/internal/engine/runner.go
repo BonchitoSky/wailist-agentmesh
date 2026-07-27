@@ -376,8 +376,14 @@ func (r *Runner) executeNode(
 		if err := r.preflightCheck(ctx, wf, models.X402PlatformFeeUSDMicros); err != nil {
 			return nil, err
 		}
-		ledger := r.newPaymentLedger(wf, run)
-		paymentResult, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, usdcSigner, r.platformSpendEncMnemonic, r.usdcAssetID, r.relayBaseURL, ledger)
+		relayCfg := nodes.X402RelayConfig{
+			USDCSigner:               usdcSigner,
+			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
+			ExpectedAssetID:          r.usdcAssetID,
+			RelayBaseURL:             r.relayBaseURL,
+			Ledger:                   r.newPaymentLedger(wf, run),
+		}
+		paymentResult, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, relayCfg)
 		if err != nil {
 			return nil, err
 		}

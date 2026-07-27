@@ -168,7 +168,7 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			}
 		}
 		if t.Type == models.NodeTypeTool402 {
-			paymentResult, err := ExecuteTool402V2(ctx, toolNode, rc, aw, signer, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, relayCfg.Ledger)
+			paymentResult, err := ExecuteTool402V2(ctx, toolNode, rc, aw, signer, relayCfg)
 			if err != nil {
 				return nil, toolNode, nil, err
 			}

@@ -198,6 +198,82 @@ type Tool402PaymentResult struct {
 	DebitKind        string
 }
 
+// x402Quote is what a real v2 challenge's accepts[0] entry carries that
+// callers in this package need — payTo/asset for actually paying it,
+// MaxAmountRequired (parsed to USD micros) for gating/estimating.
+type x402Quote struct {
+	PayTo             string
+	Asset             string
+	MaxAmountRequired int64 // USD micros
+}
+
+// probeTool402Endpoint fetches endpoint's 402 challenge (if any) and reports
+// whether it speaks real x402 v2 (accepts[] present) along with its current
+// quote. notPaymentRequired=true means the endpoint answered something
+// other than 402 (caller treats that as "no payment needed", exactly like
+// ExecuteTool402V2 does today).
+func probeTool402Endpoint(ctx context.Context, endpoint string) (isV2 bool, notPaymentRequired bool, rawResponse any, quote x402Quote, err error) {
+	if err := urlValidator(endpoint); err != nil {
+		return false, false, nil, x402Quote{}, err
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	resp, err := toolHTTPClient.Do(req)
+	if err != nil {
+		return false, false, nil, x402Quote{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusPaymentRequired {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
+		var result any
+		if json.Unmarshal(b, &result) == nil {
+			return false, true, result, x402Quote{}, nil
+		}
+		return false, true, string(b), x402Quote{}, nil
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
+	var v2Challenge struct {
+		Accepts []map[string]any `json:"accepts"`
+	}
+	if json.Unmarshal(body, &v2Challenge) != nil || len(v2Challenge.Accepts) == 0 {
+		return false, false, nil, x402Quote{}, nil
+	}
+	accept := v2Challenge.Accepts[0]
+	payTo, _ := accept["payTo"].(string)
+	asset, _ := accept["asset"].(string)
+	amountStr, _ := accept["maxAmountRequired"].(string)
+	amount, _ := strconv.ParseInt(amountStr, 10, 64)
+	return true, false, nil, x402Quote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount}, nil
+}
+
+// ProbeX402Price is the exported form the run-level estimator (Task 5) uses
+// when it only needs "is this v2, and what's the current price" — not the
+// full quote.
+func ProbeX402Price(ctx context.Context, endpoint string) (isV2 bool, amountUSDMicros int64, err error) {
+	isV2, _, _, quote, err := probeTool402Endpoint(ctx, endpoint)
+	return isV2, quote.MaxAmountRequired, err
+}
+
+// TargetQuote is a real target's parsed x402 v2 quote — payTo/asset for
+// actually paying it (PayTargetFromWallet2, Task 3), MaxAmountRequired kept
+// as the original string since that's the wire format PayTargetFromWallet2
+// and the facilitator both expect. Defined here (not in Task 3) so Task 1
+// compiles standalone, in task order, before Task 3 exists.
+type TargetQuote struct {
+	PayTo             string
+	Asset             string
+	MaxAmountRequired string
+}
+
+// ProbeX402Quote is the exported form the run-level per-call executor
+// (Task 5) uses when it needs the full quote (payTo/asset too) to actually
+// pay it via PayTargetFromWallet2 (Task 3).
+func ProbeX402Quote(ctx context.Context, endpoint string) (isV2 bool, quote TargetQuote, err error) {
+	isV2, _, _, q, err := probeTool402Endpoint(ctx, endpoint)
+	return isV2, TargetQuote{PayTo: q.PayTo, Asset: q.Asset, MaxAmountRequired: strconv.FormatInt(q.MaxAmountRequired, 10)}, err
+}
+
 // ExecuteTool402V2 is the entry point runner.go calls for tool402 nodes. It
 // inspects the target's 402 quote shape: a real x402 v2 challenge (accepts[])
 // is routed through the AgentMesh relay so both payment legs are real,
@@ -208,33 +284,16 @@ type Tool402PaymentResult struct {
 // today's direct-pay-from-the-agent's-own-wallet behavior, gated/charged at
 // the fixed platform fee — it was never GoPlausible-compliant and isn't
 // becoming so.
-func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger) (Tool402PaymentResult, error) {
-	if err := urlValidator(node.Endpoint); err != nil {
-		return Tool402PaymentResult{}, err
-	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, node.Endpoint, nil)
-	resp, err := toolHTTPClient.Do(req)
+func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, relayCfg X402RelayConfig) (Tool402PaymentResult, error) {
+	isV2, notPaymentRequired, rawResponse, _, err := probeTool402Endpoint(ctx, node.Endpoint)
 	if err != nil {
 		return Tool402PaymentResult{}, err
 	}
-
-	if resp.StatusCode != http.StatusPaymentRequired {
-		defer resp.Body.Close()
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
-		var result any
-		if json.Unmarshal(b, &result) == nil {
-			return Tool402PaymentResult{Response: result}, nil
-		}
-		return Tool402PaymentResult{Response: string(b)}, nil
+	if notPaymentRequired {
+		return Tool402PaymentResult{Response: rawResponse}, nil
 	}
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
-	resp.Body.Close()
-	var v2Challenge struct {
-		Accepts []map[string]any `json:"accepts"`
-	}
-	if json.Unmarshal(body, &v2Challenge) == nil && len(v2Challenge.Accepts) > 0 {
-		return executeTool402V2Relay(ctx, node, usdcSigner, platformSpendEncMnemonic, expectedAssetID, relayBaseURL, ledger)
+	if isV2 {
+		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, relayCfg.Ledger)
 	}
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing,
@@ -249,7 +308,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		}
 		return Tool402PaymentResult{Response: result}, nil
 	}
-	if reserve := ledger.Reserve; reserve != nil {
+	if reserve := relayCfg.Ledger.Reserve; reserve != nil {
 		if err := reserve(ctx, models.X402PlatformFeeUSDMicros); err != nil {
 			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 		}
@@ -265,7 +324,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	settled := false
 	defer func() {
 		if !settled {
-			if release := ledger.Release; release != nil {
+			if release := relayCfg.Ledger.Release; release != nil {
 				release(ctx, models.X402PlatformFeeUSDMicros)
 			}
 		}
@@ -273,7 +332,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	result, err := ExecuteTool402(ctx, node, rc, aw, signer)
 	if err != nil {
 		settled = true
-		if release := ledger.Release; release != nil {
+		if release := relayCfg.Ledger.Release; release != nil {
 			release(ctx, models.X402PlatformFeeUSDMicros)
 		}
 		return Tool402PaymentResult{}, err
@@ -284,7 +343,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 			out.SettledUSDMicros = models.X402PlatformFeeUSDMicros
 			out.DebitKind = models.DebitKindX402PlatformFee
 			settled = true
-			if commit := ledger.Commit; commit != nil {
+			if commit := relayCfg.Ledger.Commit; commit != nil {
 				commit(ctx, node.ID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
 			}
 			return out, nil
@@ -293,7 +352,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	// No payment was actually sent (e.g. the retried request came back
 	// without a txId) -- release the reservation, nothing to charge for.
 	settled = true
-	if release := ledger.Release; release != nil {
+	if release := relayCfg.Ledger.Release; release != nil {
 		release(ctx, models.X402PlatformFeeUSDMicros)
 	}
 	return out, nil

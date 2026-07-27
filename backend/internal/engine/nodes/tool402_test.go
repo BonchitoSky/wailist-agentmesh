@@ -204,7 +204,8 @@ func TestX402V2TargetRoutesThroughRelay(t *testing.T) {
 	signer := &mockSigner{txID: "unused-legacy-path"}
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, noopLedger())
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: noopLedger()}
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -251,7 +252,8 @@ func TestX402LegacyTargetBypassesRelay(t *testing.T) {
 	signer := &mockSigner{txID: "TX-SIGNED-123"}
 	usdcSigner := &mockUSDCGroupSigner{}
 
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, noopLedger())
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: noopLedger()}
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -302,7 +304,8 @@ func TestX402V2TargetWithAmpersandInQueryString(t *testing.T) {
 	signer := &mockSigner{txID: "unused-legacy-path"}
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, noopLedger())
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: noopLedger()}
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -361,7 +364,8 @@ func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
 
 	// maxAmountRequired (100000) is under the flat-fee-sized ceiling this
 	// ledger.Reserve allows, so this call should succeed and pay.
-	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, ledger)
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: ledger}
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +389,8 @@ func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
 		Commit:  func(context.Context, string, int64, string) {},
 		Release: func(context.Context, int64) {},
 	}
-	_, err = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, strictLedger)
+	strictRelayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: strictLedger}
+	_, err = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, strictRelayCfg)
 	if err == nil {
 		t.Fatal("want insufficient-credits error when real amount exceeds balance")
 	}
@@ -430,7 +435,8 @@ func TestX402V2RelayRejectsPayment(t *testing.T) {
 		Commit:  func(context.Context, string, int64, string) { committed = true },
 		Release: func(context.Context, int64) { released = true },
 	}
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, ledger)
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: ledger}
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -512,7 +518,8 @@ func TestX402V2RelayReleasesReservationOnPanic(t *testing.T) {
 				t.Fatal("want the panic to propagate out of ExecuteTool402V2, got none")
 			}
 		}()
-		nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, ledger)
+		relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: ledger}
+		nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
 		t.Fatal("unreachable: ExecuteTool402V2 should have panicked")
 	}()
 
