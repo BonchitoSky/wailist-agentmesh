@@ -86,6 +86,7 @@ export function LandingPage({ signedIn }: LandingPageProps) {
         scrollBehavior: "smooth",
       }}>
         <HeroSection openStudio={openStudio} signedIn={signedIn} scrollToId={scrollToId} />
+        <LandingPillars />
         <LandingFlow />
         <LandingWaitlist />
         <LandingFooter />
@@ -123,8 +124,8 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
               display: "flex", alignItems: "center", gap: 4,
               position: "absolute", left: "50%", transform: "translateX(-50%)",
             }}>
-              {["How it works", "Waitlist"].map((label, i) => (
-                <button key={label} onClick={() => scrollToId(["flow", "waitlist"][i])}
+              {["Overview", "How it works", "Waitlist"].map((label, i) => (
+                <button key={label} onClick={() => scrollToId(["pillars", "flow", "waitlist"][i])}
                   style={{
                     background: "transparent", border: "none", cursor: "pointer",
                     color: "rgba(242, 240, 247, 0.9)", fontSize: 14, fontWeight: 400,
@@ -200,6 +201,85 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
           </div>
         </div>
 
+        {/* Logo marquee */}
+        <LogoMarquee />
+      </div>
+    </section>
+  );
+}
+
+function LogoMarquee() {
+  const logos = [
+    { letter: "T", name: "Tavily" }, { letter: "F", name: "Firecrawl" },
+    { letter: "N", name: "Neon" },
+  ];
+  const doubled = [...logos, ...logos];
+
+  return (
+    <div style={{ padding: "0 32px 40px", position: "relative", zIndex: 11 }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", gap: 48 }}>
+        <div style={{ flex: "0 0 auto", color: "rgba(242, 240, 247, 0.5)", fontSize: 13, lineHeight: 1.4, fontFamily: "var(--font-sans)" }}>
+          Built with best-in-class<br />agent tooling
+        </div>
+        <div className="marquee-mask" style={{ flex: 1, overflow: "hidden" }}>
+          <div className="marquee-track">
+            {doubled.map((l, i) => (
+              <div key={i} style={{ display: "inline-flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                <span className="liquid-glass" style={{
+                  width: 24, height: 24, borderRadius: 8,
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600,
+                  color: "rgba(242, 240, 247, 0.95)",
+                }}>{l.letter}</span>
+                <span style={{ fontFamily: "var(--font-sans)", fontSize: 16, fontWeight: 600, color: "rgba(242, 240, 247, 0.95)", letterSpacing: "-0.01em" }}>{l.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Pillars ───────────────────────────────────────────────────────────────
+function LandingPillars() {
+  const pillars = [
+    { tag: "01", kicker: "build", title: "Design agent workflows visually.", body: "Drag triggers, agents, providers, tools, and actions onto a canvas. Connect them like Lego. The graph IS the execution graph.", glyph: "⬡" },
+    { tag: "02", kicker: "fund",  title: "Budgets at deploy, not signup.",   body: "Each agent gets its own spending budget the moment you deploy. Top it up manually, watch usage tick live.", glyph: "◎" },
+    { tag: "03", kicker: "wire",  title: "Paid APIs as tools.",              body: "Any metered HTTP endpoint becomes a tool node. Priced at call-time, settled per call, accountable per agent.", glyph: "⟡" },
+    { tag: "04", kicker: "run",   title: "Agent-to-agent messages, audit-ready.",  body: "Inter-agent messages produce verifiable receipts. Replay any run. Audit-friendly by default.", glyph: "◈" },
+  ];
+  return (
+    <section id="pillars" style={{
+      padding: "128px 32px", borderTop: "1px solid var(--border)",
+      position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.55)",
+    }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto" }}>
+        <div className="in-view" style={{ marginBottom: 72 }}>
+          <Tag>what is agentmesh</Tag>
+          <h2 style={{ margin: "16px 0 0", fontSize: 48, fontWeight: 500, letterSpacing: "-0.028em", maxWidth: 680, fontFamily: "var(--font-sans)", lineHeight: 1.12 }}>
+            Visual workflow design for autonomous agents.
+          </h2>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 20 }}>
+          {pillars.map((p, i) => (
+            <div key={i} className="in-view" style={{ transitionDelay: `${i * 90}ms` }}>
+              <div
+                style={{ height: "100%", padding: "36px 36px 40px", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16, backdropFilter: "blur(8px)", position: "relative", overflow: "hidden", transition: "border-color .2s, box-shadow .2s" }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "rgba(167,140,250,0.28)"; (e.currentTarget as HTMLElement).style.boxShadow = "0 0 40px rgba(167,140,250,0.07)"; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.08)"; (e.currentTarget as HTMLElement).style.boxShadow = "none"; }}
+              >
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 1, background: "linear-gradient(90deg, transparent, var(--accent), transparent)", opacity: 0.4 }} />
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 28 }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", padding: "3px 9px", border: "1px solid var(--accent-line)", borderRadius: 999, background: "var(--accent-soft)", letterSpacing: "0.06em" }}>{p.tag}</span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)", letterSpacing: "0.08em", textTransform: "uppercase" }}>— {p.kicker}</span>
+                </div>
+                <h3 style={{ margin: 0, fontSize: 22, fontWeight: 500, letterSpacing: "-0.022em", lineHeight: 1.25 }}>{p.title}</h3>
+                <p style={{ margin: "14px 0 0", color: "var(--fg-muted)", fontSize: 14.5, lineHeight: 1.65 }}>{p.body}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -210,6 +290,8 @@ function LandingFlow() {
   const steps = [
     { k: "01", label: "Drop nodes",  body: "Trigger, agent, provider, tools, action, end.",          glyph: "⊕" },
     { k: "02", label: "Wire ports",  body: "Provider + tools attach to agent's bottom ports.",         glyph: "⟡" },
+    { k: "03", label: "Deploy",      body: "Agents get their own spending budgets at this moment.",    glyph: "◎" },
+    { k: "04", label: "Fund + run",  body: "Top up agent budgets. Watch usage settle live.",           glyph: "▶" },
   ];
   return (
     <section id="flow" style={{ borderTop: "1px solid var(--border)", background: "rgba(4, 3, 12, 0.62)", padding: "112px 32px", position: "relative", zIndex: 1 }}>
@@ -217,10 +299,10 @@ function LandingFlow() {
         <div className="in-view" style={{ marginBottom: 64 }}>
           <Tag>flow</Tag>
           <h2 style={{ margin: "16px 0 0", fontSize: 40, fontWeight: 500, letterSpacing: "-0.025em", fontFamily: "var(--font-sans)", lineHeight: 1.15 }}>
-            Zero to running pipeline in two moves.
+            Zero to running pipeline in four moves.
           </h2>
         </div>
-        <div className="in-view" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14 }}>
+        <div className="in-view" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
           {steps.map((s, i) => (
             <div key={i} style={{ position: "relative" }}>
               {i < steps.length - 1 && (
