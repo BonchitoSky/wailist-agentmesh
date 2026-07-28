@@ -130,3 +130,28 @@ above if it becomes an operational concern.
 - If the triggering user's credit balance can't cover the real cost, the
   call is blocked before Wallet 1 signs or sends anything — no partial
   payment, no soft overage.
+
+## Run-level pre-funding for agent-attached x402 v2 tools
+
+When an agent node has attached v2 tool402 nodes, those tools now settle a
+single inbound payment upfront before the agent's tool-calling loop begins,
+sized to the sum of those tools' real current quotes (via
+`FundRunReserve`). This replaces the previous per-call settlement pattern.
+
+Each subsequent real downstream tool402 call within the agent's loop pays out
+of Wallet 2 via a direct in-process function call (`PayTargetFromWallet2`),
+never through the public `/x402/relay` endpoint. These settlements are
+recorded via the `x402_run_fundings` table (keyed by `run_funding_id`) for
+audit and operational tracking.
+
+Because Wallet 2 now absorbs the upfront estimate before the full agent loop
+runs, it may carry a temporarily larger balance per in-flight run — the
+un-spent portion of the estimate remains in Wallet 2 until the run completes
+and `cleanup` releases any balance above the actual sum of settled calls. This
+widens the existing "manual sweep" operational note: the working minimum you
+keep in Wallet 2 should account for multiple concurrent in-flight runs'
+unspent estimates, not just daily throughput spread.
+
+Note: An agent with no attached v2 tool402 nodes (or only legacy-dialect
+ones) is unaffected and continues to use the completely unmodified per-call
+path through the public relay.

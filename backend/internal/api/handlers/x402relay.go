@@ -132,6 +132,7 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 			"network":           d.RelayNetwork,
 			"maxAmountRequired": quote.MaxAmountRequired,
 			"resource":          target,
+			"description":       "AgentMesh x402 relay — settles the inbound leg and forwards payment to " + target,
 			"payTo":             d.PlatformWalletAddress,
 			"maxTimeoutSeconds": 300,
 			"asset":             strconv.FormatUint(d.USDCAssetID, 10),
