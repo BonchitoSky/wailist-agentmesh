@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -381,6 +382,62 @@ func TestReserveAndFundRunRejectsOutOfRangeQuote(t *testing.T) {
 	if balance != 1000000 {
 		t.Fatalf("want balance untouched at 1000000 (rejected before ReserveCredits), got %d", balance)
 	}
+	if facilitatorHit {
+		t.Fatal("want the facilitator never called for a rejected quote")
+	}
+}
+
+// TestReserveAndFundRunRejectsOutOfRangeQuoteNoDatabase is a regression
+// test for the same integer-overflow bug as TestReserveAndFundRunRejectsOutOfRangeQuote,
+// but DB-free: the ceiling guard happens before any r.store dereference, so
+// this test verifies the rejection path doesn't require TEST_DATABASE_URL to be set.
+func TestReserveAndFundRunRejectsOutOfRangeQuoteNoDatabase(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"2000000000"}]}`))
+	}))
+	defer target.Close()
+
+	facilitatorHit := false
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		facilitatorHit = true
+	}))
+	defer facilitator.Close()
+
+	r := NewRunner(nil, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+		USDCAssetID:               10458941,
+		PlatformWalletAddress:     "PLATFORMADDR",
+		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+		FacilitatorClient:         x402.NewFacilitatorClient(facilitator.URL),
+		RelayNetwork:              "algorand:testnet",
+		RelayFeePayer:             "FEEPAYERADDR",
+	})
+
+	wf := models.Workflow{
+		ID:     "wf-no-db-test",
+		UserID: "user-no-db-test",
+	}
+	run := models.Run{
+		ID:         "run-no-db-test",
+		WorkflowID: wf.ID,
+	}
+
+	attach := models.AttachConfig{
+		Tools: []models.WorkflowNode{
+			{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL},
+		},
+	}
+
+	_, err := r.reserveAndFundRun(context.Background(), wf, run, attach)
+	if err == nil {
+		t.Fatal("want reserveAndFundRun to reject a quote above the per-call ceiling")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "exceeding the") || !strings.Contains(errMsg, "ceiling") {
+		t.Fatalf("want error mentioning ceiling, got: %v", err)
+	}
+
 	if facilitatorHit {
 		t.Fatal("want the facilitator never called for a rejected quote")
 	}
