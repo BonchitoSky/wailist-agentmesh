@@ -298,7 +298,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 	// top of the crash. Degrading gracefully here instead matches an agent
 	// with no attached tool402 nodes at all.
 	usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
-	if r.platformSpendEncMnemonic == "" || usdcSigner == nil {
+	if r.platformSpendEncMnemonic == "" || usdcSigner == nil || r.x402.FacilitatorClient == nil || r.x402.PlatformWalletAddress == "" {
 		return noFund, nil
 	}
 

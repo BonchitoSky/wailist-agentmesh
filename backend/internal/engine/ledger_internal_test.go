@@ -590,3 +590,84 @@ func TestReserveAndFundRunHoldsReservationOnIndeterminateSettle(t *testing.T) {
 		t.Fatalf("want the 300000 reservation to remain deducted, NOT released (settlement's fate is unknown, not confirmed failed), got balance %d (started at 1000000)", balance)
 	}
 }
+
+// TestReserveAndFundRunDegradesGracefullyWithNilFacilitator is a regression
+// test for a gap in the graceful-degradation guard: it checked only
+// platformSpendEncMnemonic and usdcSigner before calling FundRunReserve,
+// but FundRunReserve also unconditionally dereferences cfg.Facilitator and
+// uses cfg.PlatformWalletAddress -- neither checked. Unreachable in
+// production today (main.go log.Fatal-gates both), but a future test
+// double or alternate entrypoint leaving Facilitator nil while the other
+// two fields are set must degrade to the no-fund path, not panic after
+// ReserveCredits has already run.
+func TestReserveAndFundRunDegradesGracefullyWithNilFacilitator(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	store, err := db.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"300000"}]}`))
+	}))
+	defer target.Close()
+
+	email := fmt.Sprintf("ledger-internal-nil-facilitator-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(context.Background(), email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderID := fmt.Sprintf("fund_%s_%d", user.ID, time.Now().UnixNano())
+	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_"+orderID); err != nil {
+		t.Fatal(err)
+	}
+
+	wf, err := store.CreateWorkflow(context.Background(), "Ledger Internal Nil Facilitator Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+	wf.UserID = user.ID
+	run, err := store.CreateRun(context.Background(), wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// PlatformSpendEncMnemonic set and a valid USDCGroupSigner supplied
+	// (both already-checked fields), but FacilitatorClient left nil and
+	// PlatformWalletAddress left empty -- the two fields the existing guard
+	// doesn't check.
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+		USDCAssetID: 10458941,
+	})
+
+	attach := models.AttachConfig{
+		Tools: []models.WorkflowNode{
+			{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL},
+		},
+	}
+
+	result, err := r.reserveAndFundRun(context.Background(), wf, run, attach)
+	if err != nil {
+		t.Fatalf("want graceful degradation (nil error), not a failure, got %v", err)
+	}
+	if result.FundingID != "" {
+		t.Fatalf("want empty FundingID (no-fund path), got %q", result.FundingID)
+	}
+
+	balance, err := store.GetCreditBalance(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 1000000 {
+		t.Fatalf("want balance untouched at 1000000 (degraded before ReserveCredits), got %d", balance)
+	}
+}
