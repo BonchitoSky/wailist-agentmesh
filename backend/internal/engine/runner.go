@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,6 +114,26 @@ const ledgerCompensationTimeout = 10 * time.Second
 // balance, silently stranding the reservation as a permanent, unledgered
 // credit loss. UpdateRunLog already establishes this same
 // context.Background()-after-cancellation convention elsewhere in Run.
+// criticalAlert logs and fires a CRITICAL payments alert with a consistent
+// shape -- extracted from 6 near-identical hand-rolled fmt.Sprintf +
+// log.Print + alert.Notify triplets scattered across this file (see
+// newPaymentLedger's Commit/Release, newRunLevelLedger's Commit, and
+// reserveAndFundRun's failure branches). fields are alternating key/value
+// pairs (e.g. "amount", amountUSDMicros, "node", nodeID) appended to the
+// message in order.
+func (r *Runner) criticalAlert(wf models.Workflow, run models.Run, label string, err error, fields ...any) {
+	parts := []string{fmt.Sprintf("CRITICAL: %s: user=%s workflow=%s run=%s", label, wf.UserID, wf.ID, run.ID)}
+	for i := 0; i+1 < len(fields); i += 2 {
+		parts = append(parts, fmt.Sprintf("%v=%v", fields[i], fields[i+1]))
+	}
+	if err != nil {
+		parts = append(parts, fmt.Sprintf("err=%v", err))
+	}
+	msg := strings.Join(parts, " ")
+	log.Print(msg)
+	go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+}
+
 func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.PaymentLedger {
 	return nodes.PaymentLedger{
 		Reserve: func(cctx context.Context, amountUSDMicros int64) error {
@@ -122,20 +143,14 @@ func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.Paym
 			bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
 			defer cancel()
 			if err := r.store.CommitReservedDebit(bctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
-				msg := fmt.Sprintf("CRITICAL: commit reserved debit failed (balance already decremented, no ledger row written): user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
-					wf.UserID, wf.ID, run.ID, nodeID, kind, amountUSDMicros, err)
-				log.Print(msg)
-				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+				r.criticalAlert(wf, run, "commit reserved debit failed (balance already decremented, no ledger row written)", err, "node", nodeID, "kind", kind, "amount", amountUSDMicros)
 			}
 		},
 		Release: func(cctx context.Context, amountUSDMicros int64) {
 			bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
 			defer cancel()
 			if err := r.store.ReleaseReservedCredits(bctx, wf.UserID, amountUSDMicros); err != nil {
-				msg := fmt.Sprintf("CRITICAL: release reserved credits failed (balance permanently stranded): user=%s workflow=%s run=%s amount=%d: %v",
-					wf.UserID, wf.ID, run.ID, amountUSDMicros, err)
-				log.Print(msg)
-				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+				r.criticalAlert(wf, run, "release reserved credits failed (balance permanently stranded)", err, "amount", amountUSDMicros)
 			}
 		},
 	}
@@ -311,17 +326,13 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 			// reconcile by hand, matching the same "money might have
 			// already moved" caution the RecordRunFunding-failure branch
 			// below already applies at the next step in this flow.
-			log.Printf("CRITICAL: run pre-fund settle response lost, fate unknown, reservation held: user=%s workflow=%s run=%s amount=%d: %v",
-				wf.UserID, wf.ID, run.ID, estimate, err)
-			go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("run pre-fund settle indeterminate, reservation held: user=%s amount=%d", wf.UserID, estimate))
+			r.criticalAlert(wf, run, "run pre-fund settle response lost, fate unknown, reservation held", err, "amount", estimate)
 			return runFundResult{}, fmt.Errorf("x402 run funding: settlement indeterminate, failing rather than risking a refund for money already sent: %w", err)
 		}
 		bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ledgerCompensationTimeout)
 		defer cancel()
 		if relErr := r.store.ReleaseReservedCredits(bctx, wf.UserID, estimate); relErr != nil {
-			log.Printf("CRITICAL: run pre-fund failed AND release failed (balance stranded): user=%s workflow=%s run=%s amount=%d fundErr=%v releaseErr=%v",
-				wf.UserID, wf.ID, run.ID, estimate, err, relErr)
-			go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("run pre-fund+release both failed: user=%s amount=%d", wf.UserID, estimate))
+			r.criticalAlert(wf, run, "run pre-fund failed AND release failed (balance stranded)", relErr, "amount", estimate, "fundErr", err)
 		}
 		return runFundResult{}, fmt.Errorf("x402 run funding failed: %w", err)
 	}
@@ -343,8 +354,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		// exists to eliminate. Failing the node instead is safe: the money
 		// is sitting in Wallet 2, our own wallet -- a state we can
 		// reconcile by hand, unlike a silent double-spend.
-		log.Printf("CRITICAL: run funding settled on-chain (tx %s) but RecordRunFunding failed: %v", txID, err)
-		go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("run funding tx %s settled but not recorded: %v", txID, err))
+		r.criticalAlert(wf, run, "run funding settled on-chain but RecordRunFunding failed", err, "txID", txID)
 		return runFundResult{}, fmt.Errorf("run funding settled on-chain (tx %s) but recording it failed, failing the run rather than risking a double-settle on the old per-call path: %w", txID, err)
 	}
 
@@ -357,10 +367,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
 		defer cancel()
 		if err := r.store.ReleaseReservedCredits(bctx, wf.UserID, unused); err != nil {
-			msg := fmt.Sprintf("CRITICAL: run-level release failed (balance permanently stranded): user=%s workflow=%s run=%s amount=%d: %v",
-				wf.UserID, wf.ID, run.ID, unused, err)
-			log.Print(msg)
-			go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+			r.criticalAlert(wf, run, "run-level release failed (balance permanently stranded)", err, "amount", unused)
 		}
 	}
 	return runFundResult{Ledger: ledger, FundingID: funding.ID, FundedToolIDs: fundedToolIDs, Cleanup: cleanup}, nil
