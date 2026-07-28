@@ -127,8 +127,11 @@ func TestFundRunReserveSuccess(t *testing.T) {
 	if settleReqs.PaymentRequirements.Extra["tag"] != "x402-global-challenge" {
 		t.Fatalf("want settle Extra.tag=x402-global-challenge, got %v", settleReqs.PaymentRequirements.Extra["tag"])
 	}
-	if !strings.HasSuffix(settleReqs.PaymentRequirements.Resource, "/x402/relay/run-funding") {
-		t.Fatalf("want resource to point at the static run-funding route, got %q", settleReqs.PaymentRequirements.Resource)
+	if !strings.Contains(settleReqs.PaymentRequirements.Resource, "/x402/relay/run-funding?runId=") {
+		t.Fatalf("want resource to point at the run-funding route with a runId query param, got %q", settleReqs.PaymentRequirements.Resource)
+	}
+	if !strings.Contains(settleReqs.PaymentRequirements.Resource, "runId=run-1") {
+		t.Fatalf("want Resource to carry the run id for manual reconciliation, got %q", settleReqs.PaymentRequirements.Resource)
 	}
 }
 

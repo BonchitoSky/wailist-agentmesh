@@ -3,6 +3,7 @@ package nodes
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 
 	"github.com/agentmesh/backend/internal/x402"
@@ -41,7 +42,7 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 		Scheme:            "exact",
 		Network:           cfg.RelayNetwork,
 		MaxAmountRequired: strconv.FormatInt(amountUSDMicros, 10),
-		Resource:          cfg.PublicBaseURL + "/x402/relay/run-funding",
+		Resource:          cfg.PublicBaseURL + "/x402/relay/run-funding?runId=" + url.QueryEscape(runID),
 		Description:       "AgentMesh workflow run funding — pre-settled pool for this run's downstream x402 tool calls",
 		PayTo:             cfg.PlatformWalletAddress,
 		MaxTimeoutSeconds: 300,
