@@ -85,6 +85,33 @@ func TestX402RelayNoPaymentMirrorsTargetPriceAsChallengeTag(t *testing.T) {
 	_ = x402.PaymentPayload{} // referenced so import stays used once payment-path test is added below
 }
 
+// TestX402RunFundingInfoReturnsStaticJSON pins the contract of the static,
+// informational route FundRunReserve's PaymentRequirements.Resource points
+// at (runfund.go: cfg.PublicBaseURL + "/x402/relay/run-funding") — a real,
+// reachable route on our own domain, matching what a real Bazaar-catalog
+// crawler would expect to find there. The exact path is load-bearing (it's
+// embedded in every run-level pre-fund's on-chain payment requirements), so
+// a 200 with the expected static shape is worth pinning even though there's
+// no payment logic behind it.
+func TestX402RunFundingInfoReturnsStaticJSON(t *testing.T) {
+	d := &handlers.Deps{}
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay/run-funding", nil)
+	w := httptest.NewRecorder()
+
+	d.X402RunFundingInfo(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("want valid JSON body: %v", err)
+	}
+	if body["description"] == "" {
+		t.Fatalf("want a non-empty description field, got %v", body)
+	}
+}
+
 func newTestStoreForHandlers(t *testing.T) *db.Store {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")

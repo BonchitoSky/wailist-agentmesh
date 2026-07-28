@@ -643,14 +643,6 @@ func TestInsufficientBalanceBlocksTool402BeforeExecution(t *testing.T) {
 
 // TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure is
 // a regression test for a real fund-drain vector: without it, an x402
-// endpoint could accept the relay's outbound payment (Wallet 2 -> target)
-// and then deliberately return a non-2xx response, and the orchestrator
-// would never bill the triggering user for it — even though the inbound leg
-// (Wallet 1 -> Wallet 2) had already irreversibly settled. Billing must key
-// off the relay's X-Inbound-Settled signal, not the final composite HTTP
-// status.
-// TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure is
-// a regression test for a real fund-drain vector: without it, an x402
 // endpoint could accept the platform's outbound payment (Wallet 2 -> target)
 // and then deliberately return a non-2xx response, and the orchestrator
 // would never bill the triggering user for it -- even though the inbound leg
@@ -1689,5 +1681,437 @@ func TestRunLevelPathNeverCallsPublicRelayEndpoint(t *testing.T) {
 	}
 	if len(fundings) != 1 {
 		t.Fatalf("want exactly 1 x402_run_fundings row, got %d", len(fundings))
+	}
+}
+
+// TestRunFailsAndNeverCallsPublicRelayWhenRunFundingRecordFails is the
+// direct, full end-to-end regression test for the same bug
+// TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFails
+// pins at the white-box level (ledger_internal_test.go): reserveAndFundRun
+// used to return the zero-value funding ID ("") whenever RecordRunFunding
+// failed after a successful FundRunReserve, silently routing every
+// subsequent v2 tool402 call for this agent onto the OLD per-call
+// public-relay path -- which performs its own FULL inbound settle per call,
+// double-paying from Wallet 1 for the same run since a real bulk inbound
+// settlement had already just happened above via FundRunReserve. Reusing
+// TestRunLevelPathNeverCallsPublicRelayEndpoint's instrumented-relay harness
+// pattern: the whole run must fail, and zero requests must ever reach the
+// public /x402/relay endpoint -- a nonzero count here would mean the run
+// silently fell back to the old double-settle path.
+func TestRunFailsAndNeverCallsPublicRelayWhenRunFundingRecordFails(t *testing.T) {
+	ctx := context.Background()
+
+	var relayHits int32
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&relayHits, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer relay.Close()
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			w.Write([]byte(`{"data":"real result"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"300000"}]}`))
+	}))
+	defer target.Close()
+
+	// Fixed (not time-varying) tx id: this is what forces the real
+	// conflict -- the row pre-inserted below and the row the real,
+	// in-test reserveAndFundRun settles via the fake facilitator must
+	// collide on the SAME inbound_tx_id.
+	inboundTxID := fmt.Sprintf("RUNFUND-RECORD-FAIL-%d", time.Now().UnixNano())
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/verify" {
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
+	}))
+	defer facilitator.Close()
+
+	llmCallCount := 0
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCallCount++
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": "should never be reached"}}},
+		})
+	}))
+	defer llmSrv.Close()
+
+	runner, store := newTestRunnerWithRunFunding(t, relay.URL, facilitator.URL)
+	nodes.SetOpenAIBaseURL(llmSrv.URL)
+	defer nodes.SetOpenAIBaseURL("https://api.openai.com")
+
+	// Pre-insert a row under this SAME inbound_tx_id, attached to an
+	// unrelated run, so the real run's own RecordRunFunding call below
+	// collides with inbound_tx_id's UNIQUE constraint -- simulating "the
+	// on-chain settle genuinely happened (the fake facilitator above really
+	// does report success) but the DB write recording it failed", without
+	// needing a mock store.
+	if _, err := store.RecordRunFunding(ctx, "pre-existing-unrelated-run", inboundTxID, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	email := fmt.Sprintf("run-funding-record-fail-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fundUser(t, store, user.ID, 1_000_000)
+
+	wf, err := store.CreateWorkflow(ctx, "Run Funding Record Fail Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "p1", Type: models.NodeTypeProvider, Template: "openai", APIKey: "test-key", Model: "gpt-4o"},
+			{ID: "a1", Type: models.NodeTypeAgent},
+			{ID: "x1", Type: models.NodeTypeTool402, Name: "paid_tool", Endpoint: target.URL},
+			{ID: "n3", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "a1", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "a1", To: "n3", Kind: models.EdgeKindFlow},
+			{ID: "e3", From: "p1", To: "a1", Kind: models.EdgeKindAttach, ToPort: "model"},
+			{ID: "e4", From: "x1", To: "a1", Kind: models.EdgeKindAttach, ToPort: "tools"},
+		},
+	}
+	wf, _ = store.UpdateWorkflow(ctx, wf.ID, wf.Name, graph)
+
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := sse.NewBroker()
+	broker.Create(run.ID)
+
+	runner.Start(wf, run)
+	final := waitForRunDone(t, store, run.ID)
+	if final.Status != models.RunStatusFailed {
+		t.Fatalf("want failed (reserveAndFundRun must fail loudly, not silently degrade to the per-call relay path), got %s", final.Status)
+	}
+
+	if got := atomic.LoadInt32(&relayHits); got != 0 {
+		t.Fatalf("want zero requests to the public /x402/relay endpoint -- a nonzero count means the run silently fell back to the old per-call double-settle path, got %d", got)
+	}
+	if llmCallCount != 0 {
+		t.Fatalf("want the agent's LLM loop to never even start (reserveAndFundRun fails before ExecuteAgent is called), got %d LLM calls", llmCallCount)
+	}
+
+	balance, err := store.GetCreditBalance(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 700_000 {
+		t.Fatalf("want the 300000 reservation to remain deducted, NOT released (real money already settled on-chain), got balance %d (started at 1000000)", balance)
+	}
+
+	fundings, err := store.ListX402RunFundingsByRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fundings) != 0 {
+		t.Fatalf("want zero x402_run_fundings rows recorded against THIS run (RecordRunFunding failed), got %d", len(fundings))
+	}
+}
+
+// TestAgentAttachedV2ToolDegradesGracefullyWhenPlatformSpendWalletNotConfigured
+// is a regression test: reserveAndFundRun used to have no equivalent to
+// executeTool402V2Relay's existing "no platform spend wallet configured"
+// graceful-degradation guard. newTestRunner wires up exactly the real,
+// valid misconfiguration this guards against: a walletSvc (noopSigner)
+// whose dynamic type does not satisfy nodes.USDCGroupSigner, and an empty
+// platformSpendEncMnemonic. Without the guard, reserveAndFundRun's type
+// assertion yields a nil usdcSigner and a later call on it panics -- with
+// no recover() in the run goroutine, crashing the whole process (which,
+// for this test, would crash the whole `go test` run rather than just fail
+// this one test). The run must instead degrade gracefully to the same
+// behavior as an agent with no attached tool402 nodes at all.
+func TestAgentAttachedV2ToolDegradesGracefullyWhenPlatformSpendWalletNotConfigured(t *testing.T) {
+	runner, store := newTestRunner(t) // noopSigner + empty platformSpendEncMnemonic -- the exact misconfiguration this guards against
+	ctx := context.Background()
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"300000"}]}`))
+	}))
+	defer target.Close()
+
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": "done, no tools called"}}},
+		})
+	}))
+	defer llmSrv.Close()
+
+	nodes.SetOpenAIBaseURL(llmSrv.URL)
+	defer nodes.SetOpenAIBaseURL("https://api.openai.com")
+
+	email := fmt.Sprintf("no-platform-wallet-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fundUser(t, store, user.ID, 1_000_000)
+
+	wf, err := store.CreateWorkflow(ctx, "No Platform Wallet Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "p1", Type: models.NodeTypeProvider, Template: "openai", APIKey: "test-key", Model: "gpt-4o"},
+			{ID: "a1", Type: models.NodeTypeAgent},
+			{ID: "x1", Type: models.NodeTypeTool402, Name: "paid_tool", Endpoint: target.URL},
+			{ID: "n3", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "a1", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "a1", To: "n3", Kind: models.EdgeKindFlow},
+			{ID: "e3", From: "p1", To: "a1", Kind: models.EdgeKindAttach, ToPort: "model"},
+			{ID: "e4", From: "x1", To: "a1", Kind: models.EdgeKindAttach, ToPort: "tools"},
+		},
+	}
+	wf, _ = store.UpdateWorkflow(ctx, wf.ID, wf.Name, graph)
+
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := sse.NewBroker()
+	broker.Create(run.ID)
+
+	runner.Start(wf, run)
+	final := waitForRunDone(t, store, run.ID)
+	if final.Status != models.RunStatusSuccess {
+		t.Fatalf("want success (graceful degradation, not a crash), got %s", final.Status)
+	}
+
+	fundings, err := store.ListX402RunFundingsByRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fundings) != 0 {
+		t.Fatalf("want zero x402_run_fundings rows (no platform wallet configured -> no run-level pre-fund attempted), got %d", len(fundings))
+	}
+}
+
+// TestLegacyToolAttachedAlongsideRunFundedV2ToolBillsIdenticallyToStandalone
+// is a regression test for a cross-task bug found in final branch review:
+// when an agent is run-funded (has at least one real v2 tool402 attached),
+// relayCfg.Ledger is swapped to the run-level in-memory pool sized only for
+// v2 quotes. A legacy-dialect tool402 node attached to that SAME agent must
+// still bill completely identically to how it would with no v2 tool
+// attached at all -- reserved/committed/released against the original
+// per-call DB-backed ledger, and still covered by executeFunctionCall's
+// pre-flight floor guard, never touching the v2 pool. Before the fix, the
+// legacy branch read relayCfg.Ledger directly (the pool once run-funded),
+// which could spuriously hard-block the legacy call on the pool's
+// V2-sized headroom, or wrongly commit the legacy fee against the pool
+// while leaving Wallet 2 with an uncorresponding surplus.
+func TestLegacyToolAttachedAlongsideRunFundedV2ToolBillsIdenticallyToStandalone(t *testing.T) {
+	ctx := context.Background()
+
+	v2Target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			w.Write([]byte(`{"data":"v2 result"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"300000"}]}`))
+	}))
+	defer v2Target.Close()
+
+	// legacyTarget answers a paid response once the request carries an
+	// X-Payment-Txid header, checked by KEY PRESENCE (not value) --
+	// mirroring tool402.go's own settlement check (`_, hasTx :=
+	// m["txId"]`), also key-presence-based. That match matters here: this
+	// agent's run is otherwise wired through newTestRunnerWithRunFunding's
+	// fakeRelaySigner, which embeds noopSigner, whose SignAndSendPayment
+	// returns an empty ("", nil) txID (it never touches a real chain) -- so
+	// req.Header.Set("X-Payment-Txid", "") still sets the key, just with an
+	// empty value, and Header.Get can't tell that apart from the key never
+	// having been set at all. A naive call-counter mock would also be wrong
+	// here: legacyTarget legitimately receives more than one unauthenticated
+	// probe before the real paid retry (reserveAndFundRun's own up-front
+	// price-probe loop, which walks every attached tool402 node including
+	// this legacy one, plus ExecuteTool402V2's own dispatch probe, plus
+	// ExecuteTool402's own initial GET) -- only the header actually
+	// distinguishes the real paid attempt from all of those.
+	legacyTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := r.Header["X-Payment-Txid"]; ok {
+			w.Write([]byte(`{"ok":true}`))
+			return
+		}
+		w.Header().Set("X-Payment-Required", `{"price":"0.001","unit":"call","network":"algorand-testnet","recipient":"ALGO123"}`)
+		w.WriteHeader(http.StatusPaymentRequired)
+	}))
+	defer legacyTarget.Close()
+
+	inboundTxID := fmt.Sprintf("RUNFUND-LEGACY-COMBO-%d", time.Now().UnixNano())
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/verify" {
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
+	}))
+	defer facilitator.Close()
+
+	llmCallCount := 0
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmCallCount++
+		w.Header().Set("Content-Type", "application/json")
+		switch llmCallCount {
+		case 1:
+			json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]any{
+					"role": "assistant",
+					"tool_calls": []map[string]any{{
+						"id": "call_v2", "type": "function",
+						"function": map[string]any{"name": "v2_tool", "arguments": "{}"},
+					}},
+				}}},
+			})
+		case 2:
+			json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]any{
+					"role": "assistant",
+					"tool_calls": []map[string]any{{
+						"id": "call_legacy", "type": "function",
+						"function": map[string]any{"name": "legacy_tool", "arguments": "{}"},
+					}},
+				}}},
+			})
+		default:
+			json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{"message": map[string]any{"role": "assistant", "content": "done"}}},
+			})
+		}
+	}))
+	defer llmSrv.Close()
+
+	runner, store := newTestRunnerWithRunFunding(t, "http://localhost:65535", facilitator.URL)
+	nodes.SetOpenAIBaseURL(llmSrv.URL)
+	defer nodes.SetOpenAIBaseURL("https://api.openai.com")
+
+	email := fmt.Sprintf("legacy-plus-v2-combo-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1_000_000: enough to cover reserveAndFundRun's up-front v2 estimate
+	// (300000) AND still clear the legacy tool's flat-fee floor guard
+	// (500000) against the REMAINING live DB balance afterward (700000) --
+	// this is exactly the assertion this test pins: the legacy call's
+	// floor guard and billing run against the live DB balance, unaffected
+	// by the run-level pool.
+	fundUser(t, store, user.ID, 1_000_000)
+
+	// aw is required for the legacy dialect's direct-pay branch (it signs
+	// from the agent's own wallet, not Wallet 1/2) -- create and attach a
+	// real agent wallet.
+	wf, err := store.CreateWorkflow(ctx, "Legacy Plus V2 Combo Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "p1", Type: models.NodeTypeProvider, Template: "openai", APIKey: "test-key", Model: "gpt-4o"},
+			{ID: "a1", Type: models.NodeTypeAgent},
+			{ID: "x1", Type: models.NodeTypeTool402, Name: "v2_tool", Endpoint: v2Target.URL},
+			{ID: "x2", Type: models.NodeTypeTool402, Name: "legacy_tool", Endpoint: legacyTarget.URL},
+			{ID: "n3", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "a1", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "a1", To: "n3", Kind: models.EdgeKindFlow},
+			{ID: "e3", From: "p1", To: "a1", Kind: models.EdgeKindAttach, ToPort: "model"},
+			{ID: "e4", From: "x1", To: "a1", Kind: models.EdgeKindAttach, ToPort: "tools"},
+			{ID: "e5", From: "x2", To: "a1", Kind: models.EdgeKindAttach, ToPort: "tools"},
+		},
+	}
+	wf, _ = store.UpdateWorkflow(ctx, wf.ID, wf.Name, graph)
+
+	if err := store.InsertAgentWallet(ctx, models.AgentWallet{
+		WorkflowID:        wf.ID,
+		AgentNodeID:       "a1",
+		Address:           "AGENTADDR",
+		EncryptedMnemonic: "agent-enc-mnemonic",
+		Network:           "algorand-testnet",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := sse.NewBroker()
+	broker.Create(run.ID)
+
+	runner.Start(wf, run)
+	final := waitForRunDone(t, store, run.ID)
+	if final.Status != models.RunStatusSuccess {
+		t.Fatalf("want success got %s", final.Status)
+	}
+
+	// Final balance: 1000000 - 10000 (agent's own flat fee) - 300000 (v2
+	// run-level pool, real settled amount) - 500000 (legacy flat fee, real
+	// DB-backed ledger) = 190000. A wrong balance here would mean the
+	// legacy fee was billed against the wrong ledger (or not billed /
+	// double-billed).
+	balance, err := store.GetCreditBalance(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 190_000 {
+		t.Fatalf("want final balance 190000 (1000000 - 10000 agent fee - 300000 v2 - 500000 legacy), got %d -- legacy tool billing was not identical to the no-v2-attached case", balance)
+	}
+
+	entries, err := store.ListDebitLedger(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawLegacyFee, sawV2Cost bool
+	for _, e := range entries {
+		if e.NodeID == "x2" && e.Kind == models.DebitKindX402PlatformFee && e.AmountUSDMicros == models.X402PlatformFeeUSDMicros {
+			sawLegacyFee = true
+		}
+		if e.NodeID == "x1" && e.Kind == models.DebitKindX402RelayCost && e.AmountUSDMicros == 300000 {
+			sawV2Cost = true
+		}
+	}
+	if !sawLegacyFee {
+		t.Fatalf("want a debit_ledger row for the legacy tool (x2) billed at the flat platform fee, got %+v", entries)
+	}
+	if !sawV2Cost {
+		t.Fatalf("want a debit_ledger row for the v2 tool (x1) billed at its real settled amount, got %+v", entries)
+	}
+
+	fundings, err := store.ListX402RunFundingsByRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fundings) != 1 {
+		t.Fatalf("want exactly 1 x402_run_fundings row (sized only for the v2 tool), got %d", len(fundings))
+	}
+	if fundings[0].AmountAssetMicros != 300000 {
+		t.Fatalf("want the run-level pre-fund sized only for the v2 tool's 300000 quote (never the legacy tool's flat fee), got %d", fundings[0].AmountAssetMicros)
 	}
 }

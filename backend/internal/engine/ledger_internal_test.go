@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -11,6 +14,7 @@ import (
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/x402"
 )
 
 // TestPaymentLedgerCommitAndReleaseSurviveCancelledContext is a regression
@@ -108,6 +112,125 @@ func TestPaymentLedgerCommitAndReleaseSurviveCancelledContext(t *testing.T) {
 	}
 	if entries[0].AmountUSDMicros != 250_000 || entries[0].Kind != models.DebitKindX402RelayCost {
 		t.Fatalf("want a 250000 x402_relay_cost entry, got %+v", entries[0])
+	}
+}
+
+// fakeUSDCSignerForLedgerTest satisfies nodes.USDCGroupSigner (and
+// nodes.WalletSigner) so a Runner built with it actually attempts the
+// run-level pre-fund path in reserveAndFundRun instead of degrading
+// gracefully for a missing signer.
+type fakeUSDCSignerForLedgerTest struct{}
+
+func (f *fakeUSDCSignerForLedgerTest) SignAndSendPayment(_ context.Context, _, _ string, _ uint64) (string, error) {
+	return "", nil
+}
+
+func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
+	return []string{"g0", "g1"}, 0, nil
+}
+
+// TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFails
+// is a white-box regression test for the exact bug this branch's final
+// review found: reserveAndFundRun used to return funding.ID's zero value
+// ("") whenever RecordRunFunding failed after a successful FundRunReserve --
+// the SAME sentinel ExecuteTool402V2 reads as "no run-level pre-fund
+// happened for this run", silently routing every subsequent v2 tool402 call
+// onto the OLD per-call public-relay path, which performs its own full
+// inbound settle per call. Since a real bulk inbound settlement had already
+// just happened moments earlier via FundRunReserve, that meant Wallet 1
+// would pay twice for the same run -- exactly the double-settle bug this
+// whole branch exists to eliminate. reserveAndFundRun must instead return a
+// non-nil error, and must NOT release the DB credit reservation (real money
+// already moved on-chain; releasing would let the user re-spend credits
+// that already funded a real settlement).
+//
+// The RecordRunFunding failure is provoked without a mock store: the fake
+// facilitator below always reports settlement under the SAME fixed
+// inbound_tx_id, and a row under that exact tx id is pre-inserted (attached
+// to an unrelated run) before reserveAndFundRun ever runs -- so its own
+// real RecordRunFunding call collides with inbound_tx_id's UNIQUE
+// constraint, simulating "the on-chain settle genuinely happened but the DB
+// write recording it failed".
+func TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFails(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	store, err := db.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"300000"}]}`))
+	}))
+	defer target.Close()
+
+	inboundTxID := fmt.Sprintf("LEDGER-INTERNAL-RUNFUND-DUP-%d", time.Now().UnixNano())
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/verify" {
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
+	}))
+	defer facilitator.Close()
+
+	email := fmt.Sprintf("ledger-internal-runfund-dup-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(context.Background(), email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderID := fmt.Sprintf("fund_%s_%d", user.ID, time.Now().UnixNano())
+	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_"+orderID); err != nil {
+		t.Fatal(err)
+	}
+
+	wf, err := store.CreateWorkflow(context.Background(), "Ledger Internal Runfund Dup Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+	wf.UserID = user.ID
+	run, err := store.CreateRun(context.Background(), wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.RecordRunFunding(context.Background(), "unrelated-run-id", inboundTxID, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+		USDCAssetID:               10458941,
+		PlatformWalletAddress:     "PLATFORMADDR",
+		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+		FacilitatorClient:         x402.NewFacilitatorClient(facilitator.URL),
+		RelayNetwork:              "algorand:testnet",
+		RelayFeePayer:             "FEEPAYERADDR",
+	})
+
+	attach := models.AttachConfig{
+		Tools: []models.WorkflowNode{
+			{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL},
+		},
+	}
+
+	if _, err := r.reserveAndFundRun(context.Background(), wf, run, attach); err == nil {
+		t.Fatal("want reserveAndFundRun to return a non-nil error when RecordRunFunding fails after a successful FundRunReserve")
+	}
+
+	balance, err := store.GetCreditBalance(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 700000 {
+		t.Fatalf("want the 300000 reservation to remain deducted, NOT released (real money already settled on-chain), got balance %d (started at 1000000)", balance)
 	}
 }
 

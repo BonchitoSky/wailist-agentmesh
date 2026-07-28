@@ -184,6 +184,21 @@ func newRunLevelLedger(pool int64, wf models.Workflow, run models.Run, store *db
 	}
 }
 
+// runFundResult bundles what reserveAndFundRun computes for one agent node:
+// the ledger v2 tool402 dispatch should use, the run funding id ("" if no
+// run-level pre-fund happened), the set of attached tool402 node IDs that
+// were confirmed real v2 targets and folded into that pre-fund's estimate
+// (so a legacy-dialect tool attached to the same run-funded agent can still
+// be told apart — see X402RelayConfig.RunFundedToolIDs), and a cleanup func
+// that releases whatever's left of the pool back to the DB balance at the
+// end of the agent's turn.
+type runFundResult struct {
+	Ledger        nodes.PaymentLedger
+	FundingID     string
+	FundedToolIDs map[string]bool
+	Cleanup       func(context.Context)
+}
+
 // reserveAndFundRun sizes and reserves a single run-level credit hold for
 // agentNode's attached tool402 tools, then settles that exact amount as one
 // real inbound x402 payment (Wallet 1 -> Wallet 2) before the agent's
@@ -195,8 +210,11 @@ func newRunLevelLedger(pool int64, wf models.Workflow, run models.Run, store *db
 // newPaymentLedger and an empty runFundingID, so ExecuteAgent's tool402
 // calls take the completely unmodified per-call public-relay path (the
 // isV2 dispatch in ExecuteTool402V2 gates on runFundingID == "").
-func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run models.Run, attach models.AttachConfig) (nodes.PaymentLedger, string, func(context.Context), error) {
+func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run models.Run, attach models.AttachConfig) (runFundResult, error) {
+	noFund := runFundResult{Ledger: r.newPaymentLedger(wf, run), Cleanup: func(context.Context) {}}
+
 	var estimate int64
+	fundedToolIDs := make(map[string]bool)
 	for _, tool := range attach.Tools {
 		if tool.Type != models.NodeTypeTool402 {
 			continue
@@ -206,17 +224,37 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 			continue // unreachable/legacy-dialect tools stay on their existing billing path
 		}
 		estimate += amount
+		fundedToolIDs[tool.ID] = true
 	}
 
 	if estimate == 0 {
-		return r.newPaymentLedger(wf, run), "", func(context.Context) {}, nil
+		return noFund, nil
+	}
+
+	// Same two-condition check executeTool402V2Relay (the old per-call relay
+	// path) already makes before attempting anything: without a platform
+	// spend wallet configured, neither FundRunReserve nor
+	// PayTargetFromWallet2 can do anything real. Checked here, after sizing
+	// the estimate above (an agent with only legacy-dialect/unreachable
+	// tools attached needs no wallet at all — that path must keep probing
+	// regardless of wallet config, exactly as it always has) but,
+	// critically, before ReserveCredits — r.walletSvc's dynamic type not
+	// satisfying USDCGroupSigner (a real, valid configuration: e.g. a
+	// noopSigner test double, or a WalletSigner-only production wiring)
+	// makes the type assertion below yield a nil usdcSigner, and calling a
+	// method on it later would panic with no recover() in the run
+	// goroutine — after ReserveCredits already ran, stranding credits on
+	// top of the crash. Degrading gracefully here instead matches an agent
+	// with no attached tool402 nodes at all.
+	usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
+	if r.platformSpendEncMnemonic == "" || usdcSigner == nil {
+		return noFund, nil
 	}
 
 	if err := r.store.ReserveCredits(ctx, wf.UserID, estimate); err != nil {
-		return nodes.PaymentLedger{}, "", nil, err
+		return runFundResult{}, err
 	}
 
-	usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
 	fundCfg := nodes.RunPreFundConfig{
 		USDCSigner:               usdcSigner,
 		PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
@@ -236,7 +274,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 				wf.UserID, wf.ID, run.ID, estimate, err, relErr)
 			go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("run pre-fund+release both failed: user=%s amount=%d", wf.UserID, estimate))
 		}
-		return nodes.PaymentLedger{}, "", nil, fmt.Errorf("x402 run funding failed: %w", err)
+		return runFundResult{}, fmt.Errorf("x402 run funding failed: %w", err)
 	}
 
 	funding, err := r.store.RecordRunFunding(ctx, run.ID, txID, estimate)
@@ -244,9 +282,21 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		// Real money already moved on-chain — this is a bookkeeping failure,
 		// not a payment failure. Do NOT release the DB reservation (the
 		// on-chain settle genuinely happened); alert so an operator can
-		// reconcile the missing audit row by hand.
+		// reconcile the missing audit row by hand. Do NOT fall back to
+		// funding.ID's zero value ("") either -- that's the exact same
+		// sentinel ExecuteTool402V2 reads as "no run-level pre-fund
+		// happened for this run", which would silently route every
+		// subsequent v2 tool402 call for this agent onto the OLD per-call
+		// public-relay path. That path performs its own FULL inbound settle
+		// per call, and a real bulk inbound settlement already just
+		// happened above via FundRunReserve -- so Wallet 1 would pay twice
+		// for the same run, exactly the double-settle bug this whole branch
+		// exists to eliminate. Failing the node instead is safe: the money
+		// is sitting in Wallet 2, our own wallet -- a state we can
+		// reconcile by hand, unlike a silent double-spend.
 		log.Printf("CRITICAL: run funding settled on-chain (tx %s) but RecordRunFunding failed: %v", txID, err)
 		go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("run funding tx %s settled but not recorded: %v", txID, err))
+		return runFundResult{}, fmt.Errorf("run funding settled on-chain (tx %s) but recording it failed, failing the run rather than risking a double-settle on the old per-call path: %w", txID, err)
 	}
 
 	ledger, remaining := newRunLevelLedger(estimate, wf, run, r.store)
@@ -264,7 +314,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 			go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 		}
 	}
-	return ledger, funding.ID, cleanup, nil
+	return runFundResult{Ledger: ledger, FundingID: funding.ID, FundedToolIDs: fundedToolIDs, Cleanup: cleanup}, nil
 }
 
 // Start creates a cancellable context for the run, registers it, and launches
@@ -443,11 +493,11 @@ func (r *Runner) executeNode(
 			return r.preflightCheck(cctx, wf, amount)
 		}
 		attach := attachMap[node.ID]
-		runLedger, runFundingID, cleanupRunFund, err := r.reserveAndFundRun(ctx, wf, run, attach)
+		rf, err := r.reserveAndFundRun(ctx, wf, run, attach)
 		if err != nil {
 			return nil, err
 		}
-		defer cleanupRunFund(ctx)
+		defer rf.Cleanup(ctx)
 
 		// r.walletSvc's dynamic type (*wallet.Service) also satisfies
 		// USDCGroupSigner (same nil-safe assertion as the NodeTypeTool402
@@ -459,8 +509,15 @@ func (r *Runner) executeNode(
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 			ExpectedAssetID:          r.x402.USDCAssetID,
 			RelayBaseURL:             r.relayBaseURL,
-			Ledger:                   runLedger,
-			RunFundingID:             runFundingID, // "" => existing unmodified per-call public-relay path
+			Ledger:                   rf.Ledger,
+			// LegacyLedger is always the original per-call, DB-backed
+			// ledger — never rf.Ledger, which is the run-level in-memory
+			// pool once the agent is run-funded. Legacy-dialect billing
+			// must be identical whether or not this same agent also has a
+			// run-funded v2 tool attached (see X402RelayConfig.LegacyLedger).
+			LegacyLedger:     r.newPaymentLedger(wf, run),
+			RunFundingID:     rf.FundingID, // "" => existing unmodified per-call public-relay path
+			RunFundedToolIDs: rf.FundedToolIDs,
 			Wallet2: nodes.Wallet2PayConfig{
 				USDCSigner:                usdcSigner,
 				PlatformWalletEncMnemonic: r.x402.PlatformWalletEncMnemonic,
@@ -470,7 +527,7 @@ func (r *Runner) executeNode(
 				MaxRelayOutboundUSDMicros: r.x402.MaxRelayOutboundUSDMicros,
 			},
 			RecordSettlement: func(cctx context.Context, target string, amountUSDMicros int64, settled bool) error {
-				row, err := r.store.RecordRunFundedSettlement(cctx, runFundingID, target, amountUSDMicros)
+				row, err := r.store.RecordRunFundedSettlement(cctx, rf.FundingID, target, amountUSDMicros)
 				if err != nil {
 					return err
 				}
@@ -553,12 +610,20 @@ func (r *Runner) executeNode(
 		if err := r.preflightCheck(ctx, wf, models.X402PlatformFeeUSDMicros); err != nil {
 			return nil, err
 		}
+		// A standalone tool402 node is never run-funded (that only ever
+		// applies to an agent's attached tools), so Ledger and LegacyLedger
+		// are the same DB-backed, per-call ledger here — both fields are
+		// still populated so ExecuteTool402V2's legacy-dialect branch (which
+		// only ever reads LegacyLedger) works identically to the v2 branch
+		// (which only ever reads Ledger).
+		standaloneLedger := r.newPaymentLedger(wf, run)
 		relayCfg := nodes.X402RelayConfig{
 			USDCSigner:               usdcSigner,
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 			ExpectedAssetID:          r.x402.USDCAssetID,
 			RelayBaseURL:             r.relayBaseURL,
-			Ledger:                   r.newPaymentLedger(wf, run),
+			Ledger:                   standaloneLedger,
+			LegacyLedger:             standaloneLedger,
 		}
 		paymentResult, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, relayCfg)
 		if err != nil {

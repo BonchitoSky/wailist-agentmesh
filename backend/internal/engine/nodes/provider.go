@@ -160,8 +160,18 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 				// attached call the run-level pool has ample headroom for.
 				// The legacy per-call path (RunFundingID == "") never
 				// pre-reserves anything, so it still needs this floor
-				// check exactly as before.
-				if relayCfg.RunFundingID == "" {
+				// check exactly as before. A legacy-dialect tool attached to
+				// the SAME run-funded agent also still needs it:
+				// reserveAndFundRun's estimator only ever folds confirmed v2
+				// targets into the up-front reservation (RunFundedToolIDs),
+				// so a legacy tool's flat fee is never covered by it and
+				// still bills against the live DB balance via
+				// relayCfg.LegacyLedger inside ExecuteTool402V2 — skipping
+				// this floor check for it would let an unfunded caller drive
+				// unbounded outbound requests through a legacy tool just
+				// because some other v2 tool on the same agent happened to
+				// be pre-funded.
+				if relayCfg.RunFundingID == "" || !relayCfg.RunFundedToolIDs[toolNode.ID] {
 					feeAmount = models.X402PlatformFeeUSDMicros
 				}
 			case BillableFlatFee(toolNode.Type, toolNode.Template):

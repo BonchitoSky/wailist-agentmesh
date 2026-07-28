@@ -109,7 +109,17 @@ func fetchTargetPriceQuote(ctx context.Context, target string) (targetPriceQuote
 	accept := parsed.Accepts[0]
 	payTo, _ := accept["payTo"].(string)
 	asset, _ := accept["asset"].(string)
-	amount, _ := accept["maxAmountRequired"].(string)
+	// Accept both the usual JSON-string encoding and a JSON-number encoding
+	// of maxAmountRequired — some real targets encode this field as a
+	// number rather than a string, which a string-only type assertion would
+	// otherwise reject as an empty/invalid quote (see
+	// nodes.ParseMaxAmountRequiredAsMicros). A parse failure here still
+	// yields an empty MaxAmountRequired, which the callers below already
+	// turn into an error via strconv.ParseInt.
+	var amount string
+	if micros, ok := nodes.ParseMaxAmountRequiredAsMicros(accept["maxAmountRequired"]); ok {
+		amount = strconv.FormatInt(micros, 10)
+	}
 	return targetPriceQuote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount}, nil
 }
 

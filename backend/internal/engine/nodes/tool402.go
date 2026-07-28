@@ -183,8 +183,25 @@ type X402RelayConfig struct {
 	ExpectedAssetID          uint64
 	RelayBaseURL             string
 	// Ledger reserves/commits/releases credits for real on-chain tool402
-	// payments made through this config. See PaymentLedger.
+	// payments made through this config. For a run-funded agent this is
+	// swapped to the in-memory run-level pool (Task 5) and is ONLY ever
+	// used for v2-dialect dispatch (executeTool402V2Relay when
+	// RunFundingID == "", executeTool402RunLevel when it isn't) — the
+	// legacy-dialect branch below must never read this field directly; see
+	// LegacyLedger.
 	Ledger PaymentLedger
+	// LegacyLedger is the original per-call, DB-backed ledger (always
+	// r.newPaymentLedger(wf, run), never the run-level in-memory pool) —
+	// what the legacy flat-quote dialect's direct-pay branch reserves/
+	// commits/releases its flat fee against, regardless of whether Ledger
+	// above has been swapped to the run-level pool for this same agent's v2
+	// tools. Legacy-dialect billing must be identical whether or not the
+	// agent also happens to have a run-funded v2 tool attached — reading
+	// Ledger here instead would decrement a pool sized only for v2 quotes,
+	// spuriously blocking legacy calls or committing them against credits
+	// that were already converted into a real on-chain settlement to
+	// Wallet 2 for an unrelated call.
+	LegacyLedger PaymentLedger
 
 	// RunFundingID is set (non-empty) the moment the agent's run has already
 	// settled a single lump-sum inbound x402 payment covering its attached
@@ -193,6 +210,16 @@ type X402RelayConfig struct {
 	// (no attached v2 tools, or the estimate came back 0), so v2 calls keep
 	// taking the existing per-call public-relay path unchanged.
 	RunFundingID string
+	// RunFundedToolIDs is the set of attached tool402 node IDs that
+	// reserveAndFundRun confirmed as real v2 targets and folded into
+	// RunFundingID's up-front reservation — empty/nil when RunFundingID is
+	// "". A legacy-dialect tool attached to the same run-funded agent is
+	// never in this set (reserveAndFundRun's estimator skips it), so
+	// provider.go's pre-flight floor guard uses this, not a blanket
+	// RunFundingID != "" check, to decide whether a given attached tool402
+	// node's own DB balance still needs checking before its first outbound
+	// HTTP call.
+	RunFundedToolIDs map[string]bool
 	// Wallet2 carries what's needed to pay a real target directly from
 	// Wallet 2, in-process, once RunFundingID is set. See Wallet2PayConfig.
 	Wallet2 Wallet2PayConfig
@@ -260,8 +287,7 @@ func probeTool402Endpoint(ctx context.Context, endpoint string) (isV2 bool, notP
 	accept := v2Challenge.Accepts[0]
 	payTo, _ := accept["payTo"].(string)
 	asset, _ := accept["asset"].(string)
-	amountStr, _ := accept["maxAmountRequired"].(string)
-	amount, parseErr := strconv.ParseInt(amountStr, 10, 64)
+	amount, ok := ParseMaxAmountRequiredAsMicros(accept["maxAmountRequired"])
 	// This is a real v2 challenge (accepts[] present) -- a missing or
 	// unparseable maxAmountRequired here is a malformed challenge, not a
 	// genuinely free tool. Silently returning MaxAmountRequired: 0 in that
@@ -270,10 +296,34 @@ func probeTool402Endpoint(ctx context.Context, endpoint string) (isV2 bool, notP
 	// off this value -- a silent 0 there is a money-correctness bug. Report
 	// it as an error instead; isV2 still reflects reality (it IS a v2
 	// challenge) even though the quote itself is zero-valued.
-	if parseErr != nil || amount <= 0 {
-		return true, false, nil, x402Quote{}, fmt.Errorf("x402: invalid or missing maxAmountRequired %q in v2 challenge", amountStr)
+	if !ok || amount <= 0 {
+		return true, false, nil, x402Quote{}, fmt.Errorf("x402: invalid or missing maxAmountRequired %v in v2 challenge", accept["maxAmountRequired"])
 	}
 	return true, false, nil, x402Quote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount}, nil
+}
+
+// ParseMaxAmountRequiredAsMicros parses a real x402 v2 challenge's
+// accepts[].maxAmountRequired field, accepting either its usual JSON-string
+// encoding or a JSON-number encoding — some real targets encode this field
+// as a number rather than a string, and a string-only type assertion would
+// otherwise reject an entirely valid quote. Returns false if neither shape
+// parses to a value, or the value isn't a whole number of micros.
+func ParseMaxAmountRequiredAsMicros(v any) (int64, bool) {
+	switch t := v.(type) {
+	case string:
+		n, err := strconv.ParseInt(t, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	case float64:
+		if t != math.Trunc(t) {
+			return 0, false
+		}
+		return int64(t), true
+	default:
+		return 0, false
+	}
 }
 
 // ProbeX402Price is the exported form the run-level estimator (Task 5) uses
@@ -348,7 +398,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		}
 		return Tool402PaymentResult{Response: result}, nil
 	}
-	if reserve := relayCfg.Ledger.Reserve; reserve != nil {
+	if reserve := relayCfg.LegacyLedger.Reserve; reserve != nil {
 		if err := reserve(ctx, models.X402PlatformFeeUSDMicros); err != nil {
 			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 		}
@@ -364,7 +414,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	settled := false
 	defer func() {
 		if !settled {
-			if release := relayCfg.Ledger.Release; release != nil {
+			if release := relayCfg.LegacyLedger.Release; release != nil {
 				release(ctx, models.X402PlatformFeeUSDMicros)
 			}
 		}
@@ -372,7 +422,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	result, err := ExecuteTool402(ctx, node, rc, aw, signer)
 	if err != nil {
 		settled = true
-		if release := relayCfg.Ledger.Release; release != nil {
+		if release := relayCfg.LegacyLedger.Release; release != nil {
 			release(ctx, models.X402PlatformFeeUSDMicros)
 		}
 		return Tool402PaymentResult{}, err
@@ -383,7 +433,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 			out.SettledUSDMicros = models.X402PlatformFeeUSDMicros
 			out.DebitKind = models.DebitKindX402PlatformFee
 			settled = true
-			if commit := relayCfg.Ledger.Commit; commit != nil {
+			if commit := relayCfg.LegacyLedger.Commit; commit != nil {
 				commit(ctx, node.ID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
 			}
 			return out, nil
@@ -392,7 +442,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	// No payment was actually sent (e.g. the retried request came back
 	// without a txId) -- release the reservation, nothing to charge for.
 	settled = true
-	if release := relayCfg.Ledger.Release; release != nil {
+	if release := relayCfg.LegacyLedger.Release; release != nil {
 		release(ctx, models.X402PlatformFeeUSDMicros)
 	}
 	return out, nil
@@ -548,8 +598,15 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	}
 	amount, _ := strconv.ParseInt(quote.MaxAmountRequired, 10, 64)
 
-	if err := cfg.Ledger.Reserve(ctx, amount); err != nil {
-		return Tool402PaymentResult{}, err
+	// Nil-safe like every other ledger call site in this file, even though
+	// this path is only ever reached with a fully-populated cfg.Ledger
+	// today (only from ExecuteTool402V2 once RunFundingID is set) -- so a
+	// future caller that forgets to wire it up fails loudly instead of
+	// panicking on a nil func call.
+	if reserve := cfg.Ledger.Reserve; reserve != nil {
+		if err := reserve(ctx, amount); err != nil {
+			return Tool402PaymentResult{}, err
+		}
 	}
 
 	result, payErr := PayTargetFromWallet2(ctx, cfg.Wallet2, node.Endpoint, quote)
@@ -569,7 +626,9 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		// Money never moved (asset mismatch, over-cap, or a failure signing
 		// the payment group, all checked/attempted before any real payment
 		// was sent) -- release the reservation, nothing was ever spent.
-		cfg.Ledger.Release(ctx, amount)
+		if release := cfg.Ledger.Release; release != nil {
+			release(ctx, amount)
+		}
 		return Tool402PaymentResult{}, payErr
 	}
 
@@ -588,7 +647,9 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 	}
 
-	cfg.Ledger.Commit(ctx, node.ID, amount, models.DebitKindX402RelayCost)
+	if commit := cfg.Ledger.Commit; commit != nil {
+		commit(ctx, node.ID, amount, models.DebitKindX402RelayCost)
+	}
 
 	if payErr != nil {
 		// Target unreachable at the network level -- no response body to
