@@ -3,6 +3,7 @@ package nodes_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -198,5 +199,43 @@ func TestFundRunReserveSettleFailureSurfacesError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "settlement rejected") {
 		t.Fatalf("want error to surface facilitator's error reason, got %v", err)
+	}
+}
+
+func TestFundRunReserveSettleTransportErrorIsIndeterminate(t *testing.T) {
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/verify":
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+		case "/settle":
+			// No decodable response body -- simulates the response being
+			// lost after the facilitator accepted the request (timeout,
+			// connection reset), not a definitive rejection.
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer facilitator.Close()
+
+	signer := &fakeRunFundUSDCSigner{group: []string{"g0", "g1"}, idx: 0}
+	cfg := nodes.RunPreFundConfig{
+		USDCSigner:               signer,
+		PlatformSpendEncMnemonic: "platform-enc-mnemonic",
+		Facilitator:              x402.NewFacilitatorClient(facilitator.URL),
+		PlatformWalletAddress:    "PLATFORMADDR",
+		RelayNetwork:             "algorand:testnet",
+		RelayFeePayer:            "FEEPAYERADDR",
+		ExpectedAssetID:          10458941,
+		PublicBaseURL:            "https://example.test",
+	}
+
+	txID, err := nodes.FundRunReserve(context.Background(), cfg, "run-1", 500000)
+	if err == nil {
+		t.Fatal("want error when the settle response is lost")
+	}
+	if txID != "" {
+		t.Fatalf("want empty txID on error, got %q", txID)
+	}
+	if !errors.Is(err, nodes.ErrSettlementIndeterminate) {
+		t.Fatalf("want error to wrap ErrSettlementIndeterminate (fate of the payment unknown), got %v", err)
 	}
 }

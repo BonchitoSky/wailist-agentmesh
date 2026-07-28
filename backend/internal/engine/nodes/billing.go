@@ -65,6 +65,15 @@ type PaymentLedger struct {
 // the flat BYOK fee is not charged, since no billable work happened.
 var ErrActionSkipped = errors.New("action skipped: missing required configuration")
 
+// ErrSettlementIndeterminate wraps a Facilitator.Settle call whose response
+// never arrived (network timeout, connection reset, or any other transport-
+// level failure) -- unlike a definitively-decoded SettleResult{Success:
+// false}, this means we genuinely don't know whether the facilitator
+// broadcast and confirmed the payment before the response was lost.
+// Callers must not release a reservation on this error the way they would
+// for a real, received rejection -- the money may have already moved.
+var ErrSettlementIndeterminate = errors.New("x402: facilitator settle response lost, payment fate unknown")
+
 // ErrBalanceBlocked wraps a BalanceChecker failure so the agent loop can
 // hard-stop instead of feeding the failure back to the LLM as a retryable
 // tool-level error (which would just spin the loop until

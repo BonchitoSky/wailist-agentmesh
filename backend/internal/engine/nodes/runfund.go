@@ -75,9 +75,15 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 
 	settleResult, err := cfg.Facilitator.Settle(ctx, payload, reqs)
 	if err != nil {
-		return "", fmt.Errorf("run pre-fund: facilitator settle failed: %w", err)
+		// Response never arrived -- settlement's fate is unknown, not
+		// "failed". Wrapped so reserveAndFundRun's caller can tell this
+		// apart from a definitive rejection and avoid releasing a
+		// reservation for money that may have already moved.
+		return "", fmt.Errorf("run pre-fund: facilitator settle response lost: %v: %w", err, ErrSettlementIndeterminate)
 	}
 	if !settleResult.Success {
+		// A real, received response says it failed -- money definitively
+		// never moved.
 		return "", fmt.Errorf("run pre-fund: settlement failed: %s", settleResult.Error)
 	}
 	return settleResult.TxID, nil
