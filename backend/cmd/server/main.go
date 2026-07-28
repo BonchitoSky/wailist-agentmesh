@@ -81,12 +81,15 @@ func main() {
 
 	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000) // $5.00 default
 
-	runner := engine.NewRunner(
-		store, broker, walletSvc,
-		envOr("BASE_URL", "http://localhost:8080"), platformSpendWalletEncMnemonic, usdcAssetID,
-		platformWalletAddr, platformWalletEncMnemonic, facilitatorClient,
-		relayNetwork, relayFeePayer, maxRelayOutboundUSDMicros,
-	)
+	runner := engine.NewRunner(store, broker, walletSvc, envOr("BASE_URL", "http://localhost:8080"), platformSpendWalletEncMnemonic, engine.X402Config{
+		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
+		USDCAssetID:               usdcAssetID,
+		FacilitatorClient:         facilitatorClient,
+		PlatformWalletAddress:     platformWalletAddr,
+		RelayNetwork:              relayNetwork,
+		RelayFeePayer:             relayFeePayer,
+		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
+	})
 
 	go expireStalePendingTransactionsLoop(ctx, store)
 

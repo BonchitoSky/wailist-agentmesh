@@ -60,7 +60,7 @@ func TestPaymentLedgerCommitAndReleaseSurviveCancelledContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), nil, "", "", 10458941, "", "", nil, "", "", 0)
+	r := NewRunner(store, sse.NewBroker(), nil, "", "", X402Config{USDCAssetID: 10458941})
 	ledger := r.newPaymentLedger(wf, run)
 
 	if err := ledger.Reserve(context.Background(), 250_000); err != nil {

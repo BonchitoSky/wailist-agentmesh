@@ -18,6 +18,21 @@ import (
 	"github.com/agentmesh/backend/internal/x402"
 )
 
+// X402Config bundles the platform-wallet/facilitator identity engine.Runner
+// needs for run-level pre-funding (Task 5) — grouped into one struct rather
+// than appended as more same-typed positional NewRunner params, so a future
+// caller can't silently swap e.g. RelayNetwork and RelayFeePayer (both
+// strings) without the compiler catching it.
+type X402Config struct {
+	PlatformWalletEncMnemonic string
+	USDCAssetID               uint64
+	FacilitatorClient         *x402.FacilitatorClient
+	PlatformWalletAddress     string
+	RelayNetwork              string
+	RelayFeePayer             string
+	MaxRelayOutboundUSDMicros int64
+}
+
 type Runner struct {
 	store                    *db.Store
 	broker                   *sse.Broker
@@ -25,22 +40,7 @@ type Runner struct {
 	registry                 *runRegistry
 	relayBaseURL             string
 	platformSpendEncMnemonic string
-	usdcAssetID              uint64
-
-	// The fields below carry what reserveAndFundRun (Task 5) needs to size
-	// and settle a run-level lump-sum inbound x402 payment and, later, pay
-	// real targets in-process from Wallet 2. They mirror fields that already
-	// exist as local variables in cmd/server/main.go and as flat fields on
-	// handlers.Deps (populated there for the public relay handler) — kept
-	// flat and separate here as a stopgap rather than introducing a bundled
-	// config type, since designing that bundle (X402Config) is Task 6's job,
-	// not this one.
-	platformWalletAddress     string
-	platformWalletEncMnemonic string
-	facilitatorClient         *x402.FacilitatorClient
-	relayNetwork              string
-	relayFeePayer             string
-	maxRelayOutboundUSDMicros int64
+	x402                     X402Config
 }
 
 func NewRunner(
@@ -49,28 +49,16 @@ func NewRunner(
 	walletSvc nodes.WalletSigner,
 	relayBaseURL string,
 	platformSpendEncMnemonic string,
-	usdcAssetID uint64,
-	platformWalletAddress string,
-	platformWalletEncMnemonic string,
-	facilitatorClient *x402.FacilitatorClient,
-	relayNetwork string,
-	relayFeePayer string,
-	maxRelayOutboundUSDMicros int64,
+	x402Cfg X402Config,
 ) *Runner {
 	return &Runner{
-		store:                     store,
-		broker:                    broker,
-		walletSvc:                 walletSvc,
-		registry:                  newRunRegistry(),
-		relayBaseURL:              relayBaseURL,
-		platformSpendEncMnemonic:  platformSpendEncMnemonic,
-		usdcAssetID:               usdcAssetID,
-		platformWalletAddress:     platformWalletAddress,
-		platformWalletEncMnemonic: platformWalletEncMnemonic,
-		facilitatorClient:         facilitatorClient,
-		relayNetwork:              relayNetwork,
-		relayFeePayer:             relayFeePayer,
-		maxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
+		store:                    store,
+		broker:                   broker,
+		walletSvc:                walletSvc,
+		registry:                 newRunRegistry(),
+		relayBaseURL:             relayBaseURL,
+		platformSpendEncMnemonic: platformSpendEncMnemonic,
+		x402:                     x402Cfg,
 	}
 }
 
@@ -232,11 +220,11 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 	fundCfg := nodes.RunPreFundConfig{
 		USDCSigner:               usdcSigner,
 		PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
-		Facilitator:              r.facilitatorClient,
-		PlatformWalletAddress:    r.platformWalletAddress,
-		RelayNetwork:             r.relayNetwork,
-		RelayFeePayer:            r.relayFeePayer,
-		ExpectedAssetID:          r.usdcAssetID,
+		Facilitator:              r.x402.FacilitatorClient,
+		PlatformWalletAddress:    r.x402.PlatformWalletAddress,
+		RelayNetwork:             r.x402.RelayNetwork,
+		RelayFeePayer:            r.x402.RelayFeePayer,
+		ExpectedAssetID:          r.x402.USDCAssetID,
 		PublicBaseURL:            r.relayBaseURL,
 	}
 	txID, err := nodes.FundRunReserve(ctx, fundCfg, run.ID, estimate)
@@ -469,17 +457,17 @@ func (r *Runner) executeNode(
 		relayCfg := nodes.X402RelayConfig{
 			USDCSigner:               usdcSigner,
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
-			ExpectedAssetID:          r.usdcAssetID,
+			ExpectedAssetID:          r.x402.USDCAssetID,
 			RelayBaseURL:             r.relayBaseURL,
 			Ledger:                   runLedger,
 			RunFundingID:             runFundingID, // "" => existing unmodified per-call public-relay path
 			Wallet2: nodes.Wallet2PayConfig{
 				USDCSigner:                usdcSigner,
-				PlatformWalletEncMnemonic: r.platformWalletEncMnemonic,
-				USDCAssetID:               r.usdcAssetID,
-				RelayFeePayer:             r.relayFeePayer,
-				RelayNetwork:              r.relayNetwork,
-				MaxRelayOutboundUSDMicros: r.maxRelayOutboundUSDMicros,
+				PlatformWalletEncMnemonic: r.x402.PlatformWalletEncMnemonic,
+				USDCAssetID:               r.x402.USDCAssetID,
+				RelayFeePayer:             r.x402.RelayFeePayer,
+				RelayNetwork:              r.x402.RelayNetwork,
+				MaxRelayOutboundUSDMicros: r.x402.MaxRelayOutboundUSDMicros,
 			},
 			RecordSettlement: func(cctx context.Context, target string, amountUSDMicros int64, settled bool) error {
 				row, err := r.store.RecordRunFundedSettlement(cctx, runFundingID, target, amountUSDMicros)
@@ -568,7 +556,7 @@ func (r *Runner) executeNode(
 		relayCfg := nodes.X402RelayConfig{
 			USDCSigner:               usdcSigner,
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
-			ExpectedAssetID:          r.usdcAssetID,
+			ExpectedAssetID:          r.x402.USDCAssetID,
 			RelayBaseURL:             r.relayBaseURL,
 			Ledger:                   r.newPaymentLedger(wf, run),
 		}
