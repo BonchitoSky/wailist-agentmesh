@@ -1,60 +1,582 @@
 "use client";
 import { useState } from "react";
-import { RazorpayCheckoutButton } from "@/components/billing/RazorpayCheckoutButton";
+import { useRouter } from "next/navigation";
+import {
+  Logo,
+  Pill,
+  Hairline,
+  IconArrow,
+  IconWallet,
+  ghostBtnSm,
+} from "@/components/ui";
+import { useAuth } from "@/hooks/useAuth";
+import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
+import { CheckoutModal } from "@/components/checkout/CheckoutModal";
+import { useCredits } from "@/lib/credits/store";
+import { bonusRate, creditsForTopup } from "@/lib/credits/fx";
 
-const PRESETS_INR_PAISE = [10000, 50000, 100000, 200000]; // ₹100, ₹500, ₹1000, ₹2000
+const PRESETS_INR = [100, 500, 1000, 2000];
+const LOW_BALANCE_USD = 5;
+
+const HOW_IT_WORKS = [
+  "Credits are spent as your agents call paid tools, x402 endpoints, and LLM providers.",
+  "Testnet usage is always free — you only pay for mainnet calls.",
+  "Top-ups of ₹1000 or more earn 5% bonus credits.",
+  "Every purchase generates a printable receipt for your records.",
+];
+
+const BILLING_CSS = `
+.bill-reveal { animation: fade-up 0.45s var(--ease) both; }
+.bill-preset { transition: transform 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease); }
+.bill-preset:hover { transform: translateY(-2px); border-color: var(--border-strong); }
+.bill-cta { transition: transform 0.12s var(--ease), box-shadow 0.2s var(--ease); }
+.bill-cta:not(:disabled):hover { box-shadow: 0 12px 34px var(--accent-glow); }
+.bill-cta:not(:disabled):active { transform: scale(0.99); }
+.bill-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 900px) { .bill-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) {
+  .bill-reveal, .bill-preset, .bill-cta { animation: none; transition: none; }
+}
+`;
+
+const panelStyle: React.CSSProperties = {
+  background: "var(--bg-elev-1)",
+  border: "1px solid var(--border)",
+  borderRadius: "var(--r-3)",
+  padding: 20,
+};
+
+const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
 
 export default function BillingPage() {
-  const [amountPaise, setAmountPaise] = useState(PRESETS_INR_PAISE[1]);
+  const router = useRouter();
+  const { signOut } = useAuth();
+  const { balanceUSD, lastPurchase } = useCredits();
+  const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
 
-  const effectiveAmountPaise = customINR
-    ? Math.round(parseFloat(customINR) * 100)
-    : amountPaise;
+  const openCheckoutFor = (inr: number) => {
+    setCustomINR(String(inr));
+    setCheckoutOpen(true);
+  };
+
+  const handleSignOut = async () => {
+    await signOut();
+    router.push("/");
+  };
+
+  const parsedCustom = customINR ? parseFloat(customINR) : NaN;
+  const effectiveINR = customINR
+    ? Number.isFinite(parsedCustom)
+      ? parsedCustom
+      : 0
+    : amountINR;
+  const checkoutAmountINR = effectiveINR >= 1 ? effectiveINR : 0;
+  const canCheckout = checkoutAmountINR > 0;
+  const credits = creditsForTopup(checkoutAmountINR);
+  const isLow = balanceUSD < LOW_BALANCE_USD;
 
   return (
-    <div style={{ maxWidth: 480, margin: "48px auto", padding: 24 }}>
-      <h1 style={{ fontSize: 20, fontWeight: 600, marginBottom: 16 }}>Add credits</h1>
+    <div
+      style={{
+        height: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        background: "var(--bg)",
+      }}
+    >
+      <style>{BILLING_CSS}</style>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {PRESETS_INR_PAISE.map((p) => (
-          <button
-            key={p}
-            onClick={() => { setAmountPaise(p); setCustomINR(""); }}
-            style={{
-              height: 32, padding: "0 12px", borderRadius: 6,
-              border: amountPaise === p && !customINR ? "1px solid var(--accent)" : "1px solid var(--border)",
-              background: "transparent", cursor: "pointer",
-            }}
-          >
-            ₹{p / 100}
-          </button>
-        ))}
+      {/* Topbar — matches the workflows / usage pages */}
+      <div
+        style={{
+          height: 56,
+          flexShrink: 0,
+          background: "var(--bg-elev-1)",
+          borderBottom: "1px solid var(--border)",
+          padding: "0 24px",
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+        }}
+      >
+        <button
+          onClick={() => router.push("/")}
+          style={{
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+            padding: 0,
+          }}
+        >
+          <Logo size={18} />
+        </button>
+        <Hairline vertical length={22} />
+        <Pill mono dot tone="ok">
+          testnet
+        </Pill>
+        <div style={{ flex: 1 }} />
+        <button style={ghostBtnSm} onClick={() => router.push("/workflows")}>
+          Workflows
+        </button>
+        <button style={ghostBtnSm} onClick={() => router.push("/usage")}>
+          Usage
+        </button>
+        <button
+          style={{
+            ...ghostBtnSm,
+            borderColor: "var(--accent-line)",
+            color: "var(--accent)",
+          }}
+        >
+          Credits
+        </button>
+        <Hairline vertical length={22} />
+        <button style={ghostBtnSm} onClick={handleSignOut}>
+          Sign out
+        </button>
+        <div
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 999,
+            background: "var(--accent)",
+            color: "var(--accent-fg)",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 11,
+            fontWeight: 700,
+          }}
+        >
+          AC
+        </div>
       </div>
 
-      <input
-        type="number"
-        placeholder="Custom amount (INR)"
-        value={customINR}
-        onChange={(e) => setCustomINR(e.target.value)}
-        style={{
-          width: "100%", height: 36, padding: "0 12px", borderRadius: 6,
-          border: "1px solid var(--border)", marginBottom: 16,
-        }}
-      />
+      {/* Main scroll area */}
+      <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>
+        <div
+          style={{
+            maxWidth: 1040,
+            margin: "0 auto",
+            padding: "40px 24px 96px",
+          }}
+        >
+          {/* Header */}
+          <div className="bill-reveal" style={{ marginBottom: 24 }}>
+            <h1
+              style={{
+                fontSize: 26,
+                fontWeight: 700,
+                letterSpacing: "-0.02em",
+                margin: 0,
+                color: "var(--fg)",
+              }}
+            >
+              Add credits
+            </h1>
+            <p
+              style={{
+                margin: "6px 0 0",
+                fontSize: 14,
+                color: "var(--fg-muted)",
+                lineHeight: 1.5,
+              }}
+            >
+              Credits are spent as your agents call paid tools and models. Top
+              up anytime — testnet usage stays free.
+            </p>
+          </div>
 
-      {effectiveAmountPaise >= 100 ? (
-        <RazorpayCheckoutButton
-          amountINRPaise={effectiveAmountPaise}
-          onSuccess={(credited) => setMessage(`Credited $${(credited / 1e6).toFixed(2)}`)}
-          onError={(err) => setMessage(`Error: ${err}`)}
+          <div className="bill-grid">
+            {/* MAIN column */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              {/* Balance hero */}
+              <div
+                className="bill-reveal"
+                style={{
+                  animationDelay: "0.05s",
+                  position: "relative",
+                  overflow: "hidden",
+                  background:
+                    "linear-gradient(135deg, var(--bg-elev-2), var(--bg-elev-1))",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--r-3)",
+                  padding: 20,
+                }}
+              >
+                <div
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    top: -60,
+                    right: -40,
+                    width: 200,
+                    height: 200,
+                    borderRadius: 999,
+                    background: "var(--accent-glow)",
+                    filter: "blur(60px)",
+                    opacity: 0.5,
+                    pointerEvents: "none",
+                  }}
+                />
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    position: "relative",
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 7,
+                        color: "var(--fg-muted)",
+                        fontSize: 12,
+                        fontWeight: 500,
+                      }}
+                    >
+                      <IconWallet size={14} /> Wallet balance
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 8,
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 34,
+                        fontWeight: 600,
+                        letterSpacing: "-0.01em",
+                        color: "var(--fg)",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {fmtUSD(balanceUSD)}
+                    </div>
+                  </div>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      height: 24,
+                      padding: "0 10px",
+                      borderRadius: 999,
+                      fontSize: 11,
+                      fontWeight: 500,
+                      border: `1px solid ${isLow ? "rgba(255,181,71,0.35)" : "var(--accent-line)"}`,
+                      background: isLow
+                        ? "var(--warm-soft)"
+                        : "var(--accent-soft)",
+                      color: isLow ? "var(--warm)" : "var(--accent)",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: 999,
+                        background: isLow ? "var(--warm)" : "var(--accent)",
+                      }}
+                    />
+                    {isLow ? "Low balance" : "Active"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Top-up panel */}
+              <div
+                className="bill-reveal"
+                style={{ ...panelStyle, animationDelay: "0.1s" }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--fg-muted)",
+                    marginBottom: 12,
+                  }}
+                >
+                  Choose an amount
+                </div>
+
+                {/* Preset cards */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(4, 1fr)",
+                    gap: 8,
+                  }}
+                >
+                  {PRESETS_INR.map((inr) => {
+                    const selected = !customINR && amountINR === inr;
+                    const hasBonus = bonusRate(inr) > 0;
+                    return (
+                      <button
+                        key={inr}
+                        type="button"
+                        className="bill-preset"
+                        onClick={() => {
+                          setAmountINR(inr);
+                          setCustomINR("");
+                        }}
+                        style={{
+                          position: "relative",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "flex-start",
+                          gap: 3,
+                          padding: "12px 12px 11px",
+                          borderRadius: "var(--r-2)",
+                          border: `1px solid ${selected ? "var(--accent)" : "var(--border)"}`,
+                          background: selected
+                            ? "var(--accent-soft)"
+                            : "var(--bg)",
+                          cursor: "pointer",
+                          boxShadow: selected
+                            ? "0 0 0 3px var(--accent-soft)"
+                            : "none",
+                          fontFamily: "var(--font-sans)",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: 16,
+                            fontWeight: 700,
+                            color: "var(--fg)",
+                            letterSpacing: "-0.01em",
+                          }}
+                        >
+                          ₹{inr}
+                        </span>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            color: "var(--fg-dim)",
+                            fontFamily: "var(--font-mono)",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        >
+                          ≈ {fmtUSD(creditsForTopup(inr))}
+                        </span>
+                        {hasBonus && (
+                          <span
+                            style={{
+                              position: "absolute",
+                              top: 8,
+                              right: 8,
+                              fontSize: 9,
+                              fontWeight: 700,
+                              color: "var(--accent)",
+                              background: "var(--accent-soft)",
+                              border: "1px solid var(--accent-line)",
+                              borderRadius: 999,
+                              padding: "1px 5px",
+                            }}
+                          >
+                            +5%
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Custom amount */}
+                <div style={{ marginTop: 14 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      height: 42,
+                      padding: "0 12px",
+                      borderRadius: "var(--r-2)",
+                      border: `1px solid ${customINR ? "var(--accent-line)" : "var(--border)"}`,
+                      background: "var(--bg)",
+                    }}
+                  >
+                    <span style={{ color: "var(--fg-muted)", fontSize: 15 }}>
+                      ₹
+                    </span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      placeholder="Custom amount"
+                      value={customINR}
+                      onChange={(e) => setCustomINR(e.target.value)}
+                      style={{
+                        flex: 1,
+                        height: "100%",
+                        background: "transparent",
+                        border: "none",
+                        outline: "none",
+                        color: "var(--fg)",
+                        fontSize: 14,
+                        fontFamily: "var(--font-sans)",
+                      }}
+                    />
+                    {canCheckout && (
+                      <span
+                        style={{
+                          fontSize: 12,
+                          color: "var(--fg-muted)",
+                          fontFamily: "var(--font-mono)",
+                          fontVariantNumeric: "tabular-nums",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        ≈ {fmtUSD(credits)} credits
+                      </span>
+                    )}
+                  </div>
+                  <p
+                    style={{
+                      margin: "8px 2px 0",
+                      fontSize: 11,
+                      color: "var(--fg-dim)",
+                    }}
+                  >
+                    Get 5% bonus credits on top-ups of ₹1000 or more.
+                  </p>
+                </div>
+
+                {lastPurchase && (
+                  <button
+                    type="button"
+                    onClick={() => openCheckoutFor(lastPurchase.amountINR)}
+                    style={{
+                      width: "100%",
+                      height: 36,
+                      marginTop: 14,
+                      borderRadius: "var(--r-2)",
+                      border: "1px solid var(--accent-line)",
+                      background: "var(--accent-soft)",
+                      color: "var(--accent)",
+                      fontSize: 12.5,
+                      fontWeight: 500,
+                      cursor: "pointer",
+                    }}
+                  >
+                    ↻ Repeat last top-up · ₹{lastPurchase.amountINR}
+                  </button>
+                )}
+
+                {/* Primary CTA */}
+                <button
+                  type="button"
+                  className="bill-cta"
+                  onClick={() => setCheckoutOpen(true)}
+                  disabled={!canCheckout}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    width: "100%",
+                    height: 46,
+                    marginTop: 14,
+                    borderRadius: "var(--r-2)",
+                    border: "1px solid var(--accent-line)",
+                    background: canCheckout
+                      ? "linear-gradient(180deg, var(--accent), var(--accent-strong))"
+                      : "var(--bg-elev-2)",
+                    color: canCheckout ? "var(--accent-fg)" : "var(--fg-dim)",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    cursor: canCheckout ? "pointer" : "default",
+                    boxShadow: canCheckout
+                      ? "0 8px 24px var(--accent-glow)"
+                      : "none",
+                    fontFamily: "var(--font-sans)",
+                  }}
+                >
+                  {canCheckout ? (
+                    <>
+                      Continue to checkout · ₹{checkoutAmountINR.toFixed(2)}
+                      <IconArrow size={13} />
+                    </>
+                  ) : (
+                    "Enter an amount of ₹1 or more"
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* SIDEBAR column */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              {/* How credits work */}
+              <div
+                className="bill-reveal"
+                style={{ ...panelStyle, animationDelay: "0.15s" }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--fg-muted)",
+                    marginBottom: 14,
+                  }}
+                >
+                  How credits work
+                </div>
+                <ul
+                  style={{
+                    margin: 0,
+                    padding: 0,
+                    listStyle: "none",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 12,
+                  }}
+                >
+                  {HOW_IT_WORKS.map((item) => (
+                    <li
+                      key={item}
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        fontSize: 12.5,
+                        lineHeight: 1.5,
+                        color: "var(--fg-muted)",
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        style={{
+                          flexShrink: 0,
+                          width: 5,
+                          height: 5,
+                          marginTop: 7,
+                          borderRadius: 999,
+                          background: "var(--accent)",
+                        }}
+                      />
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Billing history */}
+              <div className="bill-reveal" style={{ animationDelay: "0.2s" }}>
+                <PurchaseHistory onBuyAgain={openCheckoutFor} />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {checkoutOpen && (
+        <CheckoutModal
+          open
+          amountINR={checkoutAmountINR}
+          onClose={() => setCheckoutOpen(false)}
         />
-      ) : (
-        <p style={{ color: "var(--danger)", fontSize: 13 }}>Minimum amount is ₹1</p>
       )}
-
-      {message && <p style={{ marginTop: 16, fontSize: 13 }}>{message}</p>}
     </div>
   );
 }

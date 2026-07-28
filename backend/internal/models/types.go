@@ -188,9 +188,45 @@ type CreditTransaction struct {
 	ProviderOrderID   string     `json:"providerOrderId"`
 	ProviderPaymentID *string    `json:"providerPaymentId,omitempty"`
 	Status            string     `json:"status"`
-	AmountINRPaise    int64      `json:"amountInrPaise"`
-	FXRateUSDPerINR   float64    `json:"fxRateUsdPerInr"`
+	AmountINRPaise    *int64     `json:"amountInrPaise,omitempty"`
+	FXRateUSDPerINR   *float64   `json:"fxRateUsdPerInr,omitempty"`
+	AmountUSDCents    *int64     `json:"amountUsdCents,omitempty"`
 	CreditUSDMicros   int64      `json:"creditUsdMicros"`
 	CreatedAt         time.Time  `json:"createdAt"`
 	CompletedAt       *time.Time `json:"completedAt,omitempty"`
+}
+
+// DebitEntry is one row of the append-only debit_ledger table — a platform
+// fee charged against a user's credit balance for a metered action inside
+// a workflow run.
+type DebitEntry struct {
+	ID              string    `json:"id"`
+	UserID          string    `json:"userId"`
+	WorkflowID      string    `json:"workflowId"`
+	RunID           string    `json:"runId"`
+	NodeID          string    `json:"nodeId"`
+	Kind            string    `json:"kind"`
+	AmountUSDMicros int64     `json:"amountUsdMicros"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
+const (
+	DebitKindByokFlatFee     = "byok_flat_fee"
+	DebitKindX402PlatformFee = "x402_platform_fee"
+	DebitKindX402RelayCost   = "x402_relay_cost"
+)
+
+const (
+	ByokFlatFeeUSDMicros     int64 = 10_000  // $0.01
+	X402PlatformFeeUSDMicros int64 = 500_000 // $0.50
+)
+
+type X402RelaySettlement struct {
+	ID                string    `json:"id"`
+	TargetURL         string    `json:"targetUrl"`
+	InboundTxID       string    `json:"inboundTxId"`
+	OutboundTxID      *string   `json:"outboundTxId,omitempty"`
+	AmountAssetMicros int64     `json:"amountAssetMicros"`
+	Status            string    `json:"status"`
+	CreatedAt         time.Time `json:"createdAt"`
 }

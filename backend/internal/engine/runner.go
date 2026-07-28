@@ -3,7 +3,9 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,18 +18,102 @@ import (
 )
 
 type Runner struct {
-	store     *db.Store
-	broker    *sse.Broker
-	walletSvc nodes.WalletSigner
-	registry  *runRegistry
+	store                    *db.Store
+	broker                   *sse.Broker
+	walletSvc                nodes.WalletSigner
+	registry                 *runRegistry
+	relayBaseURL             string
+	platformSpendEncMnemonic string
+	usdcAssetID              uint64
 }
 
-func NewRunner(store *db.Store, broker *sse.Broker, walletSvc nodes.WalletSigner) *Runner {
+func NewRunner(store *db.Store, broker *sse.Broker, walletSvc nodes.WalletSigner, relayBaseURL string, platformSpendEncMnemonic string, usdcAssetID uint64) *Runner {
 	return &Runner{
-		store:     store,
-		broker:    broker,
-		walletSvc: walletSvc,
-		registry:  newRunRegistry(),
+		store:                    store,
+		broker:                   broker,
+		walletSvc:                walletSvc,
+		registry:                 newRunRegistry(),
+		relayBaseURL:             relayBaseURL,
+		platformSpendEncMnemonic: platformSpendEncMnemonic,
+		usdcAssetID:              usdcAssetID,
+	}
+}
+
+// preflightCheck fails a node before it runs if wf.UserID can't cover
+// amountUSDMicros. Blocks outright — no soft overage — matching the
+// prepaid-only model already used for credit top-ups.
+func (r *Runner) preflightCheck(ctx context.Context, wf models.Workflow, amountUSDMicros int64) error {
+	balance, err := r.store.GetCreditBalance(ctx, wf.UserID)
+	if err != nil {
+		return err
+	}
+	if balance < amountUSDMicros {
+		return fmt.Errorf("insufficient credits: balance %d micros, need %d micros", balance, amountUSDMicros)
+	}
+	return nil
+}
+
+// debitOrLog charges amountUSDMicros against wf.UserID for nodeID and just
+// logs on failure rather than failing the node — the node already ran
+// successfully by the time this is called, so there's nothing left to roll
+// back (x402 payments in particular can't be undone once sent on-chain).
+func (r *Runner) debitOrLog(ctx context.Context, wf models.Workflow, run models.Run, nodeID string, amountUSDMicros int64, kind string) {
+	if err := r.store.DebitCredits(ctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
+		log.Printf("debit failed: user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
+			wf.UserID, wf.ID, run.ID, nodeID, kind, amountUSDMicros, err)
+	}
+}
+
+// ledgerCompensationTimeout bounds Commit/Release calls once they're
+// detached from the triggering request's context (see newPaymentLedger) —
+// long enough for a single locked UPDATE, short enough not to hang a
+// terminating process indefinitely.
+const ledgerCompensationTimeout = 10 * time.Second
+
+// newPaymentLedger builds the reserve/commit/release closures a real
+// on-chain tool402 payment (either dialect, standalone or agent-attached)
+// uses to atomically decrement the user's balance at the moment a payment
+// is committed to, before it's attempted — instead of checking balance and
+// only debiting afterward, which would let multiple calls within the same
+// node execution (an agent's sequential tool loop, or concurrent standalone
+// tool402 nodes in the same topology level) all pass a check against the
+// same stale balance and collectively overspend past what the user can
+// cover. See nodes.PaymentLedger.
+//
+// Commit and Release are compensating actions for money that has already
+// moved (or a reservation that must be undone) — they run with
+// context.WithoutCancel, not the caller's cctx. If they inherited a
+// cancelled/deadline-exceeded context (e.g. Runner.Stop firing mid-payment,
+// or the outbound HTTP call timing out), the resulting DB call would be a
+// no-op that neither writes the debit_ledger row nor restores the reserved
+// balance, silently stranding the reservation as a permanent, unledgered
+// credit loss. UpdateRunLog already establishes this same
+// context.Background()-after-cancellation convention elsewhere in Run.
+func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.PaymentLedger {
+	return nodes.PaymentLedger{
+		Reserve: func(cctx context.Context, amountUSDMicros int64) error {
+			return r.store.ReserveCredits(cctx, wf.UserID, amountUSDMicros)
+		},
+		Commit: func(cctx context.Context, nodeID string, amountUSDMicros int64, kind string) {
+			bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
+			defer cancel()
+			if err := r.store.CommitReservedDebit(bctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
+				msg := fmt.Sprintf("CRITICAL: commit reserved debit failed (balance already decremented, no ledger row written): user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
+					wf.UserID, wf.ID, run.ID, nodeID, kind, amountUSDMicros, err)
+				log.Print(msg)
+				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+			}
+		},
+		Release: func(cctx context.Context, amountUSDMicros int64) {
+			bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
+			defer cancel()
+			if err := r.store.ReleaseReservedCredits(bctx, wf.UserID, amountUSDMicros); err != nil {
+				msg := fmt.Sprintf("CRITICAL: release reserved credits failed (balance permanently stranded): user=%s workflow=%s run=%s amount=%d: %v",
+					wf.UserID, wf.ID, run.ID, amountUSDMicros, err)
+				log.Print(msg)
+				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+			}
+		},
 	}
 }
 
@@ -123,7 +209,7 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run) {
 					Status:    models.LogStatusRunning,
 				})
 
-				result, execErr := r.executeNode(ctx, n, attachMap, walletByAgent, rc, run)
+				result, execErr := r.executeNode(ctx, n, attachMap, walletByAgent, rc, run, wf)
 				dur := int(time.Since(start).Milliseconds())
 
 				if execErr != nil {
@@ -191,6 +277,7 @@ func (r *Runner) executeNode(
 	walletByAgent map[string]models.AgentWallet,
 	rc *RunContext,
 	run models.Run,
+	wf models.Workflow,
 ) (any, error) {
 	switch node.Type {
 	case models.NodeTypeTrigger:
@@ -198,14 +285,77 @@ func (r *Runner) executeNode(
 	case models.NodeTypeEnd:
 		return rc.Message(), nil
 	case models.NodeTypeAgent:
+		if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
+			return nil, err
+		}
 		aw := walletByAgent[node.ID]
-		return nodes.ExecuteAgent(ctx, node, attachMap[node.ID], aw, r.walletSvc, rc)
+		checkBalance := func(cctx context.Context, amount int64) error {
+			return r.preflightCheck(cctx, wf, amount)
+		}
+		// r.walletSvc's dynamic type (*wallet.Service) also satisfies
+		// USDCGroupSigner (same nil-safe assertion as the NodeTypeTool402
+		// case below) — an agent-attached tool402 call routes through the
+		// same relay/Wallet 1 path as a standalone one.
+		usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
+		relayCfg := nodes.X402RelayConfig{
+			USDCSigner:               usdcSigner,
+			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
+			ExpectedAssetID:          r.usdcAssetID,
+			RelayBaseURL:             r.relayBaseURL,
+			Ledger:                   r.newPaymentLedger(wf, run),
+		}
+		result, err := nodes.ExecuteAgent(ctx, node, attachMap[node.ID], aw, r.walletSvc, rc, checkBalance, relayCfg)
+		if err != nil {
+			// A *nodes.ErrBalanceBlocked failure means the agent's own LLM
+			// turn already completed and only ran into insufficient balance
+			// when it tried an attached call — the agent's own flat fee is
+			// still owed. Any other error (e.g. LLM connectivity failure)
+			// means the agent turn itself never completed, so nothing is
+			// billed, matching the pre-existing behavior for those failures.
+			var blocked *nodes.ErrBalanceBlocked
+			if errors.As(err, &blocked) {
+				r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
+			}
+			return nil, err
+		}
+		r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
+		if m, ok := result.(map[string]any); ok {
+			// x402Payments entries are already reserved+committed via
+			// relayCfg.Ledger from inside ExecuteAgent's tool-calling loop, at
+			// the moment each payment settled — not batched here. Batching the
+			// debit until after the whole agent turn completes would let every
+			// iteration of the loop check the same stale balance and
+			// collectively overspend past what the user can cover; see
+			// newPaymentLedger. This entry is retained in the result only so
+			// Run() can still publish a log/SSE event per payment below.
+			if nodeIDs, ok := m["billedFlatFeeNodeIds"].([]string); ok {
+				for _, nodeID := range nodeIDs {
+					r.debitOrLog(ctx, wf, run, nodeID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
+				}
+			}
+		}
+		return result, nil
 	case models.NodeTypeProvider:
 		return rc.Message(), nil
 	case models.NodeTypeTool:
-		return nodes.ExecuteTool(ctx, node, rc)
+		billable := nodes.BillableFlatFee(node.Type, node.Template)
+		if billable {
+			if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
+				return nil, err
+			}
+		}
+		result, err := nodes.ExecuteTool(ctx, node, rc)
+		if err != nil {
+			return nil, err
+		}
+		if billable {
+			r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
+		}
+		return result, nil
 	case models.NodeTypeTool402:
-		// Find the agent that has this tool attached and use its wallet.
+		// Find the agent that has this tool attached and use its wallet (only
+		// the legacy direct-pay dialect still needs this; the relay dialect
+		// pays from the platform's own Wallet 1 spend wallet instead).
 		var aw models.AgentWallet
 		for agentID, cfg := range attachMap {
 			for _, t := range cfg.Tools {
@@ -214,9 +364,44 @@ func (r *Runner) executeNode(
 				}
 			}
 		}
-		return nodes.ExecuteTool402(ctx, node, rc, aw, r.walletSvc)
+		// r.walletSvc's dynamic type (*wallet.Service) also satisfies
+		// USDCGroupSigner (Task 3); the assertion is nil-safe if a test double
+		// only implements WalletSigner, and ExecuteTool402V2 falls back to a
+		// graceful "no wallet configured" result rather than paying via relay.
+		usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
+		// Cheap, conservative guard before any network call to node.Endpoint —
+		// see the matching comment in provider.go's executeFunctionCall. The
+		// real, exact-amount reservation happens inside ExecuteTool402V2 via
+		// ledger below.
+		if err := r.preflightCheck(ctx, wf, models.X402PlatformFeeUSDMicros); err != nil {
+			return nil, err
+		}
+		ledger := r.newPaymentLedger(wf, run)
+		paymentResult, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, usdcSigner, r.platformSpendEncMnemonic, r.usdcAssetID, r.relayBaseURL, ledger)
+		if err != nil {
+			return nil, err
+		}
+		// Already reserved+committed via ledger inside ExecuteTool402V2, at
+		// the moment the payment settled — see newPaymentLedger.
+		return paymentResult.Response, nil
 	case models.NodeTypeAction:
-		return nodes.ExecuteAction(ctx, node, rc)
+		billable := nodes.BillableFlatFee(node.Type, node.Template)
+		if billable {
+			if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
+				return nil, err
+			}
+		}
+		result, err := nodes.ExecuteAction(ctx, node, rc)
+		if err != nil {
+			if errors.Is(err, nodes.ErrActionSkipped) {
+				return result, nil
+			}
+			return nil, err
+		}
+		if billable {
+			r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
+		}
+		return result, nil
 	default:
 		return nil, nil
 	}
