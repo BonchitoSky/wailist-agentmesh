@@ -136,13 +136,42 @@ above if it becomes an operational concern.
 When an agent node has attached v2 tool402 nodes, those tools now settle a
 single inbound payment upfront before the agent's tool-calling loop begins,
 sized to the sum of those tools' real current quotes (via
-`FundRunReserve`). This replaces the previous per-call settlement pattern.
+`FundRunReserve`) — never padded above what was actually quoted. This
+replaces the previous per-call settlement pattern for this traffic.
 
 Each subsequent real downstream tool402 call within the agent's loop pays out
 of Wallet 2 via a direct in-process function call (`PayTargetFromWallet2`),
 never through the public `/x402/relay` endpoint. These settlements are
 recorded via the `x402_run_fundings` table (keyed by `run_funding_id`) for
-audit and operational tracking.
+audit and operational tracking. The public relay endpoint itself is
+byte-for-byte unmodified — it's still the only entry point for standalone
+tool402 nodes and any real external x402 client.
+
+**Graceful degradation:** if the platform spend wallet (Wallet 1) isn't
+configured — no `PLATFORM_SPEND_WALLET_ENC_MNEMONIC`, or a `walletSvc` that
+doesn't implement the signer interface this path needs — an agent with
+attached v2 tools falls back to the old per-call path rather than failing or
+crashing. No credits are reserved in this case; the fallback is a true no-op
+from the credit ledger's perspective.
+
+**A legacy-dialect tool attached alongside a v2 tool on the same agent is
+completely unaffected**, even when that agent is otherwise run-funded — it
+always bills through its own independent, DB-backed per-call ledger, never
+the run-level in-memory pool. (An earlier version of this feature let a
+co-attached legacy tool draw against the v2 pool by mistake; this was caught
+and fixed before merge — see `X402RelayConfig.LegacyLedger` /
+`RunFundedToolIDs` in `internal/engine/nodes/tool402.go`.)
+
+**If the run-funding audit write fails after the money has already moved
+on-chain** (`RecordRunFunding` erroring after a successful `FundRunReserve`),
+the run fails loudly rather than silently falling back to the per-call path —
+falling back in that state would let a second, full inbound settlement
+happen for the same run (Wallet 1 paying twice). The DB credit reservation is
+deliberately *not* released when this happens, since the money is real and
+already sitting in Wallet 2 (our own wallet) — reconcile it by hand against
+the `x402_run_fundings` table using the `alert.ChannelPayments` notification
+(logged as `CRITICAL: run funding settled on-chain (tx ...) but
+RecordRunFunding failed`) as the starting point.
 
 Because Wallet 2 now absorbs the upfront estimate before the full agent loop
 runs, it may carry a temporarily larger balance per in-flight run — the
@@ -155,3 +184,30 @@ unspent estimates, not just daily throughput spread.
 Note: An agent with no attached v2 tool402 nodes (or only legacy-dialect
 ones) is unaffected and continues to use the completely unmodified per-call
 path through the public relay.
+
+### How this changes the three known limitations above, for run-funded traffic
+
+Standalone tool402 nodes and any real external caller still go through the
+completely unmodified public relay, so all three limitations above apply to
+that traffic exactly as documented. For run-level-funded traffic specifically:
+
+- **Relay-timeout ambiguity: narrowed, not eliminated.** Run-funded calls no
+  longer make the orchestrator's own self-HTTP-hop to `/x402/relay` —
+  `FundRunReserve`/`PayTargetFromWallet2` are direct in-process calls, so
+  that exact shape of ambiguity goes away for this traffic. A smaller-stakes
+  version reappears: if `FundRunReserve`'s call to the *external* GoPlausible
+  facilitator times out, the run can't tell whether the bulk settle actually
+  landed before deciding how to fail — lower severity than the original
+  (both wallets involved are ours, so a wrong call here is a
+  bookkeeping/accounting risk, not a lost-funds one), but not fully solved.
+- **Quote price-drift: genuinely improved.** The run-level per-call executor
+  fetches a target's price once and pays against that same quote
+  immediately, closing the two-fetch drift window entirely for run-funded
+  calls. `MAX_RELAY_OUTBOUND_USD_MICROS` still applies as a backstop.
+- **Hard process kill stranding credits: made worse for run-funded traffic,
+  not addressed.** The exposure window widens from one call's
+  Reserve→Commit/Release cycle to the entire agent tool-calling loop's
+  duration (up to 15 iterations) until `cleanup` finally runs after the
+  agent node returns. A crash anywhere in that longer window strands the
+  whole unspent portion of the run's estimate, not one call's worth. Not
+  fixed here; the same deferred fix (a graceful-shutdown drain) applies.
