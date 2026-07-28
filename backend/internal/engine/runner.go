@@ -279,6 +279,19 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 	}
 	txID, err := nodes.FundRunReserve(ctx, fundCfg, run.ID, estimate)
 	if err != nil {
+		if errors.Is(err, nodes.ErrSettlementIndeterminate) {
+			// The settle response was lost -- we don't know whether the
+			// payment actually went through. Releasing the reservation
+			// here could refund a user for money that already left Wallet
+			// 1. Hold it, alert, and fail the run so an operator can
+			// reconcile by hand, matching the same "money might have
+			// already moved" caution the RecordRunFunding-failure branch
+			// below already applies at the next step in this flow.
+			log.Printf("CRITICAL: run pre-fund settle response lost, fate unknown, reservation held: user=%s workflow=%s run=%s amount=%d: %v",
+				wf.UserID, wf.ID, run.ID, estimate, err)
+			go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("run pre-fund settle indeterminate, reservation held: user=%s amount=%d", wf.UserID, estimate))
+			return runFundResult{}, fmt.Errorf("x402 run funding: settlement indeterminate, failing rather than risking a refund for money already sent: %w", err)
+		}
 		bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ledgerCompensationTimeout)
 		defer cancel()
 		if relErr := r.store.ReleaseReservedCredits(bctx, wf.UserID, estimate); relErr != nil {
