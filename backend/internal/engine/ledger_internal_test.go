@@ -116,6 +116,69 @@ func TestPaymentLedgerCommitAndReleaseSurviveCancelledContext(t *testing.T) {
 	}
 }
 
+// TestRecordRunFundedSettlementSurvivesCancelledContext is a regression test
+// for the same phantom-audit-loss bug TestPaymentLedgerCommitAndRelease...
+// covers for newPaymentLedger's Commit/Release: the RecordSettlement
+// closure wired into X402RelayConfig by executeNode's NodeTypeAgent case
+// used to run on the caller's own cctx, so a StopWorkflow call arriving
+// right after a real run-funded payment signed and sent would cancel the
+// context before the audit row (x402_relay_settlements) could be written --
+// silently losing the record of a real, already-committed payment. It now
+// runs on context.WithoutCancel, matching every sibling Commit/Release
+// closure in this file.
+func TestRecordRunFundedSettlementSurvivesCancelledContext(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	store, err := db.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+
+	email := fmt.Sprintf("record-settlement-cancelled-ctx-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(context.Background(), email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, err := store.CreateWorkflow(context.Background(), "Record Settlement Cancelled Ctx Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+	wf.UserID = user.ID
+	run, err := store.CreateRun(context.Background(), wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inboundTxID := fmt.Sprintf("RECORD-SETTLE-CANCEL-%d", time.Now().UnixNano())
+	funding, err := store.RecordRunFunding(context.Background(), run.ID, inboundTxID, 300000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{USDCAssetID: 10458941})
+
+	recordSettlement := r.newRecordSettlement(wf, run, funding.ID)
+
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate StopWorkflow firing before RecordSettlement runs
+
+	if err := recordSettlement(cctx, "https://target.example/tool", 100000, true); err != nil {
+		t.Fatalf("want RecordSettlement to succeed despite a cancelled input context, got %v", err)
+	}
+
+	rows, err := store.ListX402RelaySettlementsByRunFunding(context.Background(), funding.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want exactly 1 settlement row written despite the cancelled context, got %d", len(rows))
+	}
+}
+
 // fakeUSDCSignerForLedgerTest satisfies nodes.USDCGroupSigner (and
 // nodes.WalletSigner) so a Runner built with it actually attempts the
 // run-level pre-fund path in reserveAndFundRun instead of degrading

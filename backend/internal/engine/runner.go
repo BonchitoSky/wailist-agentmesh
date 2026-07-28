@@ -185,6 +185,30 @@ func newRunLevelLedger(pool int64, wf models.Workflow, run models.Run, store *db
 	}
 }
 
+// newRecordSettlement builds the RecordSettlement callback a run-funded
+// agent's X402RelayConfig uses to audit each per-call outbound settlement.
+// Runs on context.WithoutCancel, like every other compensating-write
+// closure in this file (newPaymentLedger's Commit/Release,
+// newRunLevelLedger's Commit) -- a real, already-signed Wallet 2 payment
+// must have its audit row written even if the caller's context (e.g. the
+// run's own ctx, cancelled by StopWorkflow) is already done by the time
+// this runs.
+func (r *Runner) newRecordSettlement(wf models.Workflow, run models.Run, fundingID string) func(ctx context.Context, target string, amountUSDMicros int64, settled bool) error {
+	return func(cctx context.Context, target string, amountUSDMicros int64, settled bool) error {
+		bctx, cancel := context.WithTimeout(context.WithoutCancel(cctx), ledgerCompensationTimeout)
+		defer cancel()
+		row, err := r.store.RecordRunFundedSettlement(bctx, fundingID, target, amountUSDMicros)
+		if err != nil {
+			return err
+		}
+		status := "failed"
+		if settled {
+			status = "settled"
+		}
+		return r.store.RecordOutboundSettlement(bctx, row.ID, "", status)
+	}
+}
+
 // runFundResult bundles what reserveAndFundRun computes for one agent node:
 // the ledger v2 tool402 dispatch should use, the run funding id ("" if no
 // run-level pre-fund happened), the set of attached tool402 node IDs that
@@ -551,17 +575,7 @@ func (r *Runner) executeNode(
 				RelayNetwork:              r.x402.RelayNetwork,
 				MaxRelayOutboundUSDMicros: r.x402.MaxRelayOutboundUSDMicros,
 			},
-			RecordSettlement: func(cctx context.Context, target string, amountUSDMicros int64, settled bool) error {
-				row, err := r.store.RecordRunFundedSettlement(cctx, rf.FundingID, target, amountUSDMicros)
-				if err != nil {
-					return err
-				}
-				status := "failed"
-				if settled {
-					status = "settled"
-				}
-				return r.store.RecordOutboundSettlement(cctx, row.ID, "", status)
-			},
+			RecordSettlement: r.newRecordSettlement(wf, run, rf.FundingID),
 		}
 		result, err := nodes.ExecuteAgent(ctx, node, attach, aw, r.walletSvc, rc, checkBalance, relayCfg)
 		if err != nil {
