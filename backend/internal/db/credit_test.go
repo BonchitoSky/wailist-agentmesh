@@ -338,32 +338,39 @@ func TestExpireStalePendingTransactionsScopesToProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Use a unique, test-only provider for the swept row. This test's zero-threshold
+	// (expire-everything) sweep must only ever touch the row THIS test created — using the
+	// real "nowpayments" here would expire every other package's concurrent nowpayments
+	// pending rows against the shared test DB, flaking those tests (e.g. the handlers
+	// package's TestCreateCryptoInvoiceLeavesOrphanedPendingRowOnInvoiceFailure).
+	sweepProvider := fmt.Sprintf("nowpayments-scopetest-%d", time.Now().UnixNano())
+
 	razorpayOrderID := fmt.Sprintf("order_expire_razorpay_%d", time.Now().UnixNano())
 	if _, err := store.CreateCreditTransaction(ctx, user.ID, razorpayOrderID, 10000, 0.012); err != nil {
 		t.Fatal(err)
 	}
 
 	cryptoOrderID := fmt.Sprintf("order_expire_crypto_%d", time.Now().UnixNano())
-	if _, err := store.CreateCryptoCreditTransaction(ctx, user.ID, "nowpayments", cryptoOrderID, 1999); err != nil {
+	if _, err := store.CreateCryptoCreditTransaction(ctx, user.ID, sweepProvider, cryptoOrderID, 1999); err != nil {
 		t.Fatal(err)
 	}
 
 	// A zero threshold (cutoff = now) reliably makes a row created moments ago qualify as
-	// stale without a timing race against a fixed small duration like 1ms. Scoping to
-	// "nowpayments" must only ever touch the nowpayments row.
-	if _, err := store.ExpireStalePendingTransactions(ctx, "nowpayments", 0); err != nil {
+	// stale without a timing race against a fixed small duration like 1ms. Scoping to the
+	// unique test provider must only ever touch that provider's row.
+	if _, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, 0); err != nil {
 		t.Fatal(err)
 	}
 
 	var cryptoStatus string
 	if err := pool.QueryRow(ctx,
-		`SELECT status FROM credit_ledger WHERE provider_order_id = $1 AND provider = 'nowpayments'`,
-		cryptoOrderID,
+		`SELECT status FROM credit_ledger WHERE provider_order_id = $1 AND provider = $2`,
+		cryptoOrderID, sweepProvider,
 	).Scan(&cryptoStatus); err != nil {
 		t.Fatal(err)
 	}
 	if cryptoStatus != "expired" {
-		t.Fatalf("want nowpayments row expired, got status %q", cryptoStatus)
+		t.Fatalf("want swept-provider row expired, got status %q", cryptoStatus)
 	}
 
 	var razorpayStatus string
