@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -133,9 +134,7 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusPaymentRequired)
-	json.NewEncoder(w).Encode(map[string]any{
+	challenge := map[string]any{
 		"x402Version": 2,
 		"accepts": []map[string]any{{
 			"scheme":            "exact",
@@ -153,7 +152,38 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 				"decimals": 6,
 			},
 		}},
-	})
+		// Bazaar discovery metadata: describes the relay's pass-through
+		// shape (any downstream target URL in, that target's own response
+		// out) since this endpoint has no fixed schema of its own — see
+		// GoPlausible's bazaar-integration reference server.
+		"extensions": map[string]any{
+			"bazaar": map[string]any{
+				"info": map[string]any{
+					"input":  map[string]any{"target": target},
+					"output": map[string]any{"description": "the target endpoint's own paid response, forwarded unmodified"},
+				},
+				"schema": map[string]any{
+					"properties": map[string]any{
+						"target": map[string]any{"type": "string", "description": "downstream x402 endpoint URL this relay settles payment for and forwards to"},
+					},
+				},
+			},
+		},
+	}
+
+	challengeJSON, err := json.Marshal(challenge)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, "failed to encode challenge")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	// Bazaar's discovery crawler reads the challenge off this header (base64
+	// JSON), not just the body — see GoPlausible's bazaar-integration
+	// reference server verification step. Cheap to set both.
+	w.Header().Set("Payment-Required", base64.StdEncoding.EncodeToString(challengeJSON))
+	w.WriteHeader(http.StatusPaymentRequired)
+	w.Write(challengeJSON)
 }
 
 // relaySettleAndForward verifies+settles the caller's inbound payment, then
