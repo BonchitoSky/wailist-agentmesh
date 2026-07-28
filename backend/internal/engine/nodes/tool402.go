@@ -189,7 +189,7 @@ type X402RelayConfig struct {
 	// RunFundingID == "", executeTool402RunLevel when it isn't) — the
 	// legacy-dialect branch below must never read this field directly; see
 	// LegacyLedger.
-	Ledger PaymentLedger
+	Ledger RunLedger
 	// LegacyLedger is the original per-call, DB-backed ledger (always
 	// r.newPaymentLedger(wf, run), never the run-level in-memory pool) —
 	// what the legacy flat-quote dialect's direct-pay branch reserves/
@@ -201,7 +201,7 @@ type X402RelayConfig struct {
 	// spuriously blocking legacy calls or committing them against credits
 	// that were already converted into a real on-chain settlement to
 	// Wallet 2 for an unrelated call.
-	LegacyLedger PaymentLedger
+	LegacyLedger CallLedger
 
 	// RunFundingID is set (non-empty) the moment the agent's run has already
 	// settled a single lump-sum inbound x402 payment covering its attached
@@ -400,7 +400,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 			}
 			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired)
 		}
-		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, relayCfg.Ledger)
+		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.Ledger))
 	}
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing,

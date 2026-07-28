@@ -57,6 +57,15 @@ type PaymentLedger struct {
 	Release func(ctx context.Context, amountUSDMicros int64)
 }
 
+// RunLedger and CallLedger both wrap PaymentLedger with the same method
+// set, but are distinct Go types so X402RelayConfig.Ledger (run-level, in-
+// memory pool) and .LegacyLedger (per-call, DB-backed) can never be
+// accidentally read in place of each other -- a future edit that mixes them
+// up now fails to compile instead of silently misbilling (see
+// X402RelayConfig's field comments for why the distinction matters).
+type RunLedger PaymentLedger
+type CallLedger PaymentLedger
+
 // ErrActionSkipped is returned by Action node implementations (email + all
 // connectors) when required credentials/config are missing, so the node
 // short-circuits before making any real network call. runner.go's

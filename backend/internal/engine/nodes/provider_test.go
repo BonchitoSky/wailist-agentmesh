@@ -205,7 +205,7 @@ func TestExecuteAgentAttachedTool402RoutesThroughRelay(t *testing.T) {
 		PlatformSpendEncMnemonic: "platform-enc-mnemonic",
 		ExpectedAssetID:          10458941,
 		RelayBaseURL:             relay.URL,
-		Ledger:                   noopLedger(),
+		Ledger:                   nodes.RunLedger(noopLedger()),
 	}
 
 	result, err := nodes.ExecuteAgent(context.Background(), node, attach, aw, nil, rc, checkBalance, relayCfg)

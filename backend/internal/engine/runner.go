@@ -558,13 +558,13 @@ func (r *Runner) executeNode(
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 			ExpectedAssetID:          r.x402.USDCAssetID,
 			RelayBaseURL:             r.relayBaseURL,
-			Ledger:                   rf.Ledger,
+			Ledger:                   nodes.RunLedger(rf.Ledger),
 			// LegacyLedger is always the original per-call, DB-backed
 			// ledger — never rf.Ledger, which is the run-level in-memory
 			// pool once the agent is run-funded. Legacy-dialect billing
 			// must be identical whether or not this same agent also has a
 			// run-funded v2 tool attached (see X402RelayConfig.LegacyLedger).
-			LegacyLedger:     r.newPaymentLedger(wf, run),
+			LegacyLedger:     nodes.CallLedger(r.newPaymentLedger(wf, run)),
 			RunFundingID:     rf.FundingID, // "" => existing unmodified per-call public-relay path
 			RunFundedToolIDs: rf.FundedToolIDs,
 			Wallet2: nodes.Wallet2PayConfig{
@@ -661,8 +661,8 @@ func (r *Runner) executeNode(
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 			ExpectedAssetID:          r.x402.USDCAssetID,
 			RelayBaseURL:             r.relayBaseURL,
-			Ledger:                   standaloneLedger,
-			LegacyLedger:             standaloneLedger,
+			Ledger:                   nodes.RunLedger(standaloneLedger),
+			LegacyLedger:             nodes.CallLedger(standaloneLedger),
 		}
 		paymentResult, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, relayCfg)
 		if err != nil {
