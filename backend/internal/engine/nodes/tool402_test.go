@@ -768,6 +768,63 @@ func TestX402RunLevelCommitsNotReleasesOnRecordSettlementFailure(t *testing.T) {
 	}
 }
 
+// TestX402RunLevelNilRecordSettlementDoesNotPanic is a regression test for
+// a nil-func-call panic: executeTool402RunLevel called cfg.RecordSettlement
+// unconditionally, contradicting the "nil-safe like every other ledger call
+// site in this file" comment a few lines above it (which describes exactly
+// this kind of guard applied to cfg.Ledger.Reserve, but not to
+// RecordSettlement). A caller that sets RunFundingID/RunFundedToolIDs
+// without also wiring RecordSettlement must not panic after a real payment
+// has already been signed and sent -- it should alert loudly instead.
+func TestX402RunLevelNilRecordSettlementDoesNotPanic(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			w.Write([]byte(`{"data":"paid tool response"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	var committed bool
+	ledger := nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { return nil },
+		Commit:  func(context.Context, string, int64, string) { committed = true },
+		Release: func(context.Context, int64) {},
+	}
+
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID:     "test-run-funding-nil-record",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		Ledger:           ledger,
+		Wallet2: nodes.Wallet2PayConfig{
+			USDCSigner:                usdcSigner,
+			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+			USDCAssetID:               uint64(10458941),
+			RelayFeePayer:             "FEEPAYERADDR",
+			RelayNetwork:              "algorand:testnet",
+		},
+		RecordSettlement: nil,
+	}
+
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+	if err != nil {
+		t.Fatalf("want nil error -- a missing RecordSettlement doesn't undo a real settled payment, got %v", err)
+	}
+	if !committed {
+		t.Fatal("want the reservation committed despite RecordSettlement being nil")
+	}
+	if paymentResult.SettledUSDMicros != 100000 {
+		t.Fatalf("want SettledUSDMicros 100000, got %d", paymentResult.SettledUSDMicros)
+	}
+}
+
 // TestX402RunFundedAgentWithUnfundedToolUsesPerCallPath is the direct
 // regression test for the predicate mismatch bug: ExecuteTool402V2's
 // dispatch used to route ANY v2 call into executeTool402RunLevel purely

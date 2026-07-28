@@ -644,15 +644,24 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 
 	// result.Signed is true past this point: the reservation must be
 	// Committed, never Released, no matter what happens next.
-	recordErr := cfg.RecordSettlement(ctx, node.Endpoint, amount, result.Settled)
-	if recordErr != nil {
-		// A bookkeeping failure, not a payment failure -- real money already
-		// left Wallet 2, so this is not reversible. Alert so an operator can
-		// reconcile the missing audit row by hand, matching the identical
-		// pattern reserveAndFundRun already uses when RecordRunFunding fails
-		// after a successful FundRunReserve.
-		msg := fmt.Sprintf("CRITICAL: run-level x402 payment settled (node %s, target %s, amount %d) but RecordSettlement failed: %v",
-			node.ID, node.Endpoint, amount, recordErr)
+	if cfg.RecordSettlement != nil {
+		if recordErr := cfg.RecordSettlement(ctx, node.Endpoint, amount, result.Settled); recordErr != nil {
+			// A bookkeeping failure, not a payment failure -- real money
+			// already left Wallet 2, so this is not reversible. Alert so an
+			// operator can reconcile the missing audit row by hand, matching
+			// the identical pattern reserveAndFundRun already uses when
+			// RecordRunFunding fails after a successful FundRunReserve.
+			msg := fmt.Sprintf("CRITICAL: run-level x402 payment settled (node %s, target %s, amount %d) but RecordSettlement failed: %v",
+				node.ID, node.Endpoint, amount, recordErr)
+			log.Print(msg)
+			go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+		}
+	} else {
+		// No RecordSettlement configured at all -- a wiring gap, not a
+		// payment failure. Money still moved and the ledger Commit below
+		// still runs; this only means the audit row is never written.
+		msg := fmt.Sprintf("CRITICAL: run-level x402 payment settled (node %s, target %s, amount %d) with no RecordSettlement configured -- audit row never written",
+			node.ID, node.Endpoint, amount)
 		log.Print(msg)
 		go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 	}
