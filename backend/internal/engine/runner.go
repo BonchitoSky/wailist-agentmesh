@@ -114,26 +114,6 @@ const ledgerCompensationTimeout = 10 * time.Second
 // balance, silently stranding the reservation as a permanent, unledgered
 // credit loss. UpdateRunLog already establishes this same
 // context.Background()-after-cancellation convention elsewhere in Run.
-// criticalAlert logs and fires a CRITICAL payments alert with a consistent
-// shape -- extracted from 6 near-identical hand-rolled fmt.Sprintf +
-// log.Print + alert.Notify triplets scattered across this file (see
-// newPaymentLedger's Commit/Release, newRunLevelLedger's Commit, and
-// reserveAndFundRun's failure branches). fields are alternating key/value
-// pairs (e.g. "amount", amountUSDMicros, "node", nodeID) appended to the
-// message in order.
-func (r *Runner) criticalAlert(wf models.Workflow, run models.Run, label string, err error, fields ...any) {
-	parts := []string{fmt.Sprintf("CRITICAL: %s: user=%s workflow=%s run=%s", label, wf.UserID, wf.ID, run.ID)}
-	for i := 0; i+1 < len(fields); i += 2 {
-		parts = append(parts, fmt.Sprintf("%v=%v", fields[i], fields[i+1]))
-	}
-	if err != nil {
-		parts = append(parts, fmt.Sprintf("err=%v", err))
-	}
-	msg := strings.Join(parts, " ")
-	log.Print(msg)
-	go alert.Notify(context.Background(), alert.ChannelPayments, msg)
-}
-
 func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.PaymentLedger {
 	return nodes.PaymentLedger{
 		Reserve: func(cctx context.Context, amountUSDMicros int64) error {
@@ -154,6 +134,26 @@ func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.Paym
 			}
 		},
 	}
+}
+
+// criticalAlert logs and fires a CRITICAL payments alert with a consistent
+// shape -- extracted from 6 near-identical hand-rolled fmt.Sprintf +
+// log.Print + alert.Notify triplets scattered across this file (see
+// newPaymentLedger's Commit/Release, newRunLevelLedger's Commit, and
+// reserveAndFundRun's failure branches). fields are alternating key/value
+// pairs (e.g. "amount", amountUSDMicros, "node", nodeID) appended to the
+// message in order.
+func (r *Runner) criticalAlert(wf models.Workflow, run models.Run, label string, err error, fields ...any) {
+	parts := []string{fmt.Sprintf("CRITICAL: %s: user=%s workflow=%s run=%s", label, wf.UserID, wf.ID, run.ID)}
+	for i := 0; i+1 < len(fields); i += 2 {
+		parts = append(parts, fmt.Sprintf("%v=%v", fields[i], fields[i+1]))
+	}
+	if err != nil {
+		parts = append(parts, fmt.Sprintf("err=%v", err))
+	}
+	msg := strings.Join(parts, " ")
+	log.Print(msg)
+	go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 }
 
 // newRunLevelLedger builds an in-memory credit pool for a single run,
