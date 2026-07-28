@@ -299,3 +299,89 @@ func TestRunLevelLedgerExhaustsPoolNotDBBalance(t *testing.T) {
 		t.Errorf("after reserve after release: want 0 remaining, got %d", remaining)
 	}
 }
+
+// TestReserveAndFundRunRejectsOutOfRangeQuote is a regression test for an
+// integer-overflow bug: reserveAndFundRun used to sum every attached v2
+// tool402 node's live quote into an int64 estimate with no ceiling, so an
+// adversarial or compromised target's huge quote (or several large quotes
+// summing past int64's range) could wrap the estimate negative --
+// store.ReserveCredits(ctx, userID, negativeEstimate) then INCREASES the
+// user's balance instead of decrementing it. A per-quote ceiling rejects
+// the quote outright before it's ever summed.
+func TestReserveAndFundRunRejectsOutOfRangeQuote(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	store, err := db.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"2000000000"}]}`))
+	}))
+	defer target.Close()
+
+	facilitatorHit := false
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		facilitatorHit = true
+	}))
+	defer facilitator.Close()
+
+	email := fmt.Sprintf("ledger-internal-overflow-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(context.Background(), email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orderID := fmt.Sprintf("fund_%s_%d", user.ID, time.Now().UnixNano())
+	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_"+orderID); err != nil {
+		t.Fatal(err)
+	}
+
+	wf, err := store.CreateWorkflow(context.Background(), "Ledger Internal Overflow Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+	wf.UserID = user.ID
+	run, err := store.CreateRun(context.Background(), wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+		USDCAssetID:               10458941,
+		PlatformWalletAddress:     "PLATFORMADDR",
+		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+		FacilitatorClient:         x402.NewFacilitatorClient(facilitator.URL),
+		RelayNetwork:              "algorand:testnet",
+		RelayFeePayer:             "FEEPAYERADDR",
+	})
+
+	attach := models.AttachConfig{
+		Tools: []models.WorkflowNode{
+			{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL},
+		},
+	}
+
+	if _, err := r.reserveAndFundRun(context.Background(), wf, run, attach); err == nil {
+		t.Fatal("want reserveAndFundRun to reject a quote above the per-call ceiling")
+	}
+
+	balance, err := store.GetCreditBalance(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 1000000 {
+		t.Fatalf("want balance untouched at 1000000 (rejected before ReserveCredits), got %d", balance)
+	}
+	if facilitatorHit {
+		t.Fatal("want the facilitator never called for a rejected quote")
+	}
+}

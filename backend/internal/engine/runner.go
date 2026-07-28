@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -222,6 +223,17 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		isV2, amount, err := nodes.ProbeX402Price(ctx, tool.Endpoint)
 		if err != nil || !isV2 {
 			continue // unreachable/legacy-dialect tools stay on their existing billing path
+		}
+		// Reject outright rather than silently excluding the tool: a quote
+		// this far out of range is independent evidence something
+		// adversarial is happening, and estimate += amount below would risk
+		// overflowing an int64 negative, which store.ReserveCredits would
+		// then read as a credit INCREASE instead of a decrease.
+		if amount > models.MaxSingleX402QuoteUSDMicros {
+			return runFundResult{}, fmt.Errorf("x402 run funding: tool %s quoted %d, exceeding the %d ceiling", tool.ID, amount, models.MaxSingleX402QuoteUSDMicros)
+		}
+		if estimate > math.MaxInt64-amount {
+			return runFundResult{}, fmt.Errorf("x402 run funding: estimate overflow summing tool %s", tool.ID)
 		}
 		estimate += amount
 		fundedToolIDs[tool.ID] = true

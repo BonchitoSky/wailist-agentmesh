@@ -219,6 +219,12 @@ const (
 const (
 	ByokFlatFeeUSDMicros     int64 = 10_000  // $0.01
 	X402PlatformFeeUSDMicros int64 = 500_000 // $0.50
+	// MaxSingleX402QuoteUSDMicros is a sanity ceiling on any one attached
+	// tool402 node's live quote during reserveAndFundRun's estimate
+	// summation — generous against any real tool price, tight against an
+	// adversarial or compromised target quoting near int64's range to
+	// force the running sum to overflow negative.
+	MaxSingleX402QuoteUSDMicros int64 = 1_000_000_000 // $1,000/call
 )
 
 type X402RelaySettlement struct {
