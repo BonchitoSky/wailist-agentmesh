@@ -145,33 +145,24 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			var feeAmount int64
 			switch {
 			case toolNode.Type == models.NodeTypeTool402:
-				// The run-level path (RunFundingID != "") already reserved
-				// this run's full estimated tool402 cost from the live DB
-				// balance up front, in reserveAndFundRun's ReserveCredits
-				// call, before the agent's loop ever started -- and gates
-				// each attached call's real amount against the run-level
-				// in-memory pool inside executeTool402RunLevel via
+				// The run-level path (toolIsRunFunded true for THIS tool)
+				// already reserved this run's full estimated tool402 cost
+				// from the live DB balance up front, in reserveAndFundRun's
+				// ReserveCredits call, before the agent's loop ever started
+				// -- and gates each attached call's real amount against the
+				// run-level in-memory pool inside executeTool402RunLevel via
 				// cfg.Ledger.Reserve. Re-checking the live DB balance here
-				// would double-count that up-front reservation: the
-				// reservation itself can legitimately drive the live
-				// balance down near zero for the run's duration even though
-				// the user had exactly enough to cover the run, and this
-				// floor check would then spuriously block a second/third
-				// attached call the run-level pool has ample headroom for.
-				// The legacy per-call path (RunFundingID == "") never
-				// pre-reserves anything, so it still needs this floor
-				// check exactly as before. A legacy-dialect tool attached to
-				// the SAME run-funded agent also still needs it:
-				// reserveAndFundRun's estimator only ever folds confirmed v2
-				// targets into the up-front reservation (RunFundedToolIDs),
-				// so a legacy tool's flat fee is never covered by it and
-				// still bills against the live DB balance via
-				// relayCfg.LegacyLedger inside ExecuteTool402V2 — skipping
-				// this floor check for it would let an unfunded caller drive
-				// unbounded outbound requests through a legacy tool just
-				// because some other v2 tool on the same agent happened to
-				// be pre-funded.
-				if relayCfg.RunFundingID == "" || !relayCfg.RunFundedToolIDs[toolNode.ID] {
+				// would double-count that up-front reservation. A tool NOT
+				// covered by the up-front estimate (its probe failed during
+				// reserveAndFundRun, or it's a legacy-dialect tool attached
+				// to the same run-funded agent) still needs this floor
+				// check exactly as before -- it bills against the live DB
+				// balance via the per-call path (relayCfg.Ledger or
+				// relayCfg.LegacyLedger, depending on dialect) inside
+				// ExecuteTool402V2, so skipping this check for it would let
+				// an unfunded caller drive unbounded outbound requests
+				// through it.
+				if !relayCfg.toolIsRunFunded(toolNode.ID) {
 					feeAmount = models.X402PlatformFeeUSDMicros
 				}
 			case BillableFlatFee(toolNode.Type, toolNode.Template):

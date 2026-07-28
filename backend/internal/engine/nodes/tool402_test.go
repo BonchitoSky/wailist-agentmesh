@@ -671,8 +671,9 @@ func TestX402RunLevelCommitsNotReleasesOnTargetNetworkFailure(t *testing.T) {
 
 	var recordSettlementCalled bool
 	relayCfg := nodes.X402RelayConfig{
-		RunFundingID: "test-run-funding-1",
-		Ledger:       ledger,
+		RunFundingID:     "test-run-funding-1",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		Ledger:           ledger,
 		Wallet2: nodes.Wallet2PayConfig{
 			USDCSigner:                usdcSigner,
 			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -737,8 +738,9 @@ func TestX402RunLevelCommitsNotReleasesOnRecordSettlementFailure(t *testing.T) {
 	}
 
 	relayCfg := nodes.X402RelayConfig{
-		RunFundingID: "test-run-funding-2",
-		Ledger:       ledger,
+		RunFundingID:     "test-run-funding-2",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		Ledger:           ledger,
 		Wallet2: nodes.Wallet2PayConfig{
 			USDCSigner:                usdcSigner,
 			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -763,5 +765,60 @@ func TestX402RunLevelCommitsNotReleasesOnRecordSettlementFailure(t *testing.T) {
 	}
 	if paymentResult.SettledUSDMicros != 100000 {
 		t.Fatalf("want SettledUSDMicros 100000, got %d", paymentResult.SettledUSDMicros)
+	}
+}
+
+// TestX402RunFundedAgentWithUnfundedToolUsesPerCallPath is the direct
+// regression test for the predicate mismatch bug: ExecuteTool402V2's
+// dispatch used to route ANY v2 call into executeTool402RunLevel purely
+// because RunFundingID was non-empty, even for a tool the run's up-front
+// estimate never covered (e.g. its probe failed during reserveAndFundRun,
+// so it's absent from RunFundedToolIDs). That drew the tool's real cost
+// from an in-memory pool sized for OTHER tools. It must instead fall
+// through to the existing per-call relay path, which reserves/pays/settles
+// against the live DB balance independently.
+func TestX402RunFundedAgentWithUnfundedToolUsesPerCallPath(t *testing.T) {
+	relayHit := false
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		relayHit = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer relay.Close()
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "unfunded-tool", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	relayCfg := nodes.X402RelayConfig{
+		USDCSigner:               usdcSigner,
+		PlatformSpendEncMnemonic: "platform-enc-mnemonic",
+		ExpectedAssetID:          uint64(10458941),
+		RelayBaseURL:             relay.URL,
+		// RunFundingID set (this agent's run WAS funded), but this specific
+		// tool's ID is absent from RunFundedToolIDs -- its probe failed
+		// during estimation, so reserveAndFundRun never folded it in.
+		RunFundingID:     "test-run-funding-mismatch",
+		RunFundedToolIDs: map[string]bool{"some-other-tool": true},
+		Ledger:           nodes.PaymentLedger{},
+	}
+
+	// The per-call relay path (executeTool402V2Relay) needs a configured
+	// USDCSigner/PlatformSpendEncMnemonic to ever dial relay.URL (it
+	// degrades to a no-op error response otherwise) -- aw/signer being
+	// empty just means the unrelated legacy-dialect branch (never reached
+	// here, this is a v2 target) has nothing to pay with. The point of
+	// this test is which CODE PATH is taken, not whether the payment
+	// against the relay ultimately succeeds (the relay returns 500 above).
+	_, _ = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+
+	if !relayHit {
+		t.Fatal("want the unfunded tool to route through the per-call relay path (executeTool402V2Relay), not the run-level pool")
 	}
 }

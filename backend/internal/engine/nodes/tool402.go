@@ -230,6 +230,18 @@ type X402RelayConfig struct {
 	RecordSettlement func(ctx context.Context, target string, amountUSDMicros int64, settled bool) error
 }
 
+// toolIsRunFunded reports whether toolID's real cost is already covered by
+// this run's up-front lump-sum settlement -- true only when the run has a
+// funding id AND reserveAndFundRun's estimator specifically confirmed this
+// tool as a real v2 target it folded into that estimate. A run-funded
+// agent with a tool whose probe failed during estimation (or a
+// legacy-dialect tool attached alongside a funded v2 one) must NOT be
+// treated as run-funded for that specific tool -- both call sites that used
+// to hand-write this condition differently now share this one definition.
+func (cfg X402RelayConfig) toolIsRunFunded(toolID string) bool {
+	return cfg.RunFundingID != "" && cfg.RunFundedToolIDs[toolID]
+}
+
 // Tool402PaymentResult is what ExecuteTool402V2 returns. SettledUSDMicros
 // and DebitKind describe a charge that has ALREADY been committed via the
 // caller-supplied PaymentLedger by the time this returns — callers report
@@ -364,7 +376,7 @@ func ProbeX402Quote(ctx context.Context, endpoint string) (isV2 bool, quote Targ
 // the fixed platform fee — it was never GoPlausible-compliant and isn't
 // becoming so.
 func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, relayCfg X402RelayConfig) (Tool402PaymentResult, error) {
-	isV2, notPaymentRequired, rawResponse, _, err := probeTool402Endpoint(ctx, node.Endpoint)
+	isV2, notPaymentRequired, rawResponse, quote, err := probeTool402Endpoint(ctx, node.Endpoint)
 	if err != nil {
 		return Tool402PaymentResult{}, err
 	}
@@ -372,16 +384,21 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		return Tool402PaymentResult{Response: rawResponse}, nil
 	}
 	if isV2 {
-		// RunFundingID is a property of the agent's RUN (set the moment the
-		// agent has at least one v2 tool402 attached), not of this node's
-		// dialect — nested inside isV2 so a legacy-dialect call attached to
-		// the same agent as a v2 one still falls through, unmodified, to the
-		// direct-pay branch below regardless of whether the run has a
-		// funding id. Gating on RunFundingID before checking isV2 would
-		// wrongly route a legacy-dialect call into executeTool402RunLevel,
-		// which only knows how to handle v2 targets.
-		if relayCfg.RunFundingID != "" {
-			return executeTool402RunLevel(ctx, node, relayCfg)
+		// toolIsRunFunded (not a blanket RunFundingID != "" check) decides
+		// this: a run can be funded while a SPECIFIC tool's probe failed
+		// during estimation and was never folded into that estimate, and
+		// such a tool must still take the per-call path below rather than
+		// draw against a pool sized for other tools. Nested inside isV2 so
+		// a legacy-dialect call attached to the same agent as a v2 one
+		// still falls through, unmodified, to the direct-pay branch below
+		// regardless of the run's funding state.
+		if relayCfg.toolIsRunFunded(node.ID) {
+			targetQuote := TargetQuote{
+				PayTo:             quote.PayTo,
+				Asset:             quote.Asset,
+				MaxAmountRequired: strconv.FormatInt(quote.MaxAmountRequired, 10),
+			}
+			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired)
 		}
 		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, relayCfg.Ledger)
 	}
@@ -581,27 +598,20 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 // Release still go through cfg.Ledger exactly like the per-call path;
 // the only difference is what's behind those calls (an in-memory pool
 // instead of a DB round trip per call).
-func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X402RelayConfig) (Tool402PaymentResult, error) {
-	// Re-fetches the quote even though the dispatch in ExecuteTool402V2 just
-	// probed this endpoint to decide isV2 — deliberate, not redundant: this
-	// is the same "freshest quote right before signing" pattern
-	// executeTool402V2Relay already follows for the per-call path (fetch at
-	// dispatch time to route, fetch again right before paying), matching
-	// this codebase's existing, documented price-drift-aware design rather
-	// than trusting a quote that's already one round trip stale.
-	isV2, quote, err := ProbeX402Quote(ctx, node.Endpoint)
-	if err != nil {
-		return Tool402PaymentResult{}, err
-	}
-	if !isV2 {
-		return Tool402PaymentResult{Response: map[string]any{"error": "endpoint no longer speaks x402 v2"}}, nil
-	}
-	amount, _ := strconv.ParseInt(quote.MaxAmountRequired, 10, 64)
+func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X402RelayConfig, quote TargetQuote, amount int64) (Tool402PaymentResult, error) {
+	// quote/amount come from ExecuteTool402V2's dispatch probe, taken
+	// synchronously immediately before this call -- no time gap in which
+	// price could legitimately drift, unlike the once-per-run estimate in
+	// reserveAndFundRun (fetched potentially minutes before any specific
+	// call fires) or executeTool402V2Relay's own separate "freshest quote
+	// right before signing" refetch, which stays untouched since a real
+	// time gap exists there (the agent's tool-calling loop runs between
+	// that dispatch and its own pay attempt).
 
 	// Nil-safe like every other ledger call site in this file, even though
 	// this path is only ever reached with a fully-populated cfg.Ledger
-	// today (only from ExecuteTool402V2 once RunFundingID is set) -- so a
-	// future caller that forgets to wire it up fails loudly instead of
+	// today (only from ExecuteTool402V2 once toolIsRunFunded is true) -- so
+	// a future caller that forgets to wire it up fails loudly instead of
 	// panicking on a nil func call.
 	if reserve := cfg.Ledger.Reserve; reserve != nil {
 		if err := reserve(ctx, amount); err != nil {
