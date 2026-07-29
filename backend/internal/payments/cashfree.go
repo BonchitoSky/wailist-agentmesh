@@ -20,20 +20,18 @@ const (
 )
 
 type CashfreeClient struct {
-	AppID         string
-	SecretKey     string
-	WebhookSecret string
-	baseURL       string
-	client        *http.Client
+	AppID     string
+	SecretKey string
+	baseURL   string
+	client    *http.Client
 }
 
-func NewCashfreeClient(appID, secretKey, webhookSecret string) *CashfreeClient {
+func NewCashfreeClient(appID, secretKey string) *CashfreeClient {
 	return &CashfreeClient{
-		AppID:         appID,
-		SecretKey:     secretKey,
-		WebhookSecret: webhookSecret,
-		baseURL:       cashfreeProdBaseURL,
-		client:        &http.Client{Timeout: 10 * time.Second},
+		AppID:     appID,
+		SecretKey: secretKey,
+		baseURL:   cashfreeProdBaseURL,
+		client:    &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -135,7 +133,7 @@ func (c *CashfreeClient) GetOrderStatus(ctx context.Context, orderID string) (st
 // using the webhook secret, then base64-encoded.
 // See https://docs.cashfree.com/docs/webhook-authentication
 func (c *CashfreeClient) VerifyWebhookSignature(body []byte, signature, timestamp string) bool {
-	mac := hmac.New(sha256.New, []byte(c.WebhookSecret))
+	mac := hmac.New(sha256.New, []byte(c.SecretKey))
 	mac.Write([]byte(timestamp))
 	mac.Write(body)
 	expected := base64.StdEncoding.EncodeToString(mac.Sum(nil))

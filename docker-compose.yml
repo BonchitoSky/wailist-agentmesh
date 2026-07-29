@@ -45,7 +45,6 @@ services:
       # Set CASHFREE_SANDBOX=true while testing
       CASHFREE_APP_ID: your_cashfree_app_id_here
       CASHFREE_SECRET_KEY: your_cashfree_secret_key_here
-      CASHFREE_WEBHOOK_SECRET: placeholder_webhook_secret
       CASHFREE_SANDBOX: "true"
 
       # NOWPayments (crypto top-ups) — replace with real keys

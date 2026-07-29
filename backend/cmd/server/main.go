@@ -72,7 +72,7 @@ func main() {
 
 	facilitatorClient := x402.NewFacilitatorClient(envOr("FACILITATOR_URL", "https://facilitator.goplausible.xyz"))
 
-	cashfreeClient := payments.NewCashfreeClient(mustEnv("CASHFREE_APP_ID"), mustEnv("CASHFREE_SECRET_KEY"), mustEnv("CASHFREE_WEBHOOK_SECRET"))
+	cashfreeClient := payments.NewCashfreeClient(mustEnv("CASHFREE_APP_ID"), mustEnv("CASHFREE_SECRET_KEY"))
 	if envOr("CASHFREE_SANDBOX", "false") == "true" {
 		cashfreeClient.UseSandbox()
 	}
