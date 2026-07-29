@@ -326,6 +326,15 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (models.User, 
 	return u, err
 }
 
+func (s *Store) GetUserByID(ctx context.Context, id string) (models.User, error) {
+	var u models.User
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, email, password_hash, created_at
+		FROM users WHERE id = $1
+	`, id).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	return u, err
+}
+
 // GetOrCreateOAuthUser returns the user for a verified OAuth email, creating an
 // OAuth-only account (empty password_hash, so bcrypt password login always fails)
 // when none exists. Linking to an existing OAuth account by verified email is
@@ -377,13 +386,17 @@ func (s *Store) InsertWaitlistEmail(ctx context.Context, email string) error {
 // --- Credit ledger methods ---
 
 func (s *Store) CreateCreditTransaction(ctx context.Context, userID, providerOrderID string, amountINRPaise int64, fxRate float64) (models.CreditTransaction, error) {
+	return s.CreateCreditTransactionForProvider(ctx, "cashfree", userID, providerOrderID, amountINRPaise, fxRate)
+}
+
+func (s *Store) CreateCreditTransactionForProvider(ctx context.Context, provider, userID, providerOrderID string, amountINRPaise int64, fxRate float64) (models.CreditTransaction, error) {
 	creditUSDMicros := int64(math.Round(float64(amountINRPaise) / 100.0 * fxRate * 1e6))
 	var txn models.CreditTransaction
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO credit_ledger (user_id, provider, provider_order_id, status, amount_inr_paise, fx_rate_usd_per_inr, credit_usd_micros)
-		VALUES ($1, 'razorpay', $2, 'pending', $3, $4, $5)
+		VALUES ($1, $2, $3, 'pending', $4, $5, $6)
 		RETURNING id, user_id, provider, provider_order_id, status, amount_inr_paise, fx_rate_usd_per_inr, credit_usd_micros, created_at
-	`, userID, providerOrderID, amountINRPaise, fxRate, creditUSDMicros).Scan(
+	`, userID, provider, providerOrderID, amountINRPaise, fxRate, creditUSDMicros).Scan(
 		&txn.ID, &txn.UserID, &txn.Provider, &txn.ProviderOrderID, &txn.Status,
 		&txn.AmountINRPaise, &txn.FXRateUSDPerINR, &txn.CreditUSDMicros, &txn.CreatedAt,
 	)
@@ -504,7 +517,7 @@ func (s *Store) RefundCreditTransaction(ctx context.Context, providerOrderID str
 	err = tx.QueryRow(ctx, `
 		SELECT id, user_id, status, amount_inr_paise, fx_rate_usd_per_inr, refunded_inr_paise
 		FROM credit_ledger
-		WHERE provider_order_id = $1 AND provider = 'razorpay'
+		WHERE provider_order_id = $1
 		FOR UPDATE
 	`, providerOrderID).Scan(&id, &userID, &status, &amountINRPaise, &fxRate, &refundedINRPaise)
 	if errors.Is(err, pgx.ErrNoRows) {

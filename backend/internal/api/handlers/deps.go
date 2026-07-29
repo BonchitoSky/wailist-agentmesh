@@ -15,12 +15,12 @@ type contextKey string
 
 const CtxUserID contextKey = "userID"
 
-// RazorpayClient is the subset of *payments.RazorpayClient the handlers need.
+// CashfreeClient is the subset of *payments.CashfreeClient the handlers need.
 // Defined here so tests can inject a fake without hitting the real API.
-type RazorpayClient interface {
-	CreateOrder(ctx context.Context, amountPaise int64, receipt string) (payments.RazorpayOrder, error)
-	VerifySignature(orderID, paymentID, signature string) bool
-	VerifyWebhookSignature(body []byte, signature string) bool
+type CashfreeClient interface {
+	CreateOrder(ctx context.Context, amountPaise int64, orderID, customerID, customerEmail, customerPhone string) (payments.CashfreeOrder, error)
+	GetOrderStatus(ctx context.Context, orderID string) (string, error)
+	VerifyWebhookSignature(body []byte, signature, timestamp string) bool
 }
 
 // NOWPaymentsClient is the subset of *payments.NOWPaymentsClient the handlers need.
@@ -53,8 +53,8 @@ type Deps struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 
-	Razorpay      RazorpayClient
-	RazorpayKeyID string
+	Cashfree    CashfreeClient
+	CashfreeAppID string
 
 	NOWPayments NOWPaymentsClient
 

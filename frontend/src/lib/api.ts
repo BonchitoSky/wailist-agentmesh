@@ -302,12 +302,13 @@ export const waitlist = {
 
 // -- Payments ---------------------------------------------------------------
 export const payments = {
-  createRazorpayOrder: async (
-    amountINRPaise: number
-  ): Promise<{ order_id: string; amount: number; currency: string; key_id: string }> => {
+  createCashfreeOrder: async (
+    amountINRPaise: number,
+  ): Promise<{ order_id: string; payment_session_id: string; amount: number; currency: string; app_id: string }> => {
     if (!BASE) throw new Error("payments require a configured backend");
-    const res = await fetch(`${BASE}/payments/razorpay/order`, {
-      method: "POST", credentials: "include",
+    const res = await fetch(`${BASE}/payments/cashfree/order`, {
+      method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ amount_inr_paise: amountINRPaise }),
     });
@@ -316,16 +317,15 @@ export const payments = {
     return data;
   },
 
-  verifyRazorpayPayment: async (payload: {
-    razorpay_order_id: string;
-    razorpay_payment_id: string;
-    razorpay_signature: string;
-  }): Promise<{ status: string; credited_usd_micros: number }> => {
+  verifyCashfreePayment: async (
+    orderId: string,
+  ): Promise<{ status: string; credited_usd_micros: number }> => {
     if (!BASE) throw new Error("payments require a configured backend");
-    const res = await fetch(`${BASE}/payments/razorpay/verify`, {
-      method: "POST", credentials: "include",
+    const res = await fetch(`${BASE}/payments/cashfree/verify`, {
+      method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ order_id: orderId }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "payment verification failed");

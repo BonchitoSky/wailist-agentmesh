@@ -5,7 +5,7 @@ import type { PaymentMethod } from "@/components/checkout/types";
 import { gstBreakdown } from "@/lib/credits/fx";
 
 const METHOD_LABELS: Record<PaymentMethod, string> = {
-  razorpay: "Razorpay",
+  cashfree: "Cashfree",
   nowpayments: "NOWPayments",
   paypal: "PayPal",
   stripe: "Stripe",

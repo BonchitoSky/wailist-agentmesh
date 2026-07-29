@@ -7,7 +7,7 @@ import type { Purchase } from "@/lib/credits/types";
 import type { PaymentMethod } from "@/components/checkout/types";
 
 const METHOD_LABELS: Record<PaymentMethod, string> = {
-  razorpay: "Razorpay",
+  cashfree: "Cashfree",
   nowpayments: "NOWPayments",
   paypal: "PayPal",
   stripe: "Stripe",

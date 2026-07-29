@@ -376,14 +376,18 @@ function LandingWaitlist() {
 
 // ── Footer ────────────────────────────────────────────────────────────────
 function LandingFooter() {
+  const linkStyle: React.CSSProperties = { color: "inherit", textDecoration: "none" };
   return (
-    <footer style={{ borderTop: "1px solid var(--border)", padding: "32px 32px", position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.70)" }}>
-      <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
+    <footer style={{ borderTop: "1px solid var(--border)", padding: "28px 32px", position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.70)" }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <Logo size={14} />
+          <span>© {new Date().getFullYear()} AgentMesh</span>
         </div>
-        <div style={{ display: "flex", gap: 16 }}>
-          <a href="https://github.com/notlevi911/agentmesh" target="_blank" rel="noreferrer" style={{ color: "inherit" }}>GitHub ↗</a>
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+          <a href="/terms" style={linkStyle}>Terms &amp; Conditions</a>
+          <a href="/refund-policy" style={linkStyle}>Refund Policy</a>
+          <a href="https://github.com/notlevi911/agentmesh" target="_blank" rel="noreferrer" style={linkStyle}>GitHub ↗</a>
         </div>
       </div>
     </footer>
