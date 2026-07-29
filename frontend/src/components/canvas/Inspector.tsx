@@ -11,6 +11,7 @@ import {
   AGENT_TEMPLATES,
 } from "@/lib/data";
 import { Pill, IconClose, StatusDot } from "@/components/ui";
+import { BrandLogo } from "./nodes/brandLogos";
 import { agents as agentsApi, tools as toolsApi } from "@/lib/api";
 
 interface InspectorProps {
@@ -70,7 +71,7 @@ export function Inspector({
               fontSize: 12,
             }}
           >
-            {meta.icon}
+            <BrandLogo template={selected.template} fallback={meta.icon} />
           </span>
           <div>
             <div style={{ fontSize: 13, fontWeight: 500 }}>{meta.title}</div>

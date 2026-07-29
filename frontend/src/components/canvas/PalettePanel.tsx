@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { WorkflowNode } from "@/lib/types";
+import { BrandLogo } from "./nodes/brandLogos";
 import {
   TRIGGER_TEMPLATES,
   AGENT_TEMPLATES,
@@ -305,6 +306,7 @@ export function PalettePanel({ onDragNodeStart }: PalettePanelProps) {
           <DraggableRow
             key={i}
             icon={(it.icon ?? "") as string}
+            template={(it.template ?? "") as string}
             title={(it.name ?? it.label ?? "") as string}
             sub={(it.sub ?? "") as string}
             dotColor={tabDef.dotColor}
@@ -420,12 +422,14 @@ function CreateRow({
 
 function DraggableRow({
   icon,
+  template,
   title,
   sub,
   dotColor,
   onDragStart,
 }: {
   icon: string;
+  template?: string;
   title: string;
   sub: string;
   dotColor: "mute" | "accent" | "magenta";
@@ -481,7 +485,7 @@ function DraggableRow({
           fontWeight: 600,
         }}
       >
-        {icon}
+        <BrandLogo template={template} fallback={icon} size={14} />
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12, fontWeight: 500, color: "var(--fg)" }}>

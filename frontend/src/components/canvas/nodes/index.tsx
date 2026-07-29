@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import { WorkflowNode, PortName } from "@/lib/types";
+import { BrandLogo } from "./brandLogos";
 import {
   NODE_TYPES,
   TRIGGER_TEMPLATES,
@@ -97,6 +98,7 @@ function NodeShell({
 
 function NodeHeader({
   icon,
+  template,
   iconBg,
   iconColor,
   kicker,
@@ -104,6 +106,7 @@ function NodeHeader({
   sub,
 }: {
   icon: string;
+  template?: string;
   iconBg: string;
   iconColor: string;
   kicker: string;
@@ -134,7 +137,7 @@ function NodeHeader({
           flexShrink: 0,
         }}
       >
-        {icon}
+        <BrandLogo template={template} fallback={icon} />
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
@@ -350,6 +353,7 @@ function TriggerNode({
     >
       <NodeHeader
         icon={node.icon ?? tpl?.icon ?? "▶"}
+        template={node.template}
         iconBg="var(--bg-elev-3)"
         iconColor="var(--fg)"
         kicker="trigger"
@@ -421,7 +425,11 @@ function AgentNode({
             flexShrink: 0,
           }}
         >
-          {node.icon ?? tpl.icon}
+          <BrandLogo
+            template={node.template}
+            fallback={node.icon ?? tpl.icon}
+            size={16}
+          />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -650,6 +658,7 @@ function ProviderNode({
     >
       <NodeHeader
         icon={node.icon ?? tpl?.icon ?? "+"}
+        template={node.template}
         iconBg="var(--bg-elev-3)"
         iconColor="var(--accent)"
         kicker="ai provider"
@@ -725,6 +734,7 @@ function ToolNode({
     >
       <NodeHeader
         icon={node.icon ?? tpl?.icon ?? "⟶"}
+        template={node.template}
         iconBg="var(--bg-elev-3)"
         iconColor="var(--fg)"
         kicker="tool · standard"
@@ -794,7 +804,7 @@ function Tool402Node({
             fontWeight: 600,
           }}
         >
-          {icon}
+          <BrandLogo template={node.template} fallback={icon} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -899,6 +909,7 @@ function ActionNode({
     >
       <NodeHeader
         icon={node.icon ?? tpl?.icon ?? "✦"}
+        template={node.template}
         iconBg="var(--bg-elev-3)"
         iconColor="var(--fg)"
         kicker="action"
@@ -947,6 +958,7 @@ function EndNode({
     >
       <NodeHeader
         icon={node.icon ?? tpl?.icon ?? "■"}
+        template={node.template}
         iconBg="var(--bg-elev-3)"
         iconColor="var(--fg)"
         kicker="end"
