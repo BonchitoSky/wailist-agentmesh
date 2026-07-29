@@ -824,19 +824,16 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 // up front, as a run-level in-memory pool sized off a single quote
 // (reserveAndFundRun sums per attached NODE, not per anticipated call count)
 // -- so a second call to the SAME node exhausts that pool on
-// cfg.Ledger.Reserve inside executeTool402RunLevel. That error is a plain
-// error, not wrapped in *nodes.ErrBalanceBlocked (unlike the legacy
-// per-call path's Reserve failures) -- see executeTool402RunLevel's
-// "if err := cfg.Ledger.Reserve(...); err != nil { return
-// Tool402PaymentResult{}, err }". A plain (non-ErrBalanceBlocked) tool error
-// does not hard-stop the agent's function-calling loop (see
-// callOpenAICompat: only errors.As-matching ErrBalanceBlocked returns
-// early); instead it's reported back to the LLM as a "error: ..." tool
-// result and the loop continues. So this test's fake LLM calls the tool
-// exactly twice, then answers "done" -- the run ends in SUCCESS overall
-// (the agent gracefully absorbs the second failure), and the invariant that
-// actually matters -- at most one real payment ever reaches the target --
-// still holds.
+// cfg.Ledger.Reserve inside executeTool402RunLevel. That error is wrapped in
+// *nodes.ErrBalanceBlocked, same as the legacy per-call path's Reserve
+// failures, so it hard-stops the agent's function-calling loop instead of
+// being reported back to the LLM as a retryable tool error (see the final
+// whole-branch review's fix: an unwrapped plain error here used to let the
+// LLM retry indefinitely against an exhausted pool). So this test's fake
+// LLM is only ever asked for a tool call twice -- the second attempt's
+// pool-exhaustion error ends the run in FAILED before a third LLM turn ever
+// happens -- and the invariant that actually matters -- at most one real
+// payment ever reaches the target -- still holds.
 func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 	ctx := context.Background()
 
@@ -934,12 +931,11 @@ func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 
 	runner.Start(wf, run)
 	final := waitForRunDone(t, store, run.ID)
-	// The agent's turn completes successfully overall: the second attempt's
-	// pool-exhaustion error is reported back to the LLM as a tool error, not
-	// a hard stop (see the function doc comment above) -- the fake LLM then
-	// answers "done" on its third turn.
-	if final.Status != models.RunStatusSuccess {
-		t.Fatalf("want success (agent absorbs the second call's pool-exhaustion error and finishes) got %s", final.Status)
+	// The second attempt's pool-exhaustion error is *nodes.ErrBalanceBlocked,
+	// which hard-stops the agent loop (see the function doc comment above)
+	// -- the run ends FAILED, and the fake LLM is never asked a third turn.
+	if final.Status != models.RunStatusFailed {
+		t.Fatalf("want failed (pool-exhaustion hard-stops the run after the second call) got %s", final.Status)
 	}
 
 	if got := atomic.LoadInt32(&paidHits); got != 1 {
