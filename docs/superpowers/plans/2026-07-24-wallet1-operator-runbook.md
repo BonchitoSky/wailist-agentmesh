@@ -199,7 +199,23 @@ that traffic exactly as documented. For run-level-funded traffic specifically:
   facilitator times out, the run can't tell whether the bulk settle actually
   landed before deciding how to fail — lower severity than the original
   (both wallets involved are ours, so a wrong call here is a
-  bookkeeping/accounting risk, not a lost-funds one), but not fully solved.
+  bookkeeping/accounting risk, not a lost-funds one). `reserveAndFundRun`
+  handles this by *holding* the credit reservation rather than releasing it
+  (releasing would let a second full inbound settlement happen for the same
+  run if the first one actually landed) and failing the run with a
+  `CRITICAL: run pre-fund settle response lost, fate unknown, reservation
+  held` alert on `alert.ChannelPayments`.
+
+  **This state has no DB trace, unlike the `RecordRunFunding`-failure case
+  above** — it's detected and fails before `RecordRunFunding` is ever called,
+  so there's no `x402_run_fundings` row to reconcile against. The Slack
+  alert (and the matching log line) is the *only* record tying the held
+  reservation to a user and amount; if it's missed, the reservation is
+  stranded with nothing to grep for. To reconcile by hand: pull the amount
+  and `user=`/`workflow=`/`run=` fields from the alert, and manually verify
+  against the GoPlausible facilitator / Wallet 1's on-chain history whether
+  the settlement actually landed before deciding whether to release the
+  reservation or leave it committed.
 - **Quote price-drift: genuinely improved.** The run-level per-call executor
   fetches a target's price once and pays against that same quote
   immediately, closing the two-fetch drift window entirely for run-funded
