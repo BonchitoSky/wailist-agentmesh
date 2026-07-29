@@ -615,7 +615,7 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	// panicking on a nil func call.
 	if reserve := cfg.Ledger.Reserve; reserve != nil {
 		if err := reserve(ctx, amount); err != nil {
-			return Tool402PaymentResult{}, err
+			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 		}
 	}
 

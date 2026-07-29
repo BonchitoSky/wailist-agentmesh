@@ -705,6 +705,46 @@ func TestX402RunLevelCommitsNotReleasesOnTargetNetworkFailure(t *testing.T) {
 	}
 }
 
+// TestX402RunLevelReserveFailureIsErrBalanceBlocked is a regression test for
+// executeTool402RunLevel's pool-exhaustion path: unlike its two siblings
+// (the legacy-dialect and per-call v2 reserve failures a few lines above and
+// below it in tool402.go), a failed cfg.Ledger.Reserve here used to return a
+// plain error instead of &ErrBalanceBlocked{}. provider.go's agent loop only
+// hard-stops on errors.As(execErr, &ErrBalanceBlocked{}) -- a plain error
+// gets fed back to the LLM as a retryable tool result, so pool exhaustion
+// would silently turn into repeated real outbound probes against the target
+// (up to the loop's iteration cap) instead of stopping the run once.
+func TestX402RunLevelReserveFailureIsErrBalanceBlocked(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+
+	reserveErr := errors.New("pool exhausted: need 100000, 0 left of 500000")
+	ledger := nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { return reserveErr },
+	}
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID:     "test-run-funding-1",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		Ledger:           nodes.RunLedger(ledger),
+	}
+
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+	if err == nil {
+		t.Fatal("want an error surfaced for the exhausted pool")
+	}
+	var blocked *nodes.ErrBalanceBlocked
+	if !errors.As(err, &blocked) {
+		t.Fatalf("want *ErrBalanceBlocked so the agent loop hard-stops instead of retrying, got %T: %v", err, err)
+	}
+}
+
 // TestX402RunLevelCommitsNotReleasesOnRecordSettlementFailure is the second
 // half of the same regression: when the outbound payment succeeds (the
 // target responds 2xx) but the audit-write call (RecordSettlement, e.g.
