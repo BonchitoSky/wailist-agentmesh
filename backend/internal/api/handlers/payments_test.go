@@ -18,204 +18,160 @@ import (
 	"github.com/agentmesh/backend/internal/payments"
 )
 
-type fakeRazorpay struct {
-	order               payments.RazorpayOrder
-	createErr           error
-	verifyResult        bool
-	verifyWebhookResult bool
+// fakeCashfree satisfies the CashfreeClient interface for unit tests.
+type fakeCashfree struct {
+	order       payments.CashfreeOrder
+	createErr   error
+	statusValue string
+	statusErr   error
+	sigValid    bool
 }
 
-func (f *fakeRazorpay) CreateOrder(ctx context.Context, amountPaise int64, receipt string) (payments.RazorpayOrder, error) {
-	return f.order, f.createErr
+func (f *fakeCashfree) CreateOrder(_ context.Context, _ int64, orderID, _, _, _ string) (payments.CashfreeOrder, error) {
+	if f.createErr != nil {
+		return payments.CashfreeOrder{}, f.createErr
+	}
+	o := f.order
+	if o.OrderID == "" {
+		o.OrderID = orderID
+	}
+	return o, nil
 }
 
-func (f *fakeRazorpay) VerifySignature(orderID, paymentID, signature string) bool {
-	return f.verifyResult
+func (f *fakeCashfree) GetOrderStatus(_ context.Context, _ string) (string, error) {
+	return f.statusValue, f.statusErr
 }
 
-func (f *fakeRazorpay) VerifyWebhookSignature(body []byte, signature string) bool {
-	return f.verifyWebhookResult
+func (f *fakeCashfree) VerifyWebhookSignature(_ []byte, _, _ string) bool {
+	return f.sigValid
 }
 
-func TestCreateRazorpayOrderRejectsBelowMinimum(t *testing.T) {
-	d := &handlers.Deps{Razorpay: &fakeRazorpay{}}
+func TestCreateCashfreeOrderRejectsBelowMinimum(t *testing.T) {
+	d := &handlers.Deps{Cashfree: &fakeCashfree{}}
 	body, _ := json.Marshal(map[string]int64{"amount_inr_paise": 50})
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/order", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/order", bytes.NewReader(body))
 	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "user1"))
 	w := httptest.NewRecorder()
 
-	d.CreateRazorpayOrder(w, req)
+	d.CreateCashfreeOrder(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d", w.Code)
 	}
 }
 
-func TestCreateRazorpayOrderRejectsAboveMaximum(t *testing.T) {
-	d := &handlers.Deps{Razorpay: &fakeRazorpay{}}
+func TestCreateCashfreeOrderRejectsAboveMaximum(t *testing.T) {
+	d := &handlers.Deps{Cashfree: &fakeCashfree{}}
 	body, _ := json.Marshal(map[string]int64{"amount_inr_paise": 5_00_000_01})
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/order", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/order", bytes.NewReader(body))
 	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "user1"))
 	w := httptest.NewRecorder()
 
-	d.CreateRazorpayOrder(w, req)
+	d.CreateCashfreeOrder(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d", w.Code)
 	}
 }
 
-func TestVerifyRazorpayPaymentRejectsMissingFields(t *testing.T) {
-	d := &handlers.Deps{Razorpay: &fakeRazorpay{verifyResult: true}}
-	body, _ := json.Marshal(map[string]string{"razorpay_order_id": "order_1"})
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/verify", bytes.NewReader(body))
+func TestVerifyCashfreePaymentRejectsMissingOrderID(t *testing.T) {
+	d := &handlers.Deps{Cashfree: &fakeCashfree{statusValue: "PAID"}}
+	body, _ := json.Marshal(map[string]string{})
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/verify", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	d.VerifyRazorpayPayment(w, req)
+	d.VerifyCashfreePayment(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d", w.Code)
 	}
 }
 
-func TestRazorpayWebhookRejectsMissingSignatureHeader(t *testing.T) {
-	d := &handlers.Deps{Razorpay: &fakeRazorpay{verifyWebhookResult: true}}
-	body := []byte(`{"event":"payment.captured"}`)
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/webhook", bytes.NewReader(body))
+func TestVerifyCashfreePaymentRejectsUnpaidStatus(t *testing.T) {
+	d := &handlers.Deps{Cashfree: &fakeCashfree{statusValue: "ACTIVE"}}
+	body, _ := json.Marshal(map[string]string{"order_id": "order_1"})
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/verify", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	d.RazorpayWebhook(w, req)
+	d.VerifyCashfreePayment(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("want 402 got %d", w.Code)
+	}
+}
+
+func TestCashfreeWebhookRejectsMissingSignatureHeader(t *testing.T) {
+	d := &handlers.Deps{Cashfree: &fakeCashfree{sigValid: true}}
+	body := []byte(`{"type":"PAYMENT_SUCCESS_WEBHOOK","data":{"order":{"order_id":"x"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/webhook", bytes.NewReader(body))
+	// No x-webhook-signature header
+	w := httptest.NewRecorder()
+
+	d.CashfreeWebhook(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d", w.Code)
 	}
 }
 
-func TestRazorpayWebhookRejectsBadSignature(t *testing.T) {
-	d := &handlers.Deps{Razorpay: &fakeRazorpay{verifyWebhookResult: false}}
-	body := []byte(`{"event":"payment.captured"}`)
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/webhook", bytes.NewReader(body))
-	req.Header.Set("X-Razorpay-Signature", "bad")
+func TestCashfreeWebhookRejectsBadSignature(t *testing.T) {
+	d := &handlers.Deps{Cashfree: &fakeCashfree{sigValid: false}}
+	body := []byte(`{"type":"PAYMENT_SUCCESS_WEBHOOK","data":{"order":{"order_id":"x"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/webhook", bytes.NewReader(body))
+	req.Header.Set("x-webhook-signature", "bad")
+	req.Header.Set("x-webhook-timestamp", "1234567890")
 	w := httptest.NewRecorder()
 
-	d.RazorpayWebhook(w, req)
+	d.CashfreeWebhook(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d", w.Code)
 	}
 }
 
-func TestRazorpayWebhookIgnoresNonCapturedEvent(t *testing.T) {
-	d := &handlers.Deps{Razorpay: &fakeRazorpay{verifyWebhookResult: true}}
-	body := []byte(`{"event":"payment.failed","payload":{"payment":{"entity":{"id":"pay_1","order_id":"order_1"}}}}`)
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/webhook", bytes.NewReader(body))
-	req.Header.Set("X-Razorpay-Signature", "valid")
+func TestCashfreeWebhookIgnoresUnknownEventType(t *testing.T) {
+	d := &handlers.Deps{Cashfree: &fakeCashfree{sigValid: true}}
+	body := []byte(`{"type":"ORDER_CREATED_WEBHOOK","data":{"order":{"order_id":"x"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/webhook", bytes.NewReader(body))
+	req.Header.Set("x-webhook-signature", "valid")
+	req.Header.Set("x-webhook-timestamp", "1234567890")
 	w := httptest.NewRecorder()
 
-	d.RazorpayWebhook(w, req)
+	d.CashfreeWebhook(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200 got %d", w.Code)
 	}
 }
 
-func TestRazorpayWebhookRejectsMissingOrderOrPaymentID(t *testing.T) {
-	d := &handlers.Deps{Razorpay: &fakeRazorpay{verifyWebhookResult: true}}
-	body := []byte(`{"event":"payment.captured","payload":{"payment":{"entity":{"id":"","order_id":""}}}}`)
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/webhook", bytes.NewReader(body))
-	req.Header.Set("X-Razorpay-Signature", "valid")
-	w := httptest.NewRecorder()
-
-	d.RazorpayWebhook(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400 got %d", w.Code)
-	}
-}
-
-func TestRazorpayWebhookRejectsUnknownOrder(t *testing.T) {
+func TestCashfreeWebhookRejectsUnknownOrder(t *testing.T) {
 	base := testDeps(t)
-	d := &handlers.Deps{Store: base.Store, Razorpay: &fakeRazorpay{verifyWebhookResult: true}}
+	d := &handlers.Deps{Store: base.Store, Cashfree: &fakeCashfree{sigValid: true}}
 
 	orderID := fmt.Sprintf("order_unknown_%d", time.Now().UnixNano())
-	body := []byte(fmt.Sprintf(`{"event":"payment.captured","payload":{"payment":{"entity":{"id":"pay_1","order_id":"%s"}}}}`, orderID))
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/webhook", bytes.NewReader(body))
-	req.Header.Set("X-Razorpay-Signature", "valid")
+	body := []byte(fmt.Sprintf(`{"type":"PAYMENT_SUCCESS_WEBHOOK","data":{"order":{"order_id":"%s"},"payment":{"cf_payment_id":"pay_1"}}}`, orderID))
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/webhook", bytes.NewReader(body))
+	req.Header.Set("x-webhook-signature", "valid")
+	req.Header.Set("x-webhook-timestamp", "1234567890")
 	w := httptest.NewRecorder()
 
-	d.RazorpayWebhook(w, req)
+	d.CashfreeWebhook(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d", w.Code)
 	}
 }
 
-func TestVerifyRazorpayPaymentRejectsUnknownOrder(t *testing.T) {
+func TestVerifyCashfreePaymentRejectsUnknownOrder(t *testing.T) {
 	base := testDeps(t)
-	d := &handlers.Deps{Store: base.Store, Razorpay: &fakeRazorpay{verifyResult: true}}
+	d := &handlers.Deps{Store: base.Store, Cashfree: &fakeCashfree{statusValue: "PAID"}}
 
 	orderID := fmt.Sprintf("order_unknown_%d", time.Now().UnixNano())
-	body, _ := json.Marshal(map[string]string{
-		"razorpay_order_id": orderID, "razorpay_payment_id": "pay_1", "razorpay_signature": "sig",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/verify", bytes.NewReader(body))
+	body, _ := json.Marshal(map[string]string{"order_id": orderID})
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/verify", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 
-	d.VerifyRazorpayPayment(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400 got %d", w.Code)
-	}
-}
-
-func TestRazorpayWebhookProcessesRefund(t *testing.T) {
-	base := testDeps(t)
-	d := &handlers.Deps{Store: base.Store, Razorpay: &fakeRazorpay{verifyWebhookResult: true}}
-
-	email := fmt.Sprintf("webhook-refund-test-%d@example.com", time.Now().UnixNano())
-	user, err := d.Store.CreateUser(context.Background(), email, "hash")
-	if err != nil {
-		t.Fatal(err)
-	}
-	orderID := fmt.Sprintf("order_webhook_refund_%d", time.Now().UnixNano())
-	if _, err := d.Store.CreateCreditTransaction(context.Background(), user.ID, orderID, 50000, 0.012); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := d.Store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_webhook_refund_test"); err != nil {
-		t.Fatal(err)
-	}
-
-	body := []byte(fmt.Sprintf(`{"event":"refund.processed","payload":{"payment":{"entity":{"id":"pay_webhook_refund_test","order_id":"%s","amount_refunded":50000}}}}`, orderID))
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/webhook", bytes.NewReader(body))
-	req.Header.Set("X-Razorpay-Signature", "valid")
-	w := httptest.NewRecorder()
-
-	d.RazorpayWebhook(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200 got %d", w.Code)
-	}
-
-	balance, err := d.Store.GetCreditBalance(context.Background(), user.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if balance != 0 {
-		t.Fatalf("want balance 0 after full refund, got %d", balance)
-	}
-}
-
-func TestRazorpayWebhookRefundRejectsUnknownOrder(t *testing.T) {
-	base := testDeps(t)
-	d := &handlers.Deps{Store: base.Store, Razorpay: &fakeRazorpay{verifyWebhookResult: true}}
-
-	orderID := fmt.Sprintf("order_unknown_refund_%d", time.Now().UnixNano())
-	body := []byte(fmt.Sprintf(`{"event":"refund.processed","payload":{"payment":{"entity":{"id":"pay_1","order_id":"%s","amount_refunded":100}}}}`, orderID))
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/webhook", bytes.NewReader(body))
-	req.Header.Set("X-Razorpay-Signature", "valid")
-	w := httptest.NewRecorder()
-
-	d.RazorpayWebhook(w, req)
+	d.VerifyCashfreePayment(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 got %d", w.Code)
@@ -234,7 +190,7 @@ func TestGetCreditBalanceReturnsStoredBalance(t *testing.T) {
 	if _, err := d.Store.CreateCreditTransaction(context.Background(), user.ID, orderID, 10000, 0.012); err != nil {
 		t.Fatal(err)
 	}
-	wantMicros, _, err := d.Store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_balance_test")
+	wantMicros, _, err := d.Store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_balance_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,33 +204,18 @@ func TestGetCreditBalanceReturnsStoredBalance(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200 got %d", w.Code)
 	}
-	var body struct {
+	var resp struct {
 		CreditUSDMicros int64 `json:"credit_usd_micros"`
 	}
-	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatal(err)
 	}
-	if body.CreditUSDMicros != wantMicros {
-		t.Fatalf("want %d got %d", wantMicros, body.CreditUSDMicros)
+	if resp.CreditUSDMicros != wantMicros {
+		t.Fatalf("want %d got %d", wantMicros, resp.CreditUSDMicros)
 	}
 }
 
-func TestVerifyRazorpayPaymentRejectsBadSignature(t *testing.T) {
-	d := &handlers.Deps{Razorpay: &fakeRazorpay{verifyResult: false}}
-	body, _ := json.Marshal(map[string]string{
-		"razorpay_order_id": "order_1", "razorpay_payment_id": "pay_1", "razorpay_signature": "bad",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/payments/razorpay/verify", bytes.NewReader(body))
-	w := httptest.NewRecorder()
-
-	d.VerifyRazorpayPayment(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("want 400 got %d", w.Code)
-	}
-}
-
-// --- fakeNOWPayments: same role as this file's existing fakeRazorpay ---
+// --- NOWPayments tests (unchanged) ---
 
 type fakeNOWPayments struct {
 	invoice   payments.Invoice
@@ -343,11 +284,6 @@ func TestCreateCryptoInvoiceRejectsBelowMinimum(t *testing.T) {
 }
 
 func TestCreateCryptoInvoiceLeavesOrphanedPendingRowOnInvoiceFailure(t *testing.T) {
-	// The ledger row is created BEFORE the NOWPayments invoice request precisely so that a
-	// failure calling NOWPayments leaves only a harmless dead 'pending' row — never a real
-	// invoice with no matching ledger row (see CreateCryptoInvoice's doc comment). This
-	// test proves the orphan actually lands as 'pending' (not lost, not left in some other
-	// state) when invoice creation fails.
 	base := testDeps(t)
 	d := &handlers.Deps{
 		Store:       base.Store,
@@ -371,8 +307,6 @@ func TestCreateCryptoInvoiceLeavesOrphanedPendingRowOnInvoiceFailure(t *testing.
 		t.Fatalf("want 502, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Verify by user_id (fresh per test run) rather than order_id, since the handler
-	// doesn't — and shouldn't — leak the internal order_id in an error response.
 	url := os.Getenv("TEST_DATABASE_URL")
 	pool, err := pgxpool.New(context.Background(), url)
 	if err != nil {
@@ -439,9 +373,6 @@ func TestNOWPaymentsWebhookCreditsOnFinished(t *testing.T) {
 }
 
 func TestNOWPaymentsWebhookDoesNotCreditOnConfirmed(t *testing.T) {
-	// "confirmed" means on-chain-confirmed but not yet settled to us — only "finished"
-	// is safe to credit (verified against NOWPayments' documented status sequence:
-	// waiting -> confirming -> confirmed -> sending -> finished).
 	base := testDeps(t)
 	d := &handlers.Deps{Store: base.Store, NOWPayments: &fakeNOWPayments{sigValid: true}}
 

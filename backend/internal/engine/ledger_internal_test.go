@@ -50,7 +50,7 @@ func TestPaymentLedgerCommitAndReleaseSurviveCancelledContext(t *testing.T) {
 	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_"+orderID); err != nil {
+	if _, _, err := store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_"+orderID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -251,7 +251,7 @@ func TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFa
 	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_"+orderID); err != nil {
+	if _, _, err := store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_"+orderID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -404,7 +404,7 @@ func TestReserveAndFundRunRejectsOutOfRangeQuote(t *testing.T) {
 	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_"+orderID); err != nil {
+	if _, _, err := store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_"+orderID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -548,7 +548,7 @@ func TestReserveAndFundRunHoldsReservationOnIndeterminateSettle(t *testing.T) {
 	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_"+orderID); err != nil {
+	if _, _, err := store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_"+orderID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -626,7 +626,7 @@ func TestReserveAndFundRunDegradesGracefullyWithNilFacilitator(t *testing.T) {
 	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.CompleteCreditTransaction(context.Background(), "razorpay", orderID, "pay_"+orderID); err != nil {
+	if _, _, err := store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_"+orderID); err != nil {
 		t.Fatal(err)
 	}
 

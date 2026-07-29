@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "AgentMesh — Visual canvas for autonomous agent networks",
-  description: "Design, deploy, and monitor AI agent workflows with on-chain micropayments via x402 on Algorand.",
+  description: "Design, deploy, and monitor AI agent workflows.",
 };
 
 export default function RootLayout({

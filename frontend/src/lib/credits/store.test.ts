@@ -20,11 +20,11 @@ describe("addPurchase", () => {
   it("credits the mock-FX amount and prepends to purchase history", async () => {
     const { addPurchase } = await freshStore();
 
-    const first = addPurchase({ amountINR: 500, method: "razorpay" });
+    const first = addPurchase({ amountINR: 500, method: "cashfree" });
     expect(first.creditsUSD).toBeCloseTo(creditsForTopup(500), 10);
     expect(first.status).toBe("paid");
 
-    const second = addPurchase({ amountINR: 2000, method: "razorpay" });
+    const second = addPurchase({ amountINR: 2000, method: "cashfree" });
 
     // Newest first.
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -38,8 +38,8 @@ describe("addPurchase", () => {
 
   it("accumulates balanceUSD across purchases", async () => {
     const { addPurchase } = await freshStore();
-    addPurchase({ amountINR: 500, method: "razorpay" });
-    addPurchase({ amountINR: 1000, method: "razorpay" });
+    addPurchase({ amountINR: 500, method: "cashfree" });
+    addPurchase({ amountINR: 1000, method: "cashfree" });
 
     const raw = JSON.parse(window.localStorage.getItem(STORAGE_KEY)!);
     expect(raw.balanceUSD).toBeCloseTo(
@@ -54,9 +54,8 @@ describe("addPurchase", () => {
     expect(window.localStorage.getItem(STORAGE_KEY)).not.toBeNull();
   });
 
-  // Regression test for the Razorpay credited-amount bug: a real,
-  // backend-verified payment must record the real credited amount, not the
-  // local mock-FX estimate derived from amountINR.
+  // Regression: a real, backend-verified payment must record the real credited
+  // amount, not the local mock-FX estimate derived from amountINR.
   it("uses creditsUSDOverride instead of the mock-FX amount when provided", async () => {
     const { addPurchase } = await freshStore();
 
@@ -66,7 +65,7 @@ describe("addPurchase", () => {
 
     const purchase = addPurchase({
       amountINR,
-      method: "razorpay",
+      method: "cashfree",
       creditsUSDOverride: realBackendCredited,
     });
 

@@ -184,7 +184,7 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
               fontSize: 18, lineHeight: 1.55, color: "rgba(242, 240, 247, 0.82)",
               opacity: 0.85, fontFamily: "var(--font-sans)", letterSpacing: "-0.005em",
             }}>
-              The visual canvas for autonomous<br />agent networks on Algorand.
+              The visual canvas for autonomous<br />agent networks.
             </p>
             <div style={{ display: "flex", gap: 12, marginTop: 25 }}>
               <button onClick={openStudio} className="liquid-glass"
@@ -210,10 +210,8 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
 
 function LogoMarquee() {
   const logos = [
-    { letter: "A", name: "Algorand" }, { letter: "x", name: "x402" },
-    { letter: "G", name: "GoPlausible" }, { letter: "P", name: "Pera Wallet" },
     { letter: "T", name: "Tavily" }, { letter: "F", name: "Firecrawl" },
-    { letter: "N", name: "Neon" }, { letter: "A", name: "AlpacaQuote" },
+    { letter: "N", name: "Neon" },
   ];
   const doubled = [...logos, ...logos];
 
@@ -221,7 +219,7 @@ function LogoMarquee() {
     <div style={{ padding: "0 32px 40px", position: "relative", zIndex: 11 }}>
       <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", gap: 48 }}>
         <div style={{ flex: "0 0 auto", color: "rgba(242, 240, 247, 0.5)", fontSize: 13, lineHeight: 1.4, fontFamily: "var(--font-sans)" }}>
-          Built on the rails<br />of open agentic commerce
+          Built with best-in-class<br />agent tooling
         </div>
         <div className="marquee-mask" style={{ flex: 1, overflow: "hidden" }}>
           <div className="marquee-track">
@@ -247,9 +245,9 @@ function LogoMarquee() {
 function LandingPillars() {
   const pillars = [
     { tag: "01", kicker: "build", title: "Design agent workflows visually.", body: "Drag triggers, agents, providers, tools, and actions onto a canvas. Connect them like Lego. The graph IS the execution graph.", glyph: "⬡" },
-    { tag: "02", kicker: "fund",  title: "Wallets at deploy, not signup.",   body: "Each agent gets an Ed25519 keypair on Algorand testnet the moment you deploy. Fund manually, watch balances tick live.", glyph: "◎" },
-    { tag: "03", kicker: "wire",  title: "x402 paywalled APIs as tools.",    body: "Any HTTP 402-compliant endpoint becomes a tool node. Price-discovered at edge-time, settled per call, accountable per agent.", glyph: "⟡" },
-    { tag: "04", kicker: "run",   title: "A2A messages anchored on-chain.",  body: "Inter-agent messages produce verifiable receipts. Replay any run by anchor hash. Audit-friendly by default.", glyph: "◈" },
+    { tag: "02", kicker: "fund",  title: "Budgets at deploy, not signup.",   body: "Each agent gets its own spending budget the moment you deploy. Top it up manually, watch usage tick live.", glyph: "◎" },
+    { tag: "03", kicker: "wire",  title: "Paid APIs as tools.",              body: "Any metered HTTP endpoint becomes a tool node. Priced at call-time, settled per call, accountable per agent.", glyph: "⟡" },
+    { tag: "04", kicker: "run",   title: "Agent-to-agent messages, audit-ready.",  body: "Inter-agent messages produce verifiable receipts. Replay any run. Audit-friendly by default.", glyph: "◈" },
   ];
   return (
     <section id="pillars" style={{
@@ -260,7 +258,7 @@ function LandingPillars() {
         <div className="in-view" style={{ marginBottom: 72 }}>
           <Tag>what is agentmesh</Tag>
           <h2 style={{ margin: "16px 0 0", fontSize: 48, fontWeight: 500, letterSpacing: "-0.028em", maxWidth: 680, fontFamily: "var(--font-sans)", lineHeight: 1.12 }}>
-            Visual workflow design meets on-chain agentic commerce.
+            Visual workflow design for autonomous agents.
           </h2>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 20 }}>
@@ -292,8 +290,8 @@ function LandingFlow() {
   const steps = [
     { k: "01", label: "Drop nodes",  body: "Trigger, agent, provider, tools, action, end.",          glyph: "⊕" },
     { k: "02", label: "Wire ports",  body: "Provider + tools attach to agent's bottom ports.",         glyph: "⟡" },
-    { k: "03", label: "Deploy",      body: "Agents get Algorand testnet wallets at this moment.",      glyph: "◎" },
-    { k: "04", label: "Fund + run",  body: "Top up agent balances. Watch x402 settlements live.",      glyph: "▶" },
+    { k: "03", label: "Deploy",      body: "Agents get their own spending budgets at this moment.",    glyph: "◎" },
+    { k: "04", label: "Fund + run",  body: "Top up agent budgets. Watch usage settle live.",           glyph: "▶" },
   ];
   return (
     <section id="flow" style={{ borderTop: "1px solid var(--border)", background: "rgba(4, 3, 12, 0.62)", padding: "112px 32px", position: "relative", zIndex: 1 }}>
@@ -350,7 +348,7 @@ function LandingWaitlist() {
         <Tag>early access</Tag>
         <h2 style={{ margin: "20px 0 14px", fontSize: 48, fontWeight: 500, letterSpacing: "-0.028em", fontFamily: "var(--font-sans)", lineHeight: 1.1 }}>Join the waitlist.</h2>
         <p style={{ color: "var(--fg-muted)", fontSize: 15, lineHeight: 1.6, marginBottom: 40 }}>
-          {WAITLIST_COUNT}+ teams in queue. Early access opens in cohorts; testnet is free.
+          {WAITLIST_COUNT}+ teams in queue. Early access opens in cohorts; it&apos;s free to start.
         </p>
         <div style={{ padding: "32px 32px 28px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 18, backdropFilter: "blur(12px)", boxShadow: "0 0 60px rgba(167,140,250,0.07), inset 0 1px 0 rgba(255,255,255,0.06)" }}>
           <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8 }}>
@@ -362,7 +360,7 @@ function LandingWaitlist() {
             </button>
           </form>
           <div style={{ display: "flex", justifyContent: "center", gap: 32, marginTop: 24, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-            {[{ v: `${WAITLIST_COUNT}+`, l: "teams in queue" }, { v: "free", l: "testnet" }, { v: "x402", l: "native" }].map((s, i) => (
+            {[{ v: `${WAITLIST_COUNT}+`, l: "teams in queue" }, { v: "free", l: "to start" }].map((s, i) => (
               <div key={i} style={{ textAlign: "center" }}>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 15, fontWeight: 600, color: "var(--accent)" }}>{s.v}</div>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-dim)", marginTop: 3, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s.l}</div>
@@ -378,17 +376,18 @@ function LandingWaitlist() {
 
 // ── Footer ────────────────────────────────────────────────────────────────
 function LandingFooter() {
+  const linkStyle: React.CSSProperties = { color: "inherit", textDecoration: "none" };
   return (
-    <footer style={{ borderTop: "1px solid var(--border)", padding: "32px 32px", position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.70)" }}>
-      <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
+    <footer style={{ borderTop: "1px solid var(--border)", padding: "28px 32px", position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.70)" }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <Logo size={14} />
-          <span>· built on Algorand · GoPlausible x402</span>
+          <span>© {new Date().getFullYear()} AgentMesh</span>
         </div>
-        <div style={{ display: "flex", gap: 16 }}>
-          <a href="https://github.com/notlevi911/agentmesh" target="_blank" rel="noreferrer" style={{ color: "inherit" }}>GitHub ↗</a>
-          <a href="https://algorand.co/agentic-commerce/x402" target="_blank" rel="noreferrer" style={{ color: "inherit" }}>Algorand ↗</a>
-          <a href="https://www.x402.org" target="_blank" rel="noreferrer" style={{ color: "inherit" }}>x402 ↗</a>
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+          <a href="/terms" style={linkStyle}>Terms &amp; Conditions</a>
+          <a href="/refund-policy" style={linkStyle}>Refund Policy</a>
+          <a href="https://github.com/notlevi911/agentmesh" target="_blank" rel="noreferrer" style={linkStyle}>GitHub ↗</a>
         </div>
       </div>
     </footer>
