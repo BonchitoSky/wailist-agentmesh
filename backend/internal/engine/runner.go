@@ -145,8 +145,12 @@ func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.Paym
 // message in order.
 func (r *Runner) criticalAlert(wf models.Workflow, run models.Run, label string, err error, fields ...any) {
 	parts := []string{fmt.Sprintf("CRITICAL: %s: user=%s workflow=%s run=%s", label, wf.UserID, wf.ID, run.ID)}
-	for i := 0; i+1 < len(fields); i += 2 {
-		parts = append(parts, fmt.Sprintf("%v=%v", fields[i], fields[i+1]))
+	for i := 0; i < len(fields); i += 2 {
+		if i+1 < len(fields) {
+			parts = append(parts, fmt.Sprintf("%v=%v", fields[i], fields[i+1]))
+		} else {
+			parts = append(parts, fmt.Sprintf("%v=<missing value>", fields[i]))
+		}
 	}
 	if err != nil {
 		parts = append(parts, fmt.Sprintf("err=%v", err))

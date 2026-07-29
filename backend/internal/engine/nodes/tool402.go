@@ -324,12 +324,12 @@ func ParseMaxAmountRequiredAsMicros(v any) (int64, bool) {
 	switch t := v.(type) {
 	case string:
 		n, err := strconv.ParseInt(t, 10, 64)
-		if err != nil {
+		if err != nil || n < 0 {
 			return 0, false
 		}
 		return n, true
 	case float64:
-		if t != math.Trunc(t) {
+		if t != math.Trunc(t) || t < 0 {
 			return 0, false
 		}
 		return int64(t), true
