@@ -78,7 +78,7 @@ func TestX402ProbeQuoteValid(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL)
+	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestX402ProbeQuoteValid(t *testing.T) {
 		t.Fatalf("want maxAmountRequired 250000, got %q", quote.MaxAmountRequired)
 	}
 
-	priceIsV2, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL)
+	priceIsV2, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL, "")
 	if err != nil {
 		t.Fatalf("unexpected error from ProbeX402Price: %v", err)
 	}
@@ -119,12 +119,12 @@ func TestX402ProbeQuoteMalformedAmount(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := nodes.ProbeX402Quote(context.Background(), srv.URL)
+	_, _, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
 	if err == nil {
 		t.Fatal("want an error for a malformed (non-numeric) maxAmountRequired, got nil")
 	}
 
-	_, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL)
+	_, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL, "")
 	if err == nil {
 		t.Fatal("want an error from ProbeX402Price for a malformed maxAmountRequired, got nil")
 	}
@@ -146,12 +146,101 @@ func TestX402ProbeQuoteMissingAmount(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	isV2, _, err := nodes.ProbeX402Quote(context.Background(), srv.URL)
+	isV2, _, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
 	if err == nil {
 		t.Fatal("want an error for a missing maxAmountRequired, got nil")
 	}
 	if !isV2 {
 		t.Fatal("want isV2=true still reported — it IS a real v2 challenge, just malformed")
+	}
+}
+
+// TestX402ProbePostOnlyEndpointUnreachableViaGet is a reproduce step for the
+// real bug found live against Prism
+// (https://prism-99h2.onrender.com/resume-screen-accurate) on 2026-07-31: a
+// POST-only x402 endpoint 404s a bare GET before it ever looks at payment
+// state. Confirms the OLD default (empty method -> GET) genuinely can't see
+// this endpoint's real v2 challenge at all -- notPaymentRequired comes back
+// true (a 404, not a 402), exactly the failure mode that made the whole
+// tool402 dispatch dead-end before probing with the right method existed.
+func TestX402ProbePostOnlyEndpointUnreachableViaGet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"250000"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if isV2 || quote.PayTo != "" {
+		t.Fatalf("want the OLD get-only probe to see a 404, not the real v2 challenge (isV2=%v quote=%+v)", isV2, quote)
+	}
+}
+
+// TestX402ProbePostOnlyEndpointReachableViaConfiguredMethod is the fix half
+// of the pair above: passing method=POST reaches the same endpoint's real
+// v2 challenge correctly.
+func TestX402ProbePostOnlyEndpointReachableViaConfiguredMethod(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"250000"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL, http.MethodPost)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isV2 {
+		t.Fatal("want isV2=true once probed with the endpoint's actual required method")
+	}
+	if quote.PayTo != "TARGETADDR" || quote.MaxAmountRequired != "250000" {
+		t.Fatalf("want the real quote parsed, got %+v", quote)
+	}
+
+	priceIsV2, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL, http.MethodPost)
+	if err != nil {
+		t.Fatalf("unexpected error from ProbeX402Price: %v", err)
+	}
+	if !priceIsV2 || amount != 250000 {
+		t.Fatalf("want isV2=true amount=250000, got isV2=%v amount=%d", priceIsV2, amount)
+	}
+}
+
+// TestX402ProbeAcceptsAmountFieldDialect is a reproduce-then-fix regression
+// test for the real bug found live against our own Prism-schema demo
+// merchant (backend/cmd/x402demo) on 2026-07-31: its challenge uses `amount`
+// (the current real-world x402 dialect — confirmed against Prism's own live
+// endpoint and the official @x402/core v2.20 SDK), not `maxAmountRequired`
+// (this codebase's own historical convention). Before this fix, a real,
+// live workflow run against that merchant failed with "invalid or missing
+// maxAmountRequired" despite the challenge being entirely well-formed.
+func TestX402ProbeAcceptsAmountFieldDialect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","amount":"250000"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isV2 {
+		t.Fatal("want isV2=true for a real accepts[] challenge using the `amount` field")
+	}
+	if quote.MaxAmountRequired != "250000" {
+		t.Fatalf("want amount parsed via the `amount` fallback field, got %q", quote.MaxAmountRequired)
 	}
 }
 

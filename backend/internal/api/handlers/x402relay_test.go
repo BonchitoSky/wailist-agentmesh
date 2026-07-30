@@ -3,6 +3,7 @@ package handlers_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -83,6 +84,55 @@ func TestX402RelayNoPaymentMirrorsTargetPriceAsChallengeTag(t *testing.T) {
 		t.Fatalf("want price mirrored from target (100000), got %v", body.Accepts[0]["maxAmountRequired"])
 	}
 	_ = x402.PaymentPayload{} // referenced so import stays used once payment-path test is added below
+}
+
+// TestX402RelayAcceptsTargetAmountFieldDialect is a reproduce-then-fix
+// regression test for the real bug found live against our own Prism-schema
+// demo merchant (backend/cmd/x402demo) on 2026-07-31: its challenge uses
+// `amount` (the current real-world x402 dialect — confirmed against Prism's
+// own live endpoint and the official @x402/core v2.20 SDK), not
+// `maxAmountRequired` (this codebase's own historical convention, which the
+// relay still emits on its OWN outward-facing challenge below —
+// unchanged). fetchTargetPriceQuote must still correctly parse a target
+// that only sends `amount`.
+func TestX402RelayAcceptsTargetAmountFieldDialect(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		json.NewEncoder(w).Encode(map[string]any{
+			"x402Version": 2,
+			"accepts": []map[string]any{{
+				"scheme":  "exact",
+				"network": "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+				"amount":  "250000",
+				"payTo":   "TARGETADDR",
+				"asset":   "10458941",
+			}},
+		})
+	}))
+	defer target.Close()
+
+	d := &handlers.Deps{
+		PlatformWalletAddress: "PLATFORMADDR",
+		USDCAssetID:           10458941,
+		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+		RelayFeePayer:         "FEEPAYERADDR",
+	}
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay?target="+target.URL, nil)
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("want 402, got %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Accepts []map[string]any `json:"accepts"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if len(body.Accepts) != 1 || body.Accepts[0]["maxAmountRequired"] != "250000" {
+		t.Fatalf("want price parsed from target's `amount` field and mirrored as our own maxAmountRequired=250000, got %+v", body.Accepts)
+	}
 }
 
 // TestX402RunFundingInfoReturnsStaticJSON pins the contract of the static,
@@ -234,6 +284,99 @@ func TestX402RelayPaysTargetFromPlatformWalletAfterInboundSettles(t *testing.T) 
 	}
 	if row.AmountAssetMicros != 50000 {
 		t.Fatalf("want ledger row to record the real settled amount (50000), got %d", row.AmountAssetMicros)
+	}
+}
+
+// TestX402RelayForwardsConfiguredTargetMethodAndBody is a reproduce-then-fix
+// regression test for the real bug found live against Prism
+// (https://prism-99h2.onrender.com/resume-screen-accurate) on 2026-07-31: a
+// POST-only x402 target 404s a bare GET before it ever considers payment
+// state, so the relay's pre-existing hardcoded-GET/nil-body target fetch
+// could never reach it at all. The fake target below mimics that shape (404
+// on GET, real handling on POST+body) and asserts BOTH the unauthenticated
+// challenge-mirror leg and the paid leg actually reach target as POST with
+// the caller-supplied body -- confirming X-Relay-Method/X-Relay-Body (set
+// once per relay call, mirroring how X-Payment already works) are threaded
+// all the way through relayInboundChallenge, relaySettleAndForward, and
+// payTargetAndRespond, not just one of the three.
+func TestX402RelayForwardsConfiguredTargetMethodAndBody(t *testing.T) {
+	const wantBody = `{"task_description":"test","files":[]}`
+	var gotChallengeBody, gotPaidBody string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		if h := r.Header.Get("X-Payment"); h != "" {
+			gotPaidBody = string(b)
+			w.Write([]byte(`{"data":"paid response from target"}`))
+			return
+		}
+		gotChallengeBody = string(b)
+		w.WriteHeader(http.StatusPaymentRequired)
+		json.NewEncoder(w).Encode(map[string]any{
+			"accepts": []map[string]any{{"payTo": "TARGETADDR", "asset": "10458941", "maxAmountRequired": "50000"}},
+		})
+	}))
+	defer target.Close()
+
+	store := newTestStoreForHandlers(t)
+	inboundTxID := fmt.Sprintf("INBOUND-TX-METHODBODY-%s-%d", target.URL, time.Now().UnixNano())
+
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/verify" {
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
+	}))
+	defer facilitator.Close()
+
+	d := &handlers.Deps{
+		Store:                     store,
+		PlatformWalletAddress:     "PLATFORMADDR",
+		PlatformWalletEncMnemonic: "enc-mnemonic",
+		FacilitatorClient:         x402.NewFacilitatorClient(facilitator.URL),
+		USDCAssetID:               10458941,
+		RelayNetwork:              "algorand:testnet",
+		RelayFeePayer:             "FEEPAYERADDR",
+		USDCSigner:                &fakeUSDCSigner{group: []string{"g0", "g1"}, idx: 0},
+	}
+
+	// Unauthenticated leg: relayInboundChallenge must also use the
+	// configured method/body to even see a real 402 back from a POST-only
+	// target, not a 404.
+	challengeReq := httptest.NewRequest(http.MethodGet, "/x402/relay?target="+target.URL, nil)
+	challengeReq.Header.Set("X-Relay-Method", http.MethodPost)
+	challengeReq.Header.Set("X-Relay-Body", base64.StdEncoding.EncodeToString([]byte(wantBody)))
+	challengeW := httptest.NewRecorder()
+	d.X402Relay(challengeW, challengeReq)
+
+	if challengeW.Code != http.StatusPaymentRequired {
+		t.Fatalf("want 402 mirrored from the target's real POST-only challenge, got %d: %s", challengeW.Code, challengeW.Body.String())
+	}
+	if gotChallengeBody != wantBody {
+		t.Fatalf("want target to receive the configured body on the unauthenticated leg, got %q", gotChallengeBody)
+	}
+
+	// Paid leg: same X-Relay-Method/X-Relay-Body, now alongside X-Payment.
+	payload, _ := json.Marshal(map[string]any{"x402Version": 2, "scheme": "exact", "network": "algorand:testnet"})
+	paidReq := httptest.NewRequest(http.MethodGet, "/x402/relay?target="+target.URL, nil)
+	paidReq.Header.Set("X-Payment", string(payload))
+	paidReq.Header.Set("X-Relay-Method", http.MethodPost)
+	paidReq.Header.Set("X-Relay-Body", base64.StdEncoding.EncodeToString([]byte(wantBody)))
+	paidW := httptest.NewRecorder()
+	d.X402Relay(paidW, paidReq)
+
+	if paidW.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", paidW.Code, paidW.Body.String())
+	}
+	if gotPaidBody != wantBody {
+		t.Fatalf("want target to receive the configured body on the paid leg, got %q", gotPaidBody)
+	}
+	if !bytes.Contains(paidW.Body.Bytes(), []byte("paid response from target")) {
+		t.Fatalf("want target's response relayed back, got %s", paidW.Body.String())
 	}
 }
 

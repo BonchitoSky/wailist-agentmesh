@@ -1037,6 +1037,23 @@ function Tool402Inspector({
             }}
           />
         </Field>
+        <Field
+          label="Method"
+          hint={
+            node.method && node.method !== "GET"
+              ? "body = the run's input message (e.g. from a chat trigger)"
+              : undefined
+          }
+        >
+          <select
+            style={monoInputStyle}
+            value={node.method ?? "GET"}
+            onChange={(e) => onUpdate({ ...node, method: e.target.value })}
+          >
+            <option>GET</option>
+            <option>POST</option>
+          </select>
+        </Field>
         <button
           onClick={discover}
           disabled={!draft.trim() || probing}

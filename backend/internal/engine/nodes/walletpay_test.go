@@ -3,6 +3,7 @@ package nodes_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -43,7 +44,7 @@ func TestPayTargetFromWallet2RejectsUnexpectedAsset(t *testing.T) {
 	cfg := baseWallet2Cfg(signer)
 
 	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "99999999", MaxAmountRequired: "50000"}
-	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, "http://unused.example", quote)
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, "http://unused.example", "", nil, quote)
 
 	if err == nil {
 		t.Fatal("want error for mismatched asset id")
@@ -69,7 +70,7 @@ func TestPayTargetFromWallet2RejectsOverCap(t *testing.T) {
 	cfg.MaxRelayOutboundUSDMicros = 10000
 
 	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "50000"}
-	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, "http://unused.example", quote)
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, "http://unused.example", "", nil, quote)
 
 	if err == nil {
 		t.Fatal("want error for amount exceeding cap")
@@ -94,7 +95,7 @@ func TestPayTargetFromWallet2SignFailureReturns500(t *testing.T) {
 	cfg := baseWallet2Cfg(signer)
 
 	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "50000"}
-	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, "http://unused.example", quote)
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, "http://unused.example", "", nil, quote)
 
 	if err == nil {
 		t.Fatal("want error when signing fails")
@@ -130,7 +131,7 @@ func TestPayTargetFromWallet2TargetNetworkFailureStillSigned(t *testing.T) {
 	target.Close() // closed before use -- guarantees a connection-refused error
 
 	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "50000"}
-	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, quote)
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, "", nil, quote)
 
 	if err == nil {
 		t.Fatal("want error when the paid request to target fails")
@@ -164,7 +165,7 @@ func TestPayTargetFromWallet2SuccessReturnsTargetResponse(t *testing.T) {
 	cfg := baseWallet2Cfg(signer)
 
 	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "50000"}
-	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, quote)
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, "", nil, quote)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -197,7 +198,7 @@ func TestPayTargetFromWallet2NonSuccessStatusNotSettled(t *testing.T) {
 	cfg := baseWallet2Cfg(signer)
 
 	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "50000"}
-	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, quote)
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, "", nil, quote)
 
 	// A non-2xx from the target is not itself a Wallet2PayError -- the paid
 	// HTTP request to target succeeded at the transport level; it's the
@@ -214,5 +215,50 @@ func TestPayTargetFromWallet2NonSuccessStatusNotSettled(t *testing.T) {
 	}
 	if result.Settled {
 		t.Fatal("want Settled=false for a non-2xx target response")
+	}
+}
+
+// TestPayTargetFromWallet2SendsConfiguredMethodAndBody is a
+// reproduce-then-fix regression test for the real bug found live against
+// Prism (https://prism-99h2.onrender.com/resume-screen-accurate) on
+// 2026-07-31: a POST-only x402 target 404s a bare GET before it ever
+// considers payment state at all, so the pre-existing hardcoded-GET/nil-body
+// call could never even reach a POST-only real endpoint's paid leg. This
+// target mimics that shape (404 on GET, real handling on POST) and asserts
+// the paid request actually arrives as POST with the configured body and a
+// JSON content type.
+func TestPayTargetFromWallet2SendsConfiguredMethodAndBody(t *testing.T) {
+	const wantBody = `{"task_description":"test","files":[]}`
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound) // mirrors Prism's real behavior for GET
+			return
+		}
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Fatalf("want Content-Type application/json on the paid POST, got %q", ct)
+		}
+		b, _ := io.ReadAll(r.Body)
+		if string(b) != wantBody {
+			t.Fatalf("want body %q forwarded to target, got %q", wantBody, b)
+		}
+		if r.Header.Get("X-Payment") == "" {
+			t.Fatal("want X-Payment header on the paid POST too")
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"candidates":[]}`))
+	}))
+	defer target.Close()
+
+	signer := &fakeWallet2Signer{group: []string{"g0", "g1"}, idx: 0}
+	cfg := baseWallet2Cfg(signer)
+
+	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "50000"}
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, http.MethodPost, []byte(wantBody), quote)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Settled || result.StatusCode != http.StatusOK {
+		t.Fatalf("want a settled 200 once the target actually saw POST+body, got status=%d settled=%v", result.StatusCode, result.Settled)
 	}
 }

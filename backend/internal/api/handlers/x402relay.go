@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -42,12 +43,41 @@ func (d *Deps) X402Relay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	xPayment := r.Header.Get("X-Payment")
-	if xPayment == "" {
-		d.relayInboundChallenge(w, r, target)
+	// X-Relay-Method/X-Relay-Body tell the relay what to send to TARGET (not
+	// how the caller reaches the relay itself -- that's always this same GET
+	// with ?target=, unchanged). Real x402 endpoints are not guaranteed to
+	// be GET-compatible (a POST-only resource can 404 a bare GET before it
+	// ever considers payment state), so the relay needs to know. Body goes
+	// in a header, base64-encoded, rather than the query string: request
+	// bodies can exceed URLs' practical length limits, while headers hold
+	// far more (net/http's default MaxHeaderBytes is 1MB) — same pattern
+	// X-Payment and Payment-Required already use in this file.
+	targetMethod := r.Header.Get("X-Relay-Method")
+	if targetMethod == "" {
+		targetMethod = http.MethodGet
+	}
+	switch targetMethod {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch:
+	default:
+		respond.Error(w, http.StatusBadRequest, "unsupported X-Relay-Method: "+targetMethod)
 		return
 	}
-	d.relaySettleAndForward(w, r, target, xPayment)
+	var targetBody []byte
+	if b64 := r.Header.Get("X-Relay-Body"); b64 != "" {
+		decoded, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			respond.Error(w, http.StatusBadRequest, "invalid X-Relay-Body: "+err.Error())
+			return
+		}
+		targetBody = decoded
+	}
+
+	xPayment := r.Header.Get("X-Payment")
+	if xPayment == "" {
+		d.relayInboundChallenge(w, r, target, targetMethod, targetBody)
+		return
+	}
+	d.relaySettleAndForward(w, r, target, xPayment, targetMethod, targetBody)
 }
 
 // X402RunFundingInfo is the static, informational resource FundRunReserve's
@@ -89,10 +119,17 @@ type targetPriceQuote struct {
 // second time, draining the platform wallet for more than was ever collected
 // from the caller. relaySettleAndForward fetches the quote exactly once per
 // relay cycle and passes that same value into payTargetAndRespond.
-func fetchTargetPriceQuote(ctx context.Context, target string) (targetPriceQuote, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+func fetchTargetPriceQuote(ctx context.Context, target, method string, body []byte) (targetPriceQuote, error) {
+	var bodyReader io.Reader
+	if method != http.MethodGet && len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, bodyReader)
 	if err != nil {
 		return targetPriceQuote{}, err
+	}
+	if bodyReader != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := nodes.SafeHTTPClient().Do(req)
 	if err != nil {
@@ -103,8 +140,8 @@ func fetchTargetPriceQuote(ctx context.Context, target string) (targetPriceQuote
 	var parsed struct {
 		Accepts []map[string]any `json:"accepts"`
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Accepts) == 0 {
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err := json.Unmarshal(respBody, &parsed); err != nil || len(parsed.Accepts) == 0 {
 		return targetPriceQuote{}, fmt.Errorf("target did not return a valid x402 challenge")
 	}
 	accept := parsed.Accepts[0]
@@ -114,11 +151,20 @@ func fetchTargetPriceQuote(ctx context.Context, target string) (targetPriceQuote
 	// of maxAmountRequired — some real targets encode this field as a
 	// number rather than a string, which a string-only type assertion would
 	// otherwise reject as an empty/invalid quote (see
-	// nodes.ParseMaxAmountRequiredAsMicros). A parse failure here still
-	// yields an empty MaxAmountRequired, which the callers below already
-	// turn into an error via strconv.ParseInt.
+	// nodes.ParseMaxAmountRequiredAsMicros). Also accept `amount` as a
+	// fallback field name when `maxAmountRequired` is absent/unparseable —
+	// the CURRENT real-world x402 dialect (Prism's live endpoint, the
+	// official @x402/core v2.20 SDK, confirmed live 2026-07-31) uses `amount`
+	// instead; `maxAmountRequired` is only checked first because it's this
+	// codebase's own historical convention, not because it's more correct.
+	// A parse failure on both still yields an empty MaxAmountRequired, which
+	// the callers below already turn into an error via strconv.ParseInt.
 	var amount string
-	if micros, ok := nodes.ParseMaxAmountRequiredAsMicros(accept["maxAmountRequired"]); ok {
+	micros, ok := nodes.ParseMaxAmountRequiredAsMicros(accept["maxAmountRequired"])
+	if !ok {
+		micros, ok = nodes.ParseMaxAmountRequiredAsMicros(accept["amount"])
+	}
+	if ok {
 		amount = strconv.FormatInt(micros, 10)
 	}
 	return targetPriceQuote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount}, nil
@@ -127,8 +173,8 @@ func fetchTargetPriceQuote(ctx context.Context, target string) (targetPriceQuote
 // relayInboundChallenge fetches the target's real 402 price and mirrors it
 // back as our own v2 challenge, tagged for the challenge and paid to our
 // platform wallet instead of the target's.
-func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, target string) {
-	quote, err := fetchTargetPriceQuote(r.Context(), target)
+func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, target, targetMethod string, targetBody []byte) {
+	quote, err := fetchTargetPriceQuote(r.Context(), target, targetMethod, targetBody)
 	if err != nil {
 		respond.Error(w, http.StatusBadGateway, "target fetch failed: "+err.Error())
 		return
@@ -190,7 +236,7 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 // pays the real target from the platform wallet, then relays the target's
 // paid response back. Both settlements are real, GoPlausible-facilitated,
 // mainnet payments — this is what earns orchestrator-entry attribution.
-func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, target, xPaymentHeader string) {
+func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, target, xPaymentHeader, targetMethod string, targetBody []byte) {
 	ctx := r.Context()
 
 	var payload x402.PaymentPayload
@@ -204,7 +250,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 	// facilitator actually enforces the quoted price instead of trusting
 	// whatever the caller's payment payload claims) and what lets us record
 	// the real settled amount in the ledger instead of a hardcoded 0.
-	quote, err := fetchTargetPriceQuote(ctx, target)
+	quote, err := fetchTargetPriceQuote(ctx, target, targetMethod, targetBody)
 	if err != nil {
 		respond.Error(w, http.StatusBadGateway, "target fetch failed: "+err.Error())
 		return
@@ -269,7 +315,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
-	d.payTargetAndRespond(w, r, target, ledgerRow.ID, quote)
+	d.payTargetAndRespond(w, r, target, ledgerRow.ID, settleResult.TxID, quote, targetMethod, targetBody)
 }
 
 // payTargetAndRespond pays the real target from the platform wallet via the
@@ -298,7 +344,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 // current architecture (the relay pays the target directly rather than via
 // a second facilitator round-trip from our side), not an oversight, and not
 // something to paper over with a fabricated id.
-func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, target, ledgerID string, quote targetPriceQuote) {
+func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, target, ledgerID, inboundTxID string, quote targetPriceQuote, targetMethod string, targetBody []byte) {
 	ctx := r.Context()
 
 	cfg := nodes.Wallet2PayConfig{
@@ -309,7 +355,7 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 		RelayNetwork:              d.RelayNetwork,
 		MaxRelayOutboundUSDMicros: d.MaxRelayOutboundUSDMicros,
 	}
-	result, err := nodes.PayTargetFromWallet2(ctx, cfg, target, nodes.TargetQuote{
+	result, err := nodes.PayTargetFromWallet2(ctx, cfg, target, targetMethod, targetBody, nodes.TargetQuote{
 		PayTo: quote.PayTo, Asset: quote.Asset, MaxAmountRequired: quote.MaxAmountRequired,
 	})
 
@@ -332,6 +378,13 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 	// WriteHeader call below.
 	if result.Signed {
 		w.Header().Set("X-Inbound-Settled", "true")
+		// Carries the real, already-irreversible inbound facilitator tx id
+		// out to the caller (tool402.go's executeTool402V2Relay) purely for
+		// display -- e.g. surfacing it in a workflow run's console log. Set
+		// alongside X-Inbound-Settled, under the same "money already moved"
+		// condition, since that's the only point at which this id is
+		// meaningful to show.
+		w.Header().Set("X-Settlement-TxId", inboundTxID)
 	}
 
 	if err != nil {

@@ -273,7 +273,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		if tool.Type != models.NodeTypeTool402 {
 			continue
 		}
-		isV2, amount, err := nodes.ProbeX402Price(ctx, tool.Endpoint)
+		isV2, amount, err := nodes.ProbeX402Price(ctx, tool.Endpoint, tool.Method)
 		if err != nil || !isV2 {
 			continue // unreachable/legacy-dialect tools stay on their existing billing path
 		}

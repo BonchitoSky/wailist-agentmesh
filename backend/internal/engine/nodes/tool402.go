@@ -1,7 +1,9 @@
 package nodes
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -269,11 +271,29 @@ type x402Quote struct {
 // quote. notPaymentRequired=true means the endpoint answered something
 // other than 402 (caller treats that as "no payment needed", exactly like
 // ExecuteTool402V2 does today).
-func probeTool402Endpoint(ctx context.Context, endpoint string) (isV2 bool, notPaymentRequired bool, rawResponse any, quote x402Quote, err error) {
+//
+// method/body let this reach targets that gate on HTTP method before ever
+// looking at payment state (e.g. a POST-only resource 404s a bare GET
+// before it gets a chance to return 402) — real x402 endpoints are not
+// guaranteed to be GET-compatible. method empty defaults to GET, matching
+// every caller's behavior before this parameter existed. body is only ever
+// sent when method is not GET, mirroring nodes.go's callHTTP convention for
+// the plain "tool" node type.
+func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []byte) (isV2 bool, notPaymentRequired bool, rawResponse any, quote x402Quote, err error) {
 	if err := urlValidator(endpoint); err != nil {
 		return false, false, nil, x402Quote{}, err
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if method == "" {
+		method = http.MethodGet
+	}
+	var bodyReader io.Reader
+	if method != http.MethodGet && len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
+	req, _ := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
+	if bodyReader != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
 		return false, false, nil, x402Quote{}, err
@@ -289,27 +309,38 @@ func probeTool402Endpoint(ctx context.Context, endpoint string) (isV2 bool, notP
 		return false, true, string(b), x402Quote{}, nil
 	}
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
 	var v2Challenge struct {
 		Accepts []map[string]any `json:"accepts"`
 	}
-	if json.Unmarshal(body, &v2Challenge) != nil || len(v2Challenge.Accepts) == 0 {
+	if json.Unmarshal(respBody, &v2Challenge) != nil || len(v2Challenge.Accepts) == 0 {
 		return false, false, nil, x402Quote{}, nil
 	}
 	accept := v2Challenge.Accepts[0]
 	payTo, _ := accept["payTo"].(string)
 	asset, _ := accept["asset"].(string)
+	// `amount` is the field name the CURRENT real-world dialect uses (Prism's
+	// live endpoint, the official @x402/core v2.20 SDK, confirmed live
+	// 2026-07-31) — `maxAmountRequired` is checked first only because it's
+	// this codebase's own historical convention, not because it's more
+	// correct. Both were separately confirmed to parse fine against the real
+	// facilitator, so accepting either read-side (never emitted ourselves,
+	// see relayInboundChallenge in x402relay.go) is pure compatibility, not
+	// a protocol judgment call.
 	amount, ok := ParseMaxAmountRequiredAsMicros(accept["maxAmountRequired"])
+	if !ok {
+		amount, ok = ParseMaxAmountRequiredAsMicros(accept["amount"])
+	}
 	// This is a real v2 challenge (accepts[] present) -- a missing or
-	// unparseable maxAmountRequired here is a malformed challenge, not a
-	// genuinely free tool. Silently returning MaxAmountRequired: 0 in that
-	// case would be indistinguishable from a real zero-cost quote, and
-	// Task 5 sizes both a credit reservation and a real on-chain payment
-	// off this value -- a silent 0 there is a money-correctness bug. Report
-	// it as an error instead; isV2 still reflects reality (it IS a v2
-	// challenge) even though the quote itself is zero-valued.
+	// unparseable amount here is a malformed challenge, not a genuinely free
+	// tool. Silently returning MaxAmountRequired: 0 in that case would be
+	// indistinguishable from a real zero-cost quote, and Task 5 sizes both a
+	// credit reservation and a real on-chain payment off this value -- a
+	// silent 0 there is a money-correctness bug. Report it as an error
+	// instead; isV2 still reflects reality (it IS a v2 challenge) even
+	// though the quote itself is zero-valued.
 	if !ok || amount <= 0 {
-		return true, false, nil, x402Quote{}, fmt.Errorf("x402: invalid or missing maxAmountRequired %v in v2 challenge", accept["maxAmountRequired"])
+		return true, false, nil, x402Quote{}, fmt.Errorf("x402: invalid or missing amount/maxAmountRequired in v2 challenge (maxAmountRequired=%v amount=%v)", accept["maxAmountRequired"], accept["amount"])
 	}
 	return true, false, nil, x402Quote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount}, nil
 }
@@ -340,9 +371,12 @@ func ParseMaxAmountRequiredAsMicros(v any) (int64, bool) {
 
 // ProbeX402Price is the exported form the run-level estimator (Task 5) uses
 // when it only needs "is this v2, and what's the current price" — not the
-// full quote.
-func ProbeX402Price(ctx context.Context, endpoint string) (isV2 bool, amountUSDMicros int64, err error) {
-	isV2, _, _, quote, err := probeTool402Endpoint(ctx, endpoint)
+// full quote. Always probes with an empty body: the 402 gate on a real
+// x402 endpoint fires on method/payment-header alone, before any body
+// validation, so a pure price probe never needs the real call's payload —
+// only its method.
+func ProbeX402Price(ctx context.Context, endpoint, method string) (isV2 bool, amountUSDMicros int64, err error) {
+	isV2, _, _, quote, err := probeTool402Endpoint(ctx, endpoint, method, nil)
 	return isV2, quote.MaxAmountRequired, err
 }
 
@@ -359,9 +393,10 @@ type TargetQuote struct {
 
 // ProbeX402Quote is the exported form the run-level per-call executor
 // (Task 5) uses when it needs the full quote (payTo/asset too) to actually
-// pay it via PayTargetFromWallet2 (Task 3).
-func ProbeX402Quote(ctx context.Context, endpoint string) (isV2 bool, quote TargetQuote, err error) {
-	isV2, _, _, q, err := probeTool402Endpoint(ctx, endpoint)
+// pay it via PayTargetFromWallet2 (Task 3). Same empty-body reasoning as
+// ProbeX402Price.
+func ProbeX402Quote(ctx context.Context, endpoint, method string) (isV2 bool, quote TargetQuote, err error) {
+	isV2, _, _, q, err := probeTool402Endpoint(ctx, endpoint, method, nil)
 	return isV2, TargetQuote{PayTo: q.PayTo, Asset: q.Asset, MaxAmountRequired: strconv.FormatInt(q.MaxAmountRequired, 10)}, err
 }
 
@@ -376,7 +411,11 @@ func ProbeX402Quote(ctx context.Context, endpoint string) (isV2 bool, quote Targ
 // the fixed platform fee — it was never GoPlausible-compliant and isn't
 // becoming so.
 func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunContexter, aw models.AgentWallet, signer WalletSigner, relayCfg X402RelayConfig) (Tool402PaymentResult, error) {
-	isV2, notPaymentRequired, rawResponse, quote, err := probeTool402Endpoint(ctx, node.Endpoint)
+	method := node.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+	isV2, notPaymentRequired, rawResponse, quote, err := probeTool402Endpoint(ctx, node.Endpoint, method, nil)
 	if err != nil {
 		return Tool402PaymentResult{}, err
 	}
@@ -384,6 +423,15 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		return Tool402PaymentResult{Response: rawResponse}, nil
 	}
 	if isV2 {
+		// The real, final call (as opposed to the probe above) carries the
+		// run's actual input as its body when method isn't GET — same
+		// convention nodes.go's callHTTP already uses for the plain "tool"
+		// node type's http template. GET requests never carry a body,
+		// unchanged from before this parameter existed.
+		var payBody []byte
+		if method != http.MethodGet {
+			payBody = []byte(rc.Message())
+		}
 		// toolIsRunFunded (not a blanket RunFundingID != "" check) decides
 		// this: a run can be funded while a SPECIFIC tool's probe failed
 		// during estimation and was never folded into that estimate, and
@@ -398,9 +446,9 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 				Asset:             quote.Asset,
 				MaxAmountRequired: strconv.FormatInt(quote.MaxAmountRequired, 10),
 			}
-			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired)
+			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired, method, payBody)
 		}
-		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.Ledger))
+		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.Ledger), method, payBody)
 	}
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing,
@@ -465,7 +513,31 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	return out, nil
 }
 
-func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger) (Tool402PaymentResult, error) {
+// setRelayTargetHeaders tells our own /x402/relay handler (x402relay.go)
+// what HTTP method/body to use against target, out of band from the
+// relay's own always-GET calling convention (?target=... never changes
+// shape). A body goes in a header, base64-encoded, rather than the query
+// string: request bodies (a full resume's text, for example) can easily
+// exceed URLs' practical length limits, while headers comfortably hold
+// far more (net/http's default MaxHeaderBytes is 1MB). Same base64-in-
+// header pattern this file/x402relay.go already use for X-Payment and
+// Payment-Required.
+func setRelayTargetHeaders(req *http.Request, method string, body []byte) {
+	if method != "" && method != http.MethodGet {
+		req.Header.Set("X-Relay-Method", method)
+	}
+	if len(body) > 0 {
+		req.Header.Set("X-Relay-Body", base64.StdEncoding.EncodeToString(body))
+	}
+}
+
+// targetMethod/targetBody describe the call the RELAY should make to
+// node.Endpoint (our own /x402/relay is always reached via a plain GET
+// itself — these two headers just tell the relay handler what to do with
+// target on the relay's own end, same "method/body only matter for the
+// downstream target, never for talking to the relay" split PayTargetFromWallet2
+// and probeTool402Endpoint already follow).
+func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger, targetMethod string, targetBody []byte) (Tool402PaymentResult, error) {
 	if platformSpendEncMnemonic == "" || usdcSigner == nil {
 		return Tool402PaymentResult{Response: map[string]any{"error": "payment required but no platform spend wallet configured"}}, nil
 	}
@@ -473,6 +545,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	relayURL := relayBaseURL + "/x402/relay?target=" + url.QueryEscape(node.Endpoint)
 
 	quoteReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
+	setRelayTargetHeaders(quoteReq, targetMethod, targetBody)
 	quoteResp, err := relayHTTPClient.Do(quoteReq)
 	if err != nil {
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay quote failed: %w", err)
@@ -552,6 +625,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 
 	payReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
 	payReq.Header.Set("X-Payment", string(xPayment))
+	setRelayTargetHeaders(payReq, targetMethod, targetBody)
 	payResp, err := relayHTTPClient.Do(payReq)
 	if err != nil {
 		releaseReservation()
@@ -585,11 +659,40 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		if commit := ledger.Commit; commit != nil {
 			commit(ctx, node.ID, int64(amount), models.DebitKindX402RelayCost)
 		}
+		// Surfaces the real, already-settled inbound tx id in the node's own
+		// output (rather than only the DB audit trail) so a run's console log
+		// shows it -- same txId/explorerURL shape LogDrawer already renders
+		// specially for the legacy direct-pay dialect (see ExecuteTool402).
+		// Only when Response unmarshaled as a JSON object: a non-object
+		// response (e.g. the target returned a bare string/array) has no
+		// place to attach sibling fields without changing its type.
+		if txID := payResp.Header.Get("X-Settlement-TxId"); txID != "" {
+			if m, ok := out.Response.(map[string]any); ok {
+				m["txId"] = txID
+				m["amount"] = strconv.FormatUint(amount, 10)
+				m["explorerURL"] = explorerURLForAsset(expectedAssetID, txID)
+			}
+		}
 	} else {
 		releaseReservation()
 	}
 	return out, nil
 }
+
+// explorerURLForAsset picks the Lora explorer network segment from the
+// USDC asset id the relay was configured to expect -- the same
+// testnet/mainnet asset id split main.go already uses to choose
+// usdcAssetID and relayNetwork together, so the two stay consistent without
+// threading a separate network string through this call chain.
+func explorerURLForAsset(assetID uint64, txID string) string {
+	network := "testnet"
+	if assetID == mainnetUSDCAssetID {
+		network = "mainnet"
+	}
+	return "https://lora.algokit.io/" + network + "/transaction/" + txID
+}
+
+const mainnetUSDCAssetID = 31566704
 
 // executeTool402RunLevel pays a real target directly from Wallet 2,
 // in-process — no HTTP round trip to our own public relay, no fresh
@@ -598,7 +701,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 // Release still go through cfg.Ledger exactly like the per-call path;
 // the only difference is what's behind those calls (an in-memory pool
 // instead of a DB round trip per call).
-func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X402RelayConfig, quote TargetQuote, amount int64) (Tool402PaymentResult, error) {
+func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X402RelayConfig, quote TargetQuote, amount int64, method string, body []byte) (Tool402PaymentResult, error) {
 	// quote/amount come from ExecuteTool402V2's dispatch probe, taken
 	// synchronously immediately before this call -- no time gap in which
 	// price could legitimately drift, unlike the once-per-run estimate in
@@ -619,7 +722,7 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		}
 	}
 
-	result, payErr := PayTargetFromWallet2(ctx, cfg.Wallet2, node.Endpoint, quote)
+	result, payErr := PayTargetFromWallet2(ctx, cfg.Wallet2, node.Endpoint, method, body, quote)
 
 	// Branch on result.Signed, not on payErr != nil -- Signed becomes true
 	// the instant a real payment group is signed and submitted (see

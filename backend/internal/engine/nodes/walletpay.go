@@ -1,6 +1,7 @@
 package nodes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -57,7 +58,13 @@ type Wallet2PayResult struct {
 // (x402relay.go's payTargetAndRespond) and, later, engine's own trusted,
 // in-process, in-memory-pool-gated run-level path — never from any other,
 // independently-maintained copy of this logic.
-func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target string, quote TargetQuote) (Wallet2PayResult, error) {
+//
+// method/body are the HTTP call actually made to target for the paid
+// retry — empty method defaults to GET (unchanged default), body only ever
+// sent when method isn't GET. Real x402 endpoints are not guaranteed to be
+// GET-compatible (e.g. a POST-only resource 404s a bare GET before payment
+// state is even considered), so this can't stay hardcoded to GET.
+func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, method string, body []byte, quote TargetQuote) (Wallet2PayResult, error) {
 	assetID, _ := strconv.ParseUint(quote.Asset, 10, 64)
 	amount, _ := strconv.ParseUint(quote.MaxAmountRequired, 10, 64)
 
@@ -77,7 +84,17 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target stri
 		"x402Version": 2, "scheme": "exact", "network": cfg.RelayNetwork,
 		"payload": map[string]any{"paymentGroup": group, "paymentIndex": idx},
 	})
-	payReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if method == "" {
+		method = http.MethodGet
+	}
+	var bodyReader io.Reader
+	if method != http.MethodGet && len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
+	payReq, _ := http.NewRequestWithContext(ctx, method, target, bodyReader)
+	if bodyReader != nil {
+		payReq.Header.Set("Content-Type", "application/json")
+	}
 	payReq.Header.Set("X-Payment", string(xPaymentOut))
 	payResp, err := SafeHTTPClient().Do(payReq)
 	if err != nil {
