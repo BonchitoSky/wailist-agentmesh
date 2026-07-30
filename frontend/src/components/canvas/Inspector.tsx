@@ -484,10 +484,15 @@ function AgentInspector({
 
   const copyAddress = useCallback(() => {
     if (!node.wallet) return;
-    navigator.clipboard.writeText(node.wallet).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    });
+    navigator.clipboard
+      .writeText(node.wallet)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      })
+      // writeText rejects when the page lacks clipboard permission or is served
+      // over a non-secure origin; stay silent rather than throwing unhandled.
+      .catch(() => {});
   }, [node.wallet]);
 
   const refreshBalance = useCallback(async () => {
