@@ -72,7 +72,10 @@ func main() {
 
 	facilitatorClient := x402.NewFacilitatorClient(envOr("FACILITATOR_URL", "https://facilitator.goplausible.xyz"))
 
-	razorpayClient := payments.NewRazorpayClient(mustEnv("RAZORPAY_KEY_ID"), mustEnv("RAZORPAY_KEY_SECRET"), mustEnv("RAZORPAY_WEBHOOK_SECRET"))
+	cashfreeClient := payments.NewCashfreeClient(mustEnv("CASHFREE_APP_ID"), mustEnv("CASHFREE_SECRET_KEY"))
+	if envOr("CASHFREE_SANDBOX", "false") == "true" {
+		cashfreeClient.UseSandbox()
+	}
 
 	nowPaymentsClient := payments.NewNOWPaymentsClient(mustEnv("NOWPAYMENTS_API_KEY"), mustEnv("NOWPAYMENTS_IPN_SECRET"))
 	if envOr("NOWPAYMENTS_SANDBOX", "false") == "true" {
@@ -98,8 +101,8 @@ func main() {
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 
-		Razorpay:      razorpayClient,
-		RazorpayKeyID: razorpayClient.KeyID,
+		Cashfree:      cashfreeClient,
+		CashfreeAppID: cashfreeClient.AppID,
 		NOWPayments:   nowPaymentsClient,
 
 		PlatformWalletAddress:     platformWalletAddr,
@@ -153,11 +156,9 @@ func envInt64Or(key string, fallback int64) int64 {
 // expireStalePendingTransactionsLoop marks abandoned checkouts (order/invoice created,
 // never completed) as 'expired' so they stop being reported as in-progress. Runs on a
 // fixed interval for the life of the process; errors are logged, not fatal. Sweeps each
-// payment provider with its own staleness window: Razorpay checkouts are fast, so 30
+// payment provider with its own staleness window: Cashfree checkouts are fast, so 30
 // minutes of no completion means abandoned; NOWPayments crypto invoices settle on-chain
-// and routinely take longer than that across multiple block confirmations, so they get a
-// generous 24-hour window instead, to avoid marking real in-flight payments as expired
-// mid-payment.
+// and routinely take longer, so they get a generous 24-hour window.
 func expireStalePendingTransactionsLoop(ctx context.Context, store *db.Store) {
 	const (
 		checkInterval         = 5 * time.Minute
@@ -167,10 +168,10 @@ func expireStalePendingTransactionsLoop(ctx context.Context, store *db.Store) {
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		if n, err := store.ExpireStalePendingTransactions(ctx, "razorpay", razorpayStaleAfter); err != nil {
-			log.Printf("expire stale razorpay transactions: %v", err)
+		if n, err := store.ExpireStalePendingTransactions(ctx, "cashfree", razorpayStaleAfter); err != nil {
+			log.Printf("expire stale cashfree transactions: %v", err)
 		} else if n > 0 {
-			log.Printf("expired %d stale razorpay transactions", n)
+			log.Printf("expired %d stale cashfree transactions", n)
 		}
 		if n, err := store.ExpireStalePendingTransactions(ctx, "nowpayments", nowPaymentsStaleAfter); err != nil {
 			log.Printf("expire stale nowpayments transactions: %v", err)

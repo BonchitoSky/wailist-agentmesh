@@ -26,9 +26,9 @@ func NewRouter(d *handlers.Deps) http.Handler {
 	r.Get("/auth/oauth/{provider}/callback", d.OAuthCallback)
 	r.Post("/waitlist", d.JoinWaitlist)
 	r.Post("/run/{workflowId}", d.PublicTrigger)
-	// Called by Razorpay's servers, not the browser — authenticated via HMAC signature
-	// (X-Razorpay-Signature), not a session cookie, so it must sit outside the JWT group.
-	r.Post("/payments/razorpay/webhook", d.RazorpayWebhook)
+	// Called by Cashfree's servers, not the browser — authenticated via HMAC signature
+	// (x-webhook-signature), not a session cookie, so it must sit outside the JWT group.
+	r.Post("/payments/cashfree/webhook", d.CashfreeWebhook)
 	// Called by NOWPayments' servers, not the browser — authenticated via HMAC signature
 	// (x-nowpayments-sig), not a session cookie, so it must sit outside the JWT group.
 	r.Post("/payments/nowpayments/webhook", d.NOWPaymentsWebhook)
@@ -61,8 +61,8 @@ func NewRouter(d *handlers.Deps) http.Handler {
 
 		r.Post("/tools/x402/quote", d.X402Quote)
 
-		r.Post("/payments/razorpay/order", d.CreateRazorpayOrder)
-		r.Post("/payments/razorpay/verify", d.VerifyRazorpayPayment)
+		r.Post("/payments/cashfree/order", d.CreateCashfreeOrder)
+		r.Post("/payments/cashfree/verify", d.VerifyCashfreePayment)
 		r.Post("/payments/nowpayments/invoice", d.CreateCryptoInvoice)
 		r.Get("/credits/balance", d.GetCreditBalance)
 	})
