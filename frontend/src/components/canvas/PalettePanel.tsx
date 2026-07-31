@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { WorkflowNode } from "@/lib/types";
 import { BrandLogo } from "./nodes/brandLogos";
+import { PALETTE_TWO_COL_MIN } from "./panelSizing";
 import {
   TRIGGER_TEMPLATES,
   AGENT_TEMPLATES,
@@ -198,6 +199,9 @@ export function PalettePanel({
       (i.sub ?? "").toLowerCase().includes(q.toLowerCase()),
   );
 
+  // Reflow the item list into two columns once the panel is dragged wide.
+  const cols = width >= PALETTE_TWO_COL_MIN ? 2 : 1;
+
   return (
     <div
       style={{
@@ -293,19 +297,22 @@ export function PalettePanel({
       <div
         style={{
           padding: "4px 10px",
-          display: "flex",
-          flexDirection: "column",
+          display: "grid",
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          alignContent: "start",
           gap: 6,
           overflowY: "auto",
           flex: 1,
         }}
       >
-        {/* Create row */}
-        <CreateRow
-          meta={CREATE_META[tab]}
-          onDragStart={(e) => onDragNodeStart(e, CREATE_META[tab])}
-          isX402={tab === "x402"}
-        />
+        {/* Create row — always spans the full width, above the grid */}
+        <div style={{ gridColumn: "1 / -1" }}>
+          <CreateRow
+            meta={CREATE_META[tab]}
+            onDragStart={(e) => onDragNodeStart(e, CREATE_META[tab])}
+            isX402={tab === "x402"}
+          />
+        </div>
 
         {filtered.map((it, i) => (
           <DraggableRow
@@ -322,6 +329,7 @@ export function PalettePanel({
         {filtered.length === 0 && (
           <div
             style={{
+              gridColumn: "1 / -1",
               padding: "24px 8px",
               fontFamily: "var(--font-mono)",
               fontSize: 11,
