@@ -12,11 +12,12 @@ export const PALETTE: Bounds = { min: 200, max: 460, default: 280 };
 export const INSPECTOR: Bounds = { min: 260, max: 560, default: 320 };
 
 // Above this palette width, the item list reflows from one column into two.
-// Each grid cell needs ~170px for the icon + a readable (truncating) label;
-// 2×170 + the list's 20px padding + 6px gap ≈ 366, so ~372 is the first width
-// where two columns aren't cramped. (PALETTE.max is 460, so the two-column
-// zone is ~372–460px.)
-export const PALETTE_TWO_COL_MIN = 372;
+// Set to a width the palette can actually reach on a halved window: with the
+// inspector at its default (320) and MIN_CANVAS (320) reserved, a ~960px window
+// caps the palette at 320px — so a higher threshold could never trigger there.
+// At 300px each of the two cells is ~137px (icon + a truncating label), which
+// is tight but legible; labels ellipsis inside the cell.
+export const PALETTE_TWO_COL_MIN = 300;
 
 // The graph column is never allowed to shrink below this — the whole point of
 // the feature is to keep the workflow visible between the two panels.
