@@ -51,6 +51,16 @@ type PaymentRequirements struct {
 	MaxTimeoutSeconds int            `json:"maxTimeoutSeconds"`
 	Asset             string         `json:"asset"`
 	Extra             map[string]any `json:"extra"`
+	// Extensions carries the Bazaar discovery declaration (equivalent to the
+	// TS SDK's declareDiscoveryExtension). Without it here, on the struct
+	// that's actually POSTed to /verify and /settle, the facilitator never
+	// learns this route exists to catalog — extra.tag alone only attributes
+	// an already-discovered route's activity to the challenge, it doesn't
+	// register the route. Confirmed missing 2026-07-31: our own 402 body to
+	// the paying caller carried an "extensions" key, but neither Verify nor
+	// Settle ever sent it, so no catalog entry was ever created regardless
+	// of how many payments settled.
+	Extensions map[string]any `json:"extensions,omitempty"`
 }
 
 type VerifyResult struct {
