@@ -300,6 +300,16 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		PayTo:             d.PlatformWalletAddress,
 		Asset:             strconv.FormatUint(d.USDCAssetID, 10),
 		MaxAmountRequired: quote.MaxAmountRequired,
+		// Without extra.feePayer the facilitator can't locate the fee-pooled
+		// stub txn in the payment group and throws server-side (confirmed
+		// live 2026-07-31: "Cannot convert undefined to a BigInt") — see the
+		// identical, already-working Extra block in runfund.go's reqs.
+		Extra: map[string]any{
+			"asset":    strconv.FormatUint(d.USDCAssetID, 10),
+			"feePayer": d.RelayFeePayer,
+			"tag":      "x402-global-challenge",
+			"decimals": 6,
+		},
 	}
 
 	verifyResult, err := d.FacilitatorClient.Verify(ctx, payload, reqs)
