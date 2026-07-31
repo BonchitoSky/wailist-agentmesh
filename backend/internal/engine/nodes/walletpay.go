@@ -3,6 +3,8 @@ package nodes
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
@@ -139,7 +141,15 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 		if len(headerSnippet) > logSnippetLimit {
 			headerSnippet = headerSnippet[:logSnippetLimit]
 		}
-		log.Printf("wallet2 outbound pay %s %s rejected: status=%d body=%s payment-required-header=%s xPaymentSent=%s", method, strconv.Quote(target), payResp.StatusCode, strconv.Quote(string(bodySnippet)), strconv.Quote(headerSnippet), strconv.Quote(string(xPaymentOut)))
+		// Never log xPaymentOut itself -- it carries the signed transaction
+		// bytes, and those must not enter application logs even though the
+		// underlying payment is headed for a public ledger: anyone with log
+		// access could submit/replay it ahead of us. A fingerprint (not
+		// reversible to the signed bytes) is enough to correlate this
+		// rejection with what SignUSDCPaymentSingle produced, without ever
+		// writing the signed payload itself anywhere.
+		fingerprint := sha256.Sum256(xPaymentOut)
+		log.Printf("wallet2 outbound pay %s %s rejected: status=%d body=%s payment-required-header=%s paymentIndex=%d xPaymentFingerprint=%s", method, strconv.Quote(target), payResp.StatusCode, strconv.Quote(string(bodySnippet)), strconv.Quote(headerSnippet), idx, hex.EncodeToString(fingerprint[:4]))
 	}
 
 	return Wallet2PayResult{
