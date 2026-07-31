@@ -11,12 +11,18 @@ import {
   Settlement,
 } from "./types";
 import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
+import type { Purchase, PurchaseStatus } from "@/lib/credits/types";
+import type { PaymentMethod } from "@/components/checkout/types";
 
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
 const _CONFIGURED = process.env.NEXT_PUBLIC_API_URL ?? "";
 const BASE =
   _CONFIGURED && typeof window !== "undefined" ? "/api" : _CONFIGURED;
+
+// True when a real backend is configured. Consumers (e.g. the credits store)
+// use this to read DB-backed data instead of the localStorage mock.
+export const hasBackend = !!BASE;
 
 // -- Auth ------------------------------------------------------------------
 export const auth = {
@@ -104,7 +110,9 @@ export const workflows = {
       const res = await fetch(`${BASE}/workflows/${id}`, {
         credentials: "include",
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "workflow fetch failed");
+      return data;
     }
     await delay(150);
     if (id === "new")
@@ -121,7 +129,9 @@ export const workflows = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "workflow create failed");
+      return data;
     }
     await delay(300);
     return { id: `wf-${Date.now()}`, name, nodes: [], edges: [] };
@@ -136,7 +146,9 @@ export const workflows = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(wf),
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "workflow update failed");
+      return data;
     }
     await delay(200);
     return {
@@ -178,7 +190,9 @@ export const workflows = {
         headers: input ? { "Content-Type": "application/json" } : {},
         body: input ? JSON.stringify(input) : undefined,
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "run failed");
+      return data;
     }
     await delay(200);
     return { runId: `r-${Math.floor(1800 + Math.random() * 200)}` };
@@ -304,7 +318,13 @@ export const waitlist = {
 export const payments = {
   createCashfreeOrder: async (
     amountINRPaise: number,
-  ): Promise<{ order_id: string; payment_session_id: string; amount: number; currency: string; app_id: string }> => {
+  ): Promise<{
+    order_id: string;
+    payment_session_id: string;
+    amount: number;
+    currency: string;
+    app_id: string;
+  }> => {
     if (!BASE) throw new Error("payments require a configured backend");
     const res = await fetch(`${BASE}/payments/cashfree/order`, {
       method: "POST",
@@ -330,6 +350,71 @@ export const payments = {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "payment verification failed");
     return data;
+  },
+};
+
+// -- Credits (DB-backed) --------------------------------------------------
+// One credit_ledger row as returned by GET /credits/history (camelCase JSON
+// from the Go models.CreditTransaction).
+interface LedgerEntry {
+  id: string;
+  provider: string;
+  status: string;
+  amountInrPaise?: number | null;
+  amountUsdCents?: number | null;
+  creditUsdMicros: number;
+  createdAt: string;
+}
+
+function mapLedgerStatus(s: string): PurchaseStatus {
+  switch (s) {
+    case "completed":
+      return "paid";
+    case "refunded":
+      return "refunded";
+    case "failed":
+    case "expired":
+      return "failed";
+    default:
+      return "pending"; // pending, partially_paid, anything unknown
+  }
+}
+
+function ledgerToPurchase(e: LedgerEntry): Purchase {
+  const method: PaymentMethod =
+    e.provider === "nowpayments" ? "nowpayments" : "cashfree";
+  return {
+    id: e.id,
+    createdAt: e.createdAt,
+    amountINR: e.amountInrPaise != null ? e.amountInrPaise / 100 : 0,
+    creditsUSD: (e.creditUsdMicros ?? 0) / 1_000_000,
+    method,
+    status: mapLedgerStatus(e.status),
+  };
+}
+
+export const credits = {
+  // Current balance in USD, straight from the DB (users.credit_balance_usd_micros).
+  // Returns 0 in mock mode — the store falls back to its localStorage value there.
+  balance: async (): Promise<number> => {
+    if (!BASE) return 0;
+    const res = await fetch(`${BASE}/credits/balance`, {
+      credentials: "include",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error ?? "balance fetch failed");
+    return (data.credit_usd_micros ?? 0) / 1_000_000;
+  },
+
+  // Real purchase history from the credit ledger, newest first. Empty in mock mode.
+  history: async (): Promise<Purchase[]> => {
+    if (!BASE) return [];
+    const res = await fetch(`${BASE}/credits/history`, {
+      credentials: "include",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error ?? "history fetch failed");
+    return ((data.history ?? []) as LedgerEntry[]).map(ledgerToPurchase);
   },
 };
 

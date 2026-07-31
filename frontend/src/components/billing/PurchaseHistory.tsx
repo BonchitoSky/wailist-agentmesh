@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Card, Pill } from "@/components/ui";
 import { useCredits } from "@/lib/credits/store";
 import { Receipt } from "./Receipt";
-import type { Purchase } from "@/lib/credits/types";
+import type { Purchase, PurchaseStatus } from "@/lib/credits/types";
 import type { PaymentMethod } from "@/components/checkout/types";
 
 const METHOD_LABELS: Record<PaymentMethod, string> = {
@@ -11,6 +11,18 @@ const METHOD_LABELS: Record<PaymentMethod, string> = {
   nowpayments: "NOWPayments",
   paypal: "PayPal",
   stripe: "Stripe",
+};
+
+// Real DB-backed history can be more than just "paid", so the pill reflects the
+// actual ledger status instead of always claiming success.
+const STATUS_PILL: Record<
+  PurchaseStatus,
+  { label: string; tone: "ok" | "default" }
+> = {
+  paid: { label: "Paid", tone: "ok" },
+  pending: { label: "Pending", tone: "default" },
+  failed: { label: "Failed", tone: "default" },
+  refunded: { label: "Refunded", tone: "default" },
 };
 
 const dateFmt = new Intl.DateTimeFormat("en", {
@@ -112,7 +124,9 @@ export function PurchaseHistory({
                     >
                       +${p.creditsUSD.toFixed(2)}
                     </span>
-                    <Pill tone="ok">Paid</Pill>
+                    <Pill tone={STATUS_PILL[p.status].tone}>
+                      {STATUS_PILL[p.status].label}
+                    </Pill>
                   </div>
                 </div>
 

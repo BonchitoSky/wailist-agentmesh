@@ -4,7 +4,9 @@ import type { PaymentMethod } from "@/components/checkout/types";
 // there is no backend, so balances and history are per-browser until a real API
 // lands. Amounts paid are INR; credits are denominated in USD (via a mock FX).
 
-export type PurchaseStatus = "paid";
+// "paid" is a completed, credited purchase. Real DB-backed history can also be
+// pending (awaiting confirmation), failed/expired, or refunded.
+export type PurchaseStatus = "paid" | "pending" | "failed" | "refunded";
 
 export interface Purchase {
   id: string;
