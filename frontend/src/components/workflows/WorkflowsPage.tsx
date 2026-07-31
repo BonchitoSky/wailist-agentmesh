@@ -61,7 +61,7 @@ export function WorkflowsPage() {
     if (creatingDemo) return;
     setCreatingDemo(true);
     try {
-      const wf = await workflowsApi.create("x402 Demo — Resume Screener");
+      const wf = await workflowsApi.create("x402 — Prism Resume Screener");
       const { nodes, edges } = buildX402DemoWorkflow();
       await workflowsApi.update(wf.id, { name: wf.name, nodes, edges });
       router.push(`/workflows/${wf.id}`);
@@ -185,7 +185,7 @@ export function WorkflowsPage() {
                 onClick={handleLoadDemoWorkflow}
                 disabled={creatingDemo}
                 style={{ ...ghostBtn, opacity: creatingDemo ? 0.6 : 1 }}
-                title="Loads a no-agent demo workflow: a trigger paying a real x402 endpoint on Algorand testnet, settled on-chain."
+                title="Loads a no-agent workflow: a trigger paying Prism's real x402 endpoint on Algorand mainnet, settled on-chain."
               >
                 {creatingDemo ? "Loading…" : "Load demo workflow"}
               </button>

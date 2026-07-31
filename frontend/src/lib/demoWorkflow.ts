@@ -1,22 +1,13 @@
 import { Workflow, WorkflowEdge, WorkflowNode } from "@/lib/types";
 
-// Our own demo merchant (backend/cmd/x402demo/merchant) — built to Prism's
-// exact request/response schema (task_description + files[] in, ranked
-// candidates[] out) and wire dialect, but on TESTNET, so it actually
-// settles today. Point NEXT_PUBLIC_X402_DEMO_MERCHANT_URL at a public
-// HTTPS URL (tunnel or deployed) before running against a real deployed
-// backend — AgentMesh's backend refuses to call localhost/private
-// addresses (SSRF guard), so the bare localhost default only works when
-// the backend itself also runs unsandboxed on the same machine.
-//
-// Prism's own real endpoint (https://prism-99h2.onrender.com/resume-screen-accurate)
-// is mainnet-only (its 402 challenge quotes mainnet USDC, asset 31566704)
-// and can't be used from testnet at all — swap targetURL for it once the
-// backend is switched to mainnet and its platform wallets are funded (see
-// cmd/server/main.go's usdcAssetID/relayNetwork switch).
+// Prism's real, live x402-global-challenge endpoint — mainnet only (its 402
+// challenge quotes mainnet USDC, asset 31566704). Only reachable once the
+// backend itself is running with ALGORAND_NETWORK=mainnet and funded
+// PLATFORM_WALLET/PLATFORM_SPEND_WALLET (see cmd/server/main.go's
+// usdcAssetID/relayNetwork switch) — on testnet this target will 502.
 const DEFAULT_MERCHANT_URL =
   process.env.NEXT_PUBLIC_X402_DEMO_MERCHANT_URL ??
-  "http://localhost:4021/resume-screen";
+  "https://prism-99h2.onrender.com/resume-screen-accurate";
 
 // Builds a workflow with NO agent/provider node at all: a trigger flows
 // straight into a standalone tool402 node, which pays and calls the target
@@ -48,9 +39,9 @@ export function buildX402DemoWorkflow(
       custom: true,
       x: 420,
       y: 220,
-      name: "x402 Resume Screener (demo, Prism-schema)",
+      name: "x402 Resume Screener (Prism, mainnet)",
       description:
-        'Same request/response schema as Prism (a real, live x402-global-challenge entry we\'re collaborating with) but on testnet, via our own demo merchant. task_description + files[] in, ranked candidates[] out. No AI agent in this workflow: this node pays and calls the endpoint directly, settled on-chain. Paste something like this into the run prompt: {"task_description":"Senior React Frontend Developer","files":[{"filename":"resume.txt","text":"6 years React, TypeScript, Next.js"}]}',
+        'Pays Prism\'s real, live x402-global-challenge endpoint directly (task_description + files[] in, ranked candidates[] out), settled on-chain via mainnet USDC. No AI agent in this workflow: this node pays and calls the endpoint directly. Paste something like this into the run prompt: {"task_description":"Senior React Frontend Developer","files":[{"filename":"resume.txt","text":"6 years React, TypeScript, Next.js"}]}',
       endpoint: targetURL,
       method: "POST",
       price: "0.05",
