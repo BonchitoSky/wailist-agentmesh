@@ -35,9 +35,15 @@ type PaymentPayload struct {
 }
 
 type PaymentRequirements struct {
-	Scheme            string         `json:"scheme"`
-	Network           string         `json:"network"`
-	MaxAmountRequired string         `json:"maxAmountRequired"`
+	Scheme  string `json:"scheme"`
+	Network string `json:"network"`
+	// GoPlausible's facilitator reads this key as "amount", not the more
+	// common x402 "maxAmountRequired" — sending the latter left their
+	// server reading undefined and crashing on BigInt(undefined)
+	// (confirmed live 2026-07-31 against /verify). Go field name kept as
+	// MaxAmountRequired since every caller already treats it as such;
+	// only the wire tag changes.
+	MaxAmountRequired string         `json:"amount"`
 	Resource          string         `json:"resource"`
 	Description       string         `json:"description"`
 	MimeType          string         `json:"mimeType"`
