@@ -97,6 +97,13 @@ type targetPriceQuote struct {
 	PayTo             string
 	Asset             string
 	MaxAmountRequired string
+	// FeePayer, when the target's own quote declares accepts[0].extra.feePayer,
+	// names the shared facilitator address expected to cosign a fee-pooled
+	// stub for THIS payment. Its presence/absence -- not any constant of
+	// ours -- selects which signing scheme payTargetAndRespond uses (see
+	// nodes.PayTargetFromWallet2): a target with no declared feePayer wants
+	// a plain self-funded single transaction instead.
+	FeePayer string
 }
 
 // fetchTargetPriceQuote issues an unauthenticated GET to the caller-supplied
@@ -174,7 +181,11 @@ func fetchTargetPriceQuote(ctx context.Context, target, method string, body []by
 	if ok {
 		amount = strconv.FormatInt(micros, 10)
 	}
-	return targetPriceQuote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount}, nil
+	var feePayer string
+	if extra, ok := accept["extra"].(map[string]any); ok {
+		feePayer, _ = extra["feePayer"].(string)
+	}
+	return targetPriceQuote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount, FeePayer: feePayer}, nil
 }
 
 // bazaarDiscoveryExtension describes the relay's pass-through shape (any
@@ -419,7 +430,7 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 		MaxRelayOutboundUSDMicros: d.MaxRelayOutboundUSDMicros,
 	}
 	result, err := nodes.PayTargetFromWallet2(ctx, cfg, target, targetMethod, targetBody, nodes.TargetQuote{
-		PayTo: quote.PayTo, Asset: quote.Asset, MaxAmountRequired: quote.MaxAmountRequired,
+		PayTo: quote.PayTo, Asset: quote.Asset, MaxAmountRequired: quote.MaxAmountRequired, FeePayer: quote.FeePayer,
 	})
 
 	// Signals to the orchestrator's own tool402 caller (tool402.go) that the

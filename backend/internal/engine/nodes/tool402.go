@@ -298,6 +298,14 @@ type x402Quote struct {
 	PayTo             string
 	Asset             string
 	MaxAmountRequired int64 // USD micros
+	// FeePayer, when the target declares one in accepts[0].extra.feePayer,
+	// names the shared facilitator address that will cosign a fee-pooled
+	// stub txn for this specific payment. A target with no declared
+	// feePayer is signaling the opposite -- a plain, self-fee-paying single
+	// transaction -- so this must never default to our own relay's feePayer
+	// constant; presence/absence of this exact field on the target's OWN
+	// quote is what selects the signing scheme (see PayTargetFromWallet2).
+	FeePayer string
 }
 
 // probeTool402Endpoint fetches endpoint's 402 challenge (if any) and reports
@@ -380,7 +388,11 @@ func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []b
 	if !ok || amount <= 0 {
 		return true, false, nil, x402Quote{}, fmt.Errorf("x402: invalid or missing amount/maxAmountRequired in v2 challenge (maxAmountRequired=%v amount=%v)", accept["maxAmountRequired"], accept["amount"])
 	}
-	return true, false, nil, x402Quote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount}, nil
+	var feePayer string
+	if extra, ok := accept["extra"].(map[string]any); ok {
+		feePayer, _ = extra["feePayer"].(string)
+	}
+	return true, false, nil, x402Quote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount, FeePayer: feePayer}, nil
 }
 
 // ParseMaxAmountRequiredAsMicros parses a real x402 v2 challenge's
@@ -434,6 +446,10 @@ type TargetQuote struct {
 	PayTo             string
 	Asset             string
 	MaxAmountRequired string
+	// FeePayer mirrors x402Quote.FeePayer -- see that field's doc comment
+	// for why its presence/absence (not a blanket default) selects which
+	// signing scheme PayTargetFromWallet2 uses.
+	FeePayer string
 }
 
 // ProbeX402Quote is the exported form the run-level per-call executor
@@ -442,7 +458,7 @@ type TargetQuote struct {
 // ProbeX402Price.
 func ProbeX402Quote(ctx context.Context, endpoint, method string) (isV2 bool, quote TargetQuote, err error) {
 	isV2, _, _, q, err := probeTool402Endpoint(ctx, endpoint, method, nil)
-	return isV2, TargetQuote{PayTo: q.PayTo, Asset: q.Asset, MaxAmountRequired: strconv.FormatInt(q.MaxAmountRequired, 10)}, err
+	return isV2, TargetQuote{PayTo: q.PayTo, Asset: q.Asset, MaxAmountRequired: strconv.FormatInt(q.MaxAmountRequired, 10), FeePayer: q.FeePayer}, err
 }
 
 // ExecuteTool402V2 is the entry point runner.go calls for tool402 nodes. It
@@ -490,6 +506,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 				PayTo:             quote.PayTo,
 				Asset:             quote.Asset,
 				MaxAmountRequired: strconv.FormatInt(quote.MaxAmountRequired, 10),
+				FeePayer:          quote.FeePayer,
 			}
 			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired, method, payBody)
 		}

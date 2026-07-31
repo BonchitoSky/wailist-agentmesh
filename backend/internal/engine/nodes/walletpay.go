@@ -81,13 +81,25 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 		return Wallet2PayResult{}, &Wallet2PayError{StatusCode: http.StatusBadGateway, Msg: "target quoted an amount exceeding the relay's per-call cap"}
 	}
 
-	// SignUSDCPaymentSingle, not SignUSDCPaymentGroup: this leg pays an
-	// arbitrary third-party target directly over its own X-Payment header,
-	// never through our own FacilitatorClient — no one is ever going to
-	// cosign a fee-pooled stub on the target's end, so this must be a plain,
-	// self-fee-paying, single signed transaction (confirmed live 2026-07-31:
-	// a real mainnet target generically re-402'd every fee-pooled attempt).
-	group, idx, err := cfg.USDCSigner.SignUSDCPaymentSingle(ctx, cfg.PlatformWalletEncMnemonic, quote.PayTo, assetID, amount)
+	// The target's OWN quote decides the signing scheme, not a blanket
+	// assumption: a target that declares accepts[0].extra.feePayer is
+	// asking for a fee-pooled 2-txn group cosigned by that exact shared
+	// facilitator address (confirmed live 2026-07-31: a real mainnet
+	// target's own 402 challenge names GoPlausible's shared feePayer,
+	// identical to the one our own relay already uses -- GoPlausible is a
+	// neutral facilitator both sides already trust, not something specific
+	// to us). A target with no declared feePayer wants a plain, self-fee-
+	// paying single transaction instead. The official @x402/avm client
+	// dispatches on exactly this signal, per Algorand Foundation's own
+	// reference implementation.
+	var group []string
+	var idx int
+	var err error
+	if quote.FeePayer != "" {
+		group, idx, err = cfg.USDCSigner.SignUSDCPaymentGroup(ctx, cfg.PlatformWalletEncMnemonic, quote.PayTo, assetID, amount, quote.FeePayer)
+	} else {
+		group, idx, err = cfg.USDCSigner.SignUSDCPaymentSingle(ctx, cfg.PlatformWalletEncMnemonic, quote.PayTo, assetID, amount)
+	}
 	if err != nil {
 		return Wallet2PayResult{}, &Wallet2PayError{StatusCode: http.StatusInternalServerError, Msg: "failed to sign outbound payment: " + err.Error()}
 	}
