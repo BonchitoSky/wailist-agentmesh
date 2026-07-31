@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/agentmesh/backend/internal/db"
@@ -317,14 +318,16 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		PayTo:             d.PlatformWalletAddress,
 		Asset:             strconv.FormatUint(d.USDCAssetID, 10),
 		MaxAmountRequired: quote.MaxAmountRequired,
-		// AgentMesh's own public domain, not target's: this settlement pays
-		// us as the orchestrator, and the facilitator's leaderboard resolves
-		// a merchant's label/logo/domain off this field (confirmed live
-		// 2026-07-31 — every enriched leaderboard entry has one set, ours
-		// didn't, hence the masked-address/no-domain display). Description
-		// mirrors the wording already used in the public 402 challenge.
-		Resource:    d.FrontendURL,
-		Description: "AgentMesh — give your AI agents a wallet, let them pay their own way",
+		// The real, reachable URL of the challenge this settlement pays --
+		// same convention every other cataloged merchant uses (their
+		// resourceUrl is always the literal 402-issuing endpoint, e.g.
+		// "https://api.syraa.fun/insights/gas-oracle", never a marketing
+		// homepage). FrontendURL (tried first) still left us cataloged
+		// under a masked address with no domain/logo -- this relay route
+		// (GET .../x402/relay?target=...) is the actual URL a caller hits
+		// to receive our 402, so it's what belongs here.
+		Resource:    d.BaseURL + "/x402/relay?target=" + url.QueryEscape(target),
+		Description: "AgentMesh x402 relay — settles the inbound leg and forwards payment to " + target,
 		// Without extra.feePayer the facilitator can't locate the fee-pooled
 		// stub txn in the payment group and throws server-side (confirmed
 		// live 2026-07-31: "Cannot convert undefined to a BigInt") — see the
