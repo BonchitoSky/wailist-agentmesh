@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef, useLayoutEffect } from "react";
 import { WorkflowNode } from "@/lib/types";
 import { BrandLogo } from "./nodes/brandLogos";
 import { PALETTE_TWO_COL_MIN } from "./panelSizing";
@@ -202,6 +202,44 @@ export function PalettePanel({
   // Reflow the item list into two columns once the panel is dragged wide.
   const cols = width >= PALETTE_TWO_COL_MIN ? 2 : 1;
 
+  // FLIP: when the column count changes, glide each item from its old position
+  // to its new one instead of letting the grid snap. Rects are captured every
+  // render so the frame just before the reflow is the animation's start point.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const prevRects = useRef<DOMRect[]>([]);
+  const prevCols = useRef(cols);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const items = Array.from(list.children) as HTMLElement[];
+    const newRects = items.map((el) => el.getBoundingClientRect());
+
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    if (prevCols.current !== cols && !reduced) {
+      items.forEach((el, i) => {
+        const oldR = prevRects.current[i];
+        const newR = newRects[i];
+        if (!oldR || !newR) return;
+        const dx = oldR.left - newR.left;
+        const dy = oldR.top - newR.top;
+        if (dx || dy) {
+          el.animate(
+            [
+              { transform: `translate(${dx}px, ${dy}px)` },
+              { transform: "translate(0, 0)" },
+            ],
+            { duration: 280, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+          );
+        }
+      });
+    }
+    prevRects.current = newRects;
+    prevCols.current = cols;
+  });
+
   return (
     <div
       style={{
@@ -295,6 +333,7 @@ export function PalettePanel({
       </div>
 
       <div
+        ref={listRef}
         style={{
           padding: "4px 10px",
           display: "grid",
