@@ -11,6 +11,7 @@ import {
   IconStop,
 } from "@/components/ui";
 import { workflows as workflowsApi } from "@/lib/api";
+import { useCredits } from "@/lib/credits/store";
 import { CanvasGraph } from "./CanvasGraph";
 import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
@@ -501,6 +502,12 @@ function CanvasTopbar({
   saveLabel: string;
   onBack: () => void;
 }) {
+  // Wallet balance is global (not per-node), so it lives in the topbar's
+  // financial cluster. Guard on `hydrated` like LowBalanceBanner so SSR and the
+  // first client render agree (localStorage is client-only).
+  const { balanceUSD, autoRecharge, hydrated } = useCredits();
+  const lowBalance = hydrated && balanceUSD < autoRecharge.thresholdUSD;
+
   return (
     <div
       style={{
@@ -570,6 +577,12 @@ function CanvasTopbar({
           flexShrink: 0,
         }}
       >
+        <Stat
+          label="credits"
+          value={hydrated ? `$${balanceUSD.toFixed(2)}` : "—"}
+          color={lowBalance ? "var(--danger)" : "var(--accent)"}
+        />
+        <Hairline vertical length={18} />
         <Stat
           label="agents"
           value={workflow.nodes.filter((n) => n.type === "agent").length}
