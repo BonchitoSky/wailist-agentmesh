@@ -179,6 +179,16 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 		respond.Error(w, http.StatusBadGateway, "target fetch failed: "+err.Error())
 		return
 	}
+	// fetchTargetPriceQuote returns MaxAmountRequired == "" when neither the
+	// maxAmountRequired nor amount field parsed -- relaySettleAndForward
+	// catches this later via strconv.ParseInt, but this path (the public,
+	// unauthenticated challenge preview -- what a Bazaar crawler actually
+	// hits) had no equivalent check, so it would happily emit a 402 with an
+	// empty price instead of a clear error.
+	if quote.MaxAmountRequired == "" {
+		respond.Error(w, http.StatusBadGateway, "target returned an unparseable or missing price quote")
+		return
+	}
 
 	challenge := map[string]any{
 		"x402Version": 2,
