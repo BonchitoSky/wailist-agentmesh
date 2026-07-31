@@ -120,6 +120,10 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 	defer payResp.Body.Close()
 	finalBody, _ := io.ReadAll(io.LimitReader(payResp.Body, 5<<20))
 
+	if payResp.StatusCode < 200 || payResp.StatusCode >= 300 {
+		log.Printf("wallet2 outbound pay to %s rejected: status=%d body=%s payment-required-header=%q", target, payResp.StatusCode, finalBody, payResp.Header.Get("Payment-Required"))
+	}
+
 	return Wallet2PayResult{
 		Signed:       true,
 		StatusCode:   payResp.StatusCode,
