@@ -139,7 +139,7 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 		if len(headerSnippet) > logSnippetLimit {
 			headerSnippet = headerSnippet[:logSnippetLimit]
 		}
-		log.Printf("wallet2 outbound pay to %s rejected: status=%d body=%s payment-required-header=%s", strconv.Quote(target), payResp.StatusCode, strconv.Quote(string(bodySnippet)), strconv.Quote(headerSnippet))
+		log.Printf("wallet2 outbound pay %s %s rejected: status=%d body=%s payment-required-header=%s xPaymentSent=%s", method, strconv.Quote(target), payResp.StatusCode, strconv.Quote(string(bodySnippet)), strconv.Quote(headerSnippet), strconv.Quote(string(xPaymentOut)))
 	}
 
 	return Wallet2PayResult{
