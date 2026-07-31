@@ -317,6 +317,14 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		PayTo:             d.PlatformWalletAddress,
 		Asset:             strconv.FormatUint(d.USDCAssetID, 10),
 		MaxAmountRequired: quote.MaxAmountRequired,
+		// AgentMesh's own public domain, not target's: this settlement pays
+		// us as the orchestrator, and the facilitator's leaderboard resolves
+		// a merchant's label/logo/domain off this field (confirmed live
+		// 2026-07-31 — every enriched leaderboard entry has one set, ours
+		// didn't, hence the masked-address/no-domain display). Description
+		// mirrors the wording already used in the public 402 challenge.
+		Resource:    d.FrontendURL,
+		Description: "AgentMesh — pays and orchestrates downstream x402 tool calls on the caller's behalf",
 		// Without extra.feePayer the facilitator can't locate the fee-pooled
 		// stub txn in the payment group and throws server-side (confirmed
 		// live 2026-07-31: "Cannot convert undefined to a BigInt") — see the
