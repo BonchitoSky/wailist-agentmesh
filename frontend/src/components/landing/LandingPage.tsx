@@ -34,13 +34,24 @@ export function LandingPage({ signedIn }: LandingPageProps) {
     };
 
     v.style.opacity = "0";
-    v.addEventListener("play", () => { rafId = requestAnimationFrame(tick); });
-    v.addEventListener("ended", () => {
+    let restartId: ReturnType<typeof setTimeout> | undefined;
+    const onPlay = () => { rafId = requestAnimationFrame(tick); };
+    const onEnded = () => {
       v.style.opacity = "0";
-      setTimeout(() => { if (!cancelled) { v.currentTime = 0; v.play().catch(() => {}); } }, 100);
-    });
+      restartId = setTimeout(() => { if (!cancelled) { v.currentTime = 0; v.play().catch(() => {}); } }, 100);
+    };
+    v.addEventListener("play", onPlay);
+    v.addEventListener("ended", onEnded);
     v.play().catch(() => {});
-    return () => { cancelled = true; cancelAnimationFrame(rafId); };
+    // Named handlers so the listeners (and the pending restart timer) are torn
+    // down on unmount — anonymous ones leaked across StrictMode re-mounts.
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+      clearTimeout(restartId);
+      v.removeEventListener("play", onPlay);
+      v.removeEventListener("ended", onEnded);
+    };
   }, []);
 
   // IntersectionObserver for scroll-reveal

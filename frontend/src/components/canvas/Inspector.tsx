@@ -12,7 +12,8 @@ import {
   modelTier,
   TIER_FEES,
 } from "@/lib/data";
-import { Pill, IconClose } from "@/components/ui";
+import { Pill, IconClose, StatusDot } from "@/components/ui";
+import { BrandLogo } from "./nodes/brandLogos";
 import { agents as agentsApi, tools as toolsApi } from "@/lib/api";
 
 interface InspectorProps {
@@ -21,6 +22,8 @@ interface InspectorProps {
   workflowId: string;
   onUpdate: (n: WorkflowNode) => void;
   onDelete: () => void;
+  onClose: () => void;
+  width?: number;
 }
 
 export function Inspector({
@@ -29,15 +32,17 @@ export function Inspector({
   workflowId,
   onUpdate,
   onDelete,
+  onClose,
+  width = 320,
 }: InspectorProps) {
-  if (!selected) return <EmptyInspector />;
+  if (!selected) return <EmptyInspector width={width} />;
 
   const meta = nodeMeta(selected);
 
   return (
     <div
       style={{
-        width: 320,
+        width,
         flexShrink: 0,
         borderLeft: "1px solid var(--border)",
         background: "var(--bg-elev-1)",
@@ -70,7 +75,7 @@ export function Inspector({
               fontSize: 12,
             }}
           >
-            {meta.icon}
+            <BrandLogo template={selected.template} fallback={meta.icon} />
           </span>
           <div>
             <div style={{ fontSize: 13, fontWeight: 500 }}>{meta.title}</div>
@@ -86,7 +91,9 @@ export function Inspector({
           </div>
         </div>
         <button
-          onClick={onDelete}
+          onClick={onClose}
+          aria-label="Close inspector"
+          title="Close"
           style={{
             width: 32,
             height: 32,
@@ -139,15 +146,61 @@ export function Inspector({
           <EndInspector node={selected} onUpdate={onUpdate} />
         )}
       </div>
+
+      <div style={{ padding: 16, borderTop: "1px solid var(--border)" }}>
+        <button
+          onClick={onDelete}
+          style={{
+            width: "100%",
+            height: 36,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            background: "transparent",
+            border: "1px solid var(--danger)",
+            borderRadius: "var(--r-2)",
+            color: "var(--danger)",
+            cursor: "pointer",
+            fontFamily: "var(--font-sans)",
+            fontSize: 13,
+            fontWeight: 500,
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.background =
+              "rgba(255, 92, 92, 0.08)";
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.background = "transparent";
+          }}
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 14 14"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M2.5 3.5h9M5.5 3.5V2.5h3v1M4 3.5l.5 8h5l.5-8"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          Delete node
+        </button>
+      </div>
     </div>
   );
 }
 
-function EmptyInspector() {
+function EmptyInspector({ width = 320 }: { width?: number }) {
   return (
     <div
       style={{
-        width: 320,
+        width,
         flexShrink: 0,
         borderLeft: "1px solid var(--border)",
         background: "var(--bg-elev-1)",
@@ -435,10 +488,15 @@ function AgentInspector({
 
   const copyAddress = useCallback(() => {
     if (!node.wallet) return;
-    navigator.clipboard.writeText(node.wallet).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    });
+    navigator.clipboard
+      .writeText(node.wallet)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      })
+      // writeText rejects when the page lacks clipboard permission or is served
+      // over a non-secure origin; stay silent rather than throwing unhandled.
+      .catch(() => {});
   }, [node.wallet]);
 
   const refreshBalance = useCallback(async () => {
@@ -1742,6 +1800,177 @@ const CONNECTOR_CONFIG_FIELDS: Record<
   },
 };
 
+// ── Per-connector auth metadata ─────────────────────────────────────────────
+// Where each connector's credential is obtained. Every live connector requires
+// an account login to get its credential EXCEPT ntfy (token is optional), which
+// is why it alone carries needsLogin: false.
+const CONNECTOR_AUTH: Record<
+  string,
+  { needsLogin: boolean; docUrl: string; linkLabel: string }
+> = {
+  slack: {
+    needsLogin: true,
+    docUrl: "https://api.slack.com/apps",
+    linkLabel: "Create webhook",
+  },
+  discord: {
+    needsLogin: true,
+    docUrl:
+      "https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks",
+    linkLabel: "Create webhook",
+  },
+  teams: {
+    needsLogin: true,
+    docUrl:
+      "https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook",
+    linkLabel: "Create webhook",
+  },
+  google_chat: {
+    needsLogin: true,
+    docUrl: "https://developers.google.com/workspace/chat/quickstart/webhooks",
+    linkLabel: "Create webhook",
+  },
+  ntfy: {
+    needsLogin: false,
+    docUrl: "https://docs.ntfy.sh/publish/",
+    linkLabel: "ntfy docs",
+  },
+  telegram: {
+    needsLogin: true,
+    docUrl: "https://t.me/BotFather",
+    linkLabel: "Open BotFather",
+  },
+  github: {
+    needsLogin: true,
+    docUrl: "https://github.com/settings/tokens",
+    linkLabel: "Get token",
+  },
+  notion: {
+    needsLogin: true,
+    docUrl: "https://www.notion.so/my-integrations",
+    linkLabel: "Get secret",
+  },
+  airtable: {
+    needsLogin: true,
+    docUrl: "https://airtable.com/create/tokens",
+    linkLabel: "Get token",
+  },
+  hubspot: {
+    needsLogin: true,
+    docUrl: "https://app.hubspot.com/private-apps",
+    linkLabel: "Get token",
+  },
+  trello: {
+    needsLogin: true,
+    docUrl: "https://trello.com/power-ups/admin",
+    linkLabel: "Get key & token",
+  },
+  asana: {
+    needsLogin: true,
+    docUrl: "https://app.asana.com/0/my-apps",
+    linkLabel: "Get token",
+  },
+  clickup: {
+    needsLogin: true,
+    docUrl: "https://app.clickup.com/settings/apps",
+    linkLabel: "Get token",
+  },
+  jira: {
+    needsLogin: true,
+    docUrl: "https://id.atlassian.com/manage-profile/security/api-tokens",
+    linkLabel: "Get token",
+  },
+  mailchimp: {
+    needsLogin: true,
+    docUrl: "https://admin.mailchimp.com/account/api/",
+    linkLabel: "Get key",
+  },
+  linear: {
+    needsLogin: true,
+    docUrl: "https://linear.app/settings/api",
+    linkLabel: "Get key",
+  },
+  todoist: {
+    needsLogin: true,
+    docUrl: "https://todoist.com/app/settings/integrations/developer",
+    linkLabel: "Get token",
+  },
+  gitlab: {
+    needsLogin: true,
+    docUrl: "https://gitlab.com/-/user_settings/personal_access_tokens",
+    linkLabel: "Get token",
+  },
+  sentry: {
+    needsLogin: true,
+    docUrl:
+      "https://docs.sentry.io/product/sentry-basics/concepts/dsn-explainer/",
+    linkLabel: "Find your DSN",
+  },
+  supabase: {
+    needsLogin: true,
+    docUrl: "https://supabase.com/dashboard/project/_/settings/api",
+    linkLabel: "Get service key",
+  },
+  woocommerce: {
+    needsLogin: true,
+    docUrl: "https://woocommerce.com/document/woocommerce-rest-api/",
+    linkLabel: "Get API keys",
+  },
+  elevenlabs: {
+    needsLogin: true,
+    docUrl: "https://elevenlabs.io/app/settings/api-keys",
+    linkLabel: "Get key",
+  },
+};
+
+// Small "where to get the credential" deep-link. Underline-free per the design
+// system — links read via --accent color, not decoration.
+function AuthDocLink({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        alignSelf: "flex-start",
+        padding: "4px 0",
+        fontFamily: "var(--font-sans)",
+        fontSize: 11,
+        fontWeight: 600,
+        color: "var(--accent)",
+        textDecoration: "none",
+        transition: "color 0.12s var(--ease)",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLElement).style.color = "var(--accent-strong)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLElement).style.color = "var(--accent)";
+      }}
+    >
+      {label}
+      <svg
+        width="11"
+        height="11"
+        viewBox="0 0 12 12"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          d="M3.5 8.5l5-5M4.5 3.5h4v4"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </a>
+  );
+}
+
 function ConnectorConfigSection({
   node,
   onUpdate,
@@ -1751,32 +1980,78 @@ function ConnectorConfigSection({
 }) {
   const spec = CONNECTOR_CONFIG_FIELDS[node.template ?? ""];
   if (!spec) return null;
+  const auth = CONNECTOR_AUTH[node.template ?? ""];
+  const secretFields = spec.fields.filter((f) => f.kind === "secret");
+  const configFields = spec.fields.filter((f) => f.kind === "config");
+
+  // A connector counts as "connected" only when every secret it needs is set.
+  const secretSet = (key: string) => {
+    const v = node.secrets?.[key];
+    return v !== undefined && v !== "";
+  };
+  const connected =
+    secretFields.length > 0 && secretFields.every((f) => secretSet(f.key));
+  const needsLogin = auth?.needsLogin ?? true;
+
+  const statusTone: "ok" | "warn" | "default" = connected
+    ? "ok"
+    : needsLogin
+      ? "warn"
+      : "default";
+  const statusText = connected
+    ? needsLogin
+      ? "Connected"
+      : "Token set"
+    : needsLogin
+      ? "Not connected"
+      : "No login required";
+
   return (
-    <Section label={spec.label}>
-      {spec.fields.map((f) =>
-        f.kind === "secret" ? (
-          <SecretField
-            key={f.key}
-            node={node}
-            onUpdate={onUpdate}
-            secretKey={f.key}
-            label={f.label}
-            hint={f.hint}
-            placeholder={f.placeholder}
-          />
-        ) : (
-          <ConfigField
-            key={f.key}
-            node={node}
-            onUpdate={onUpdate}
-            configKey={f.key}
-            label={f.label}
-            hint={f.hint}
-            placeholder={f.placeholder}
-          />
-        ),
+    <>
+      {secretFields.length > 0 && (
+        <Section label="Authentication">
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 7,
+              fontSize: 11,
+              color: "var(--fg-muted)",
+            }}
+          >
+            <StatusDot tone={statusTone} />
+            {statusText}
+          </div>
+          {secretFields.map((f) => (
+            <SecretField
+              key={f.key}
+              node={node}
+              onUpdate={onUpdate}
+              secretKey={f.key}
+              label={f.label}
+              hint={f.hint}
+              placeholder={f.placeholder}
+            />
+          ))}
+          {auth && <AuthDocLink href={auth.docUrl} label={auth.linkLabel} />}
+        </Section>
       )}
-    </Section>
+      {configFields.length > 0 && (
+        <Section label={secretFields.length > 0 ? "Setup" : spec.label}>
+          {configFields.map((f) => (
+            <ConfigField
+              key={f.key}
+              node={node}
+              onUpdate={onUpdate}
+              configKey={f.key}
+              label={f.label}
+              hint={f.hint}
+              placeholder={f.placeholder}
+            />
+          ))}
+        </Section>
+      )}
+    </>
   );
 }
 

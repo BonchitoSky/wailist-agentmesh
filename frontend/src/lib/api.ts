@@ -104,7 +104,9 @@ export const workflows = {
       const res = await fetch(`${BASE}/workflows/${id}`, {
         credentials: "include",
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "workflow fetch failed");
+      return data;
     }
     await delay(150);
     if (id === "new")
@@ -121,7 +123,9 @@ export const workflows = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "workflow create failed");
+      return data;
     }
     await delay(300);
     return { id: `wf-${Date.now()}`, name, nodes: [], edges: [] };
@@ -136,7 +140,9 @@ export const workflows = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(wf),
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "workflow update failed");
+      return data;
     }
     await delay(200);
     return {
@@ -178,7 +184,9 @@ export const workflows = {
         headers: input ? { "Content-Type": "application/json" } : {},
         body: input ? JSON.stringify(input) : undefined,
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "run failed");
+      return data;
     }
     await delay(200);
     return { runId: `r-${Math.floor(1800 + Math.random() * 200)}` };
@@ -233,7 +241,9 @@ export const agents = {
           body: JSON.stringify({ amount }),
         },
       );
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "fund failed");
+      return data;
     }
     await delay(500);
     return {
@@ -304,7 +314,13 @@ export const waitlist = {
 export const payments = {
   createCashfreeOrder: async (
     amountINRPaise: number,
-  ): Promise<{ order_id: string; payment_session_id: string; amount: number; currency: string; app_id: string }> => {
+  ): Promise<{
+    order_id: string;
+    payment_session_id: string;
+    amount: number;
+    currency: string;
+    app_id: string;
+  }> => {
     if (!BASE) throw new Error("payments require a configured backend");
     const res = await fetch(`${BASE}/payments/cashfree/order`, {
       method: "POST",
