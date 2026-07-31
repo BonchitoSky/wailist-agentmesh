@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 )
@@ -72,6 +73,7 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 	}
 
 	if assetID != cfg.USDCAssetID {
+		log.Printf("wallet2 pay asset mismatch: quote.Asset=%q assetID=%d want=%d", quote.Asset, assetID, cfg.USDCAssetID)
 		return Wallet2PayResult{}, &Wallet2PayError{StatusCode: http.StatusBadGateway, Msg: "target quoted an unexpected asset id"}
 	}
 	if cfg.MaxRelayOutboundUSDMicros > 0 && amount > uint64(cfg.MaxRelayOutboundUSDMicros) {

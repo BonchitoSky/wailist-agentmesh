@@ -289,6 +289,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 	// set X-Inbound-Settled, billing the caller in full for a call that was
 	// never going to reach the target.
 	if quoteAssetID, err := strconv.ParseUint(quote.Asset, 10, 64); err != nil || quoteAssetID != d.USDCAssetID {
+		log.Printf("x402 relay asset mismatch: quote.Asset=%q parseErr=%v quoteAssetID=%d want=%d", quote.Asset, err, quoteAssetID, d.USDCAssetID)
 		respond.Error(w, http.StatusBadGateway, "target quoted an unexpected asset id")
 		return
 	}
