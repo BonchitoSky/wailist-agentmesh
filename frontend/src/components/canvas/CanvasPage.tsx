@@ -15,6 +15,14 @@ import { CanvasGraph } from "./CanvasGraph";
 import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
 import { LogDrawer } from "./LogDrawer";
+import { ResizeHandle } from "./ResizeHandle";
+import {
+  PALETTE,
+  INSPECTOR,
+  clampWidth,
+  loadWidths,
+  saveWidths,
+} from "./panelSizing";
 
 interface CanvasPageProps {
   workflowId: string;
@@ -34,6 +42,67 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const [runId, setRunId] = useState<string | null>(null);
   const [chatPrompt, setChatPrompt] = useState<string | null>(null); // null = closed
   const justLoaded = useRef(true);
+
+  // -- Resizable side panels ------------------------------------------------
+  // Widths start at defaults (so SSR and the first client render match), then a
+  // mount effect loads any persisted values. The row is measured via a ref so
+  // clamping can reserve MIN_CANVAS and the opposite panel's width.
+  const [paletteW, setPaletteW] = useState(PALETTE.default);
+  const [inspectorW, setInspectorW] = useState(INSPECTOR.default);
+  const panelRowRef = useRef<HTMLDivElement | null>(null);
+  const rowObserver = useRef<ResizeObserver | null>(null);
+  // Latest widths for the async ResizeObserver callback (avoids stale closures).
+  const widthsRef = useRef({ paletteW, inspectorW });
+  useEffect(() => {
+    widthsRef.current = { paletteW, inspectorW };
+  }, [paletteW, inspectorW]);
+
+  const rowWidth = () =>
+    panelRowRef.current?.getBoundingClientRect().width ?? 0;
+
+  // Callback ref: the panel row is gated behind the loading screen, so a mount
+  // effect would run before it exists. Attaching the ResizeObserver here starts
+  // observation exactly when the node mounts. Persisted widths are seeded before
+  // observing, so the observer's first (async) callback clamps and applies them
+  // — keeping the canvas above MIN_CANVAS and all setState off the SSR path.
+  const attachRow = useCallback((el: HTMLDivElement | null) => {
+    rowObserver.current?.disconnect();
+    rowObserver.current = null;
+    panelRowRef.current = el;
+    if (!el) return;
+    const saved = loadWidths();
+    if (saved) widthsRef.current = saved;
+    const reflow = () => {
+      const cw = el.getBoundingClientRect().width;
+      if (cw <= 0) return;
+      const { paletteW: pw, inspectorW: iw } = widthsRef.current;
+      setPaletteW(clampWidth(pw, PALETTE, cw, iw));
+      setInspectorW(clampWidth(iw, INSPECTOR, cw, pw));
+    };
+    // Clamp immediately (getBoundingClientRect forces layout) so the initial
+    // fit never depends on the observer's async first delivery, then observe
+    // for subsequent window resizes.
+    reflow();
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(reflow);
+      ro.observe(el);
+      rowObserver.current = ro;
+    }
+  }, []);
+
+  const resizePalette = useCallback((req: number) => {
+    setPaletteW(
+      clampWidth(req, PALETTE, rowWidth(), widthsRef.current.inspectorW),
+    );
+  }, []);
+  const resizeInspector = useCallback((req: number) => {
+    setInspectorW(
+      clampWidth(req, INSPECTOR, rowWidth(), widthsRef.current.paletteW),
+    );
+  }, []);
+  const persistWidths = useCallback(() => {
+    saveWidths(widthsRef.current);
+  }, []);
 
   // No state resets here: the route passes key={workflowId}, so navigating to
   // a different workflow remounts this component and every piece of state
@@ -319,6 +388,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       />
 
       <div
+        ref={attachRow}
         style={{
           flex: 1,
           display: "flex",
@@ -326,11 +396,25 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           overflow: "hidden",
         }}
       >
-        <PalettePanel onDragNodeStart={onDragNodeStart} />
+        <PalettePanel onDragNodeStart={onDragNodeStart} width={paletteW} />
+        <ResizeHandle
+          side="left"
+          value={paletteW}
+          min={PALETTE.min}
+          max={PALETTE.max}
+          ariaLabel="Resize palette panel"
+          onChange={resizePalette}
+          onCommit={persistWidths}
+          onReset={() => {
+            setPaletteW(PALETTE.default);
+            persistWidths();
+          }}
+        />
 
         <div
           style={{
             flex: 1,
+            minWidth: 0,
             position: "relative",
             display: "flex",
             flexDirection: "column",
@@ -357,6 +441,19 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           />
         </div>
 
+        <ResizeHandle
+          side="right"
+          value={inspectorW}
+          min={INSPECTOR.min}
+          max={INSPECTOR.max}
+          ariaLabel="Resize inspector panel"
+          onChange={resizeInspector}
+          onCommit={persistWidths}
+          onReset={() => {
+            setInspectorW(INSPECTOR.default);
+            persistWidths();
+          }}
+        />
         <Inspector
           selected={selected}
           deployed={deployed}
@@ -364,6 +461,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           onUpdate={onUpdate}
           onDelete={onDelete}
           onClose={() => setSelectedId(null)}
+          width={inspectorW}
         />
       </div>
 
