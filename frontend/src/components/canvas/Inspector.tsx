@@ -21,6 +21,7 @@ interface InspectorProps {
   onUpdate: (n: WorkflowNode) => void;
   onDelete: () => void;
   onClose: () => void;
+  width?: number;
 }
 
 export function Inspector({
@@ -30,15 +31,16 @@ export function Inspector({
   onUpdate,
   onDelete,
   onClose,
+  width = 320,
 }: InspectorProps) {
-  if (!selected) return <EmptyInspector />;
+  if (!selected) return <EmptyInspector width={width} />;
 
   const meta = nodeMeta(selected);
 
   return (
     <div
       style={{
-        width: 320,
+        width,
         flexShrink: 0,
         borderLeft: "1px solid var(--border)",
         background: "var(--bg-elev-1)",
@@ -192,11 +194,11 @@ export function Inspector({
   );
 }
 
-function EmptyInspector() {
+function EmptyInspector({ width = 320 }: { width?: number }) {
   return (
     <div
       style={{
-        width: 320,
+        width,
         flexShrink: 0,
         borderLeft: "1px solid var(--border)",
         background: "var(--bg-elev-1)",

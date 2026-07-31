@@ -172,9 +172,13 @@ const CREATE_META: Record<string, Partial<WorkflowNode>> = {
 
 interface PalettePanelProps {
   onDragNodeStart: (e: React.DragEvent, meta: Partial<WorkflowNode>) => void;
+  width?: number;
 }
 
-export function PalettePanel({ onDragNodeStart }: PalettePanelProps) {
+export function PalettePanel({
+  onDragNodeStart,
+  width = 280,
+}: PalettePanelProps) {
   const [tab, setTab] = useState<TabId>("triggers");
   const [q, setQ] = useState("");
 
@@ -196,7 +200,7 @@ export function PalettePanel({ onDragNodeStart }: PalettePanelProps) {
   return (
     <div
       style={{
-        width: 280,
+        width,
         flexShrink: 0,
         borderRight: "1px solid var(--border)",
         background: "var(--bg-elev-1)",
