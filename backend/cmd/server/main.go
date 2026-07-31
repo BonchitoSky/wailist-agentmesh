@@ -82,7 +82,24 @@ func main() {
 		nowPaymentsClient.UseSandbox()
 	}
 
-	runner := engine.NewRunner(store, broker, walletSvc, envOr("BASE_URL", "http://localhost:8080"), platformSpendWalletEncMnemonic, usdcAssetID)
+	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000) // $5.00 default
+
+	runner := engine.NewRunner(store, broker, walletSvc, envOr("BASE_URL", "http://localhost:8080"), platformSpendWalletEncMnemonic, engine.X402Config{
+		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
+		USDCAssetID:               usdcAssetID,
+		FacilitatorClient:         facilitatorClient,
+		PlatformWalletAddress:     platformWalletAddr,
+		RelayNetwork:              relayNetwork,
+		RelayFeePayer:             relayFeePayer,
+		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
+	})
+	runner.SetPlatformKeys(map[string]string{
+		"gemini":    os.Getenv("PLATFORM_GEMINI_API_KEY"),
+		"openai":    os.Getenv("PLATFORM_OPENAI_API_KEY"),
+		"anthropic": os.Getenv("PLATFORM_ANTHROPIC_API_KEY"),
+		"groq":      os.Getenv("PLATFORM_GROQ_API_KEY"),
+		"mistral":   os.Getenv("PLATFORM_MISTRAL_API_KEY"),
+	})
 
 	go expireStalePendingTransactionsLoop(ctx, store)
 
@@ -112,7 +129,7 @@ func main() {
 		RelayNetwork:              relayNetwork,
 		RelayFeePayer:             relayFeePayer,
 		USDCSigner:                walletSvc,
-		MaxRelayOutboundUSDMicros: envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000), // $5.00 default
+		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
 	}
 
 	r := api.NewRouter(deps)

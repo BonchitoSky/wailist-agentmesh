@@ -54,6 +54,7 @@ const PALETTE_TABS = [
       name: it.name,
       icon: it.icon,
       sub: it.model,
+      model: it.model,
     }),
   },
   {

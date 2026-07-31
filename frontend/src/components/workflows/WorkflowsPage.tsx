@@ -14,6 +14,7 @@ import {
 import { Workflow } from "@/lib/types";
 import { useAuth } from "@/hooks/useAuth";
 import { workflows as workflowsApi } from "@/lib/api";
+import { buildX402DemoWorkflow } from "@/lib/demoWorkflow";
 
 export function WorkflowsPage() {
   const router = useRouter();
@@ -24,6 +25,7 @@ export function WorkflowsPage() {
   const [wfList, setWfList] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [creatingDemo, setCreatingDemo] = useState(false);
 
   useEffect(() => {
     workflowsApi
@@ -54,6 +56,19 @@ export function WorkflowsPage() {
       setCreating(false);
     }
   }, [creating, router]);
+
+  const handleLoadDemoWorkflow = useCallback(async () => {
+    if (creatingDemo) return;
+    setCreatingDemo(true);
+    try {
+      const wf = await workflowsApi.create("x402 — Prism Resume Screener");
+      const { nodes, edges } = buildX402DemoWorkflow();
+      await workflowsApi.update(wf.id, { name: wf.name, nodes, edges });
+      router.push(`/workflows/${wf.id}`);
+    } catch {
+      setCreatingDemo(false);
+    }
+  }, [creatingDemo, router]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -166,6 +181,14 @@ export function WorkflowsPage() {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button style={ghostBtn}>Import</button>
+              <button
+                onClick={handleLoadDemoWorkflow}
+                disabled={creatingDemo}
+                style={{ ...ghostBtn, opacity: creatingDemo ? 0.6 : 1 }}
+                title="Loads a no-agent workflow: a trigger paying Prism's real x402 endpoint on Algorand mainnet, settled on-chain."
+              >
+                {creatingDemo ? "Loading…" : "Load demo workflow"}
+              </button>
               <button
                 onClick={handleNewWorkflow}
                 disabled={creating}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,6 +64,184 @@ func TestX402ParseQuote(t *testing.T) {
 	}
 	if price["price"] != "0.001" {
 		t.Fatalf("want price 0.001 got %v", price["price"])
+	}
+}
+
+// TestX402ProbeQuoteValid verifies that ProbeX402Quote (and by extension
+// ProbeX402Price) correctly parses a well-formed real v2 challenge's
+// payTo/asset/maxAmountRequired, exercising probeTool402Endpoint directly
+// rather than only through ExecuteTool402V2 (which never surfaces the parsed
+// quote to its caller).
+func TestX402ProbeQuoteValid(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"250000"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isV2 {
+		t.Fatal("want isV2=true for a real accepts[] challenge")
+	}
+	if quote.PayTo != "TARGETADDR" {
+		t.Fatalf("want payTo TARGETADDR, got %q", quote.PayTo)
+	}
+	if quote.Asset != "10458941" {
+		t.Fatalf("want asset 10458941, got %q", quote.Asset)
+	}
+	if quote.MaxAmountRequired != "250000" {
+		t.Fatalf("want maxAmountRequired 250000, got %q", quote.MaxAmountRequired)
+	}
+
+	priceIsV2, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL, "")
+	if err != nil {
+		t.Fatalf("unexpected error from ProbeX402Price: %v", err)
+	}
+	if !priceIsV2 {
+		t.Fatal("want isV2=true from ProbeX402Price")
+	}
+	if amount != 250000 {
+		t.Fatalf("want amount 250000, got %d", amount)
+	}
+}
+
+// TestX402ProbeQuoteMalformedAmount verifies that a real v2 challenge
+// (accepts[] present) whose maxAmountRequired is non-numeric produces an
+// error rather than silently parsing to amount=0 — a silent 0 would be
+// indistinguishable from a genuinely free tool, and Task 5 sizes a real
+// credit reservation and on-chain payment off this value.
+func TestX402ProbeQuoteMalformedAmount(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"not-a-number"}]}`))
+	}))
+	defer srv.Close()
+
+	_, _, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
+	if err == nil {
+		t.Fatal("want an error for a malformed (non-numeric) maxAmountRequired, got nil")
+	}
+
+	_, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL, "")
+	if err == nil {
+		t.Fatal("want an error from ProbeX402Price for a malformed maxAmountRequired, got nil")
+	}
+	if amount != 0 {
+		t.Fatalf("want zero-valued amount alongside the error, got %d", amount)
+	}
+}
+
+// TestX402ProbeQuoteMissingAmount verifies that a real v2 challenge with
+// maxAmountRequired missing entirely (not merely malformed) is treated the
+// same as a malformed one: an error, not a silent zero. There's no reason a
+// missing field should be trusted more than a garbled one — both are
+// evidence of a broken/non-compliant challenge, and either way Task 5 must
+// not size a reservation or payment off an unverified zero.
+func TestX402ProbeQuoteMissingAmount(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, _, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
+	if err == nil {
+		t.Fatal("want an error for a missing maxAmountRequired, got nil")
+	}
+	if !isV2 {
+		t.Fatal("want isV2=true still reported — it IS a real v2 challenge, just malformed")
+	}
+}
+
+// TestX402ProbePostOnlyEndpointUnreachableViaGet is a reproduce step for the
+// real bug found live against Prism
+// (https://prism-99h2.onrender.com/resume-screen-accurate) on 2026-07-31: a
+// POST-only x402 endpoint 404s a bare GET before it ever looks at payment
+// state. Confirms the OLD default (empty method -> GET) genuinely can't see
+// this endpoint's real v2 challenge at all -- notPaymentRequired comes back
+// true (a 404, not a 402), exactly the failure mode that made the whole
+// tool402 dispatch dead-end before probing with the right method existed.
+func TestX402ProbePostOnlyEndpointUnreachableViaGet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"250000"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if isV2 || quote.PayTo != "" {
+		t.Fatalf("want the OLD get-only probe to see a 404, not the real v2 challenge (isV2=%v quote=%+v)", isV2, quote)
+	}
+}
+
+// TestX402ProbePostOnlyEndpointReachableViaConfiguredMethod is the fix half
+// of the pair above: passing method=POST reaches the same endpoint's real
+// v2 challenge correctly.
+func TestX402ProbePostOnlyEndpointReachableViaConfiguredMethod(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"250000"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL, http.MethodPost)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isV2 {
+		t.Fatal("want isV2=true once probed with the endpoint's actual required method")
+	}
+	if quote.PayTo != "TARGETADDR" || quote.MaxAmountRequired != "250000" {
+		t.Fatalf("want the real quote parsed, got %+v", quote)
+	}
+
+	priceIsV2, amount, err := nodes.ProbeX402Price(context.Background(), srv.URL, http.MethodPost)
+	if err != nil {
+		t.Fatalf("unexpected error from ProbeX402Price: %v", err)
+	}
+	if !priceIsV2 || amount != 250000 {
+		t.Fatalf("want isV2=true amount=250000, got isV2=%v amount=%d", priceIsV2, amount)
+	}
+}
+
+// TestX402ProbeAcceptsAmountFieldDialect is a reproduce-then-fix regression
+// test for the real bug found live against our own Prism-schema demo
+// merchant (backend/cmd/x402demo) on 2026-07-31: its challenge uses `amount`
+// (the current real-world x402 dialect — confirmed against Prism's own live
+// endpoint and the official @x402/core v2.20 SDK), not `maxAmountRequired`
+// (this codebase's own historical convention). Before this fix, a real,
+// live workflow run against that merchant failed with "invalid or missing
+// maxAmountRequired" despite the challenge being entirely well-formed.
+func TestX402ProbeAcceptsAmountFieldDialect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","amount":"250000"}]}`))
+	}))
+	defer srv.Close()
+
+	isV2, quote, err := nodes.ProbeX402Quote(context.Background(), srv.URL, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isV2 {
+		t.Fatal("want isV2=true for a real accepts[] challenge using the `amount` field")
+	}
+	if quote.MaxAmountRequired != "250000" {
+		t.Fatalf("want amount parsed via the `amount` fallback field, got %q", quote.MaxAmountRequired)
 	}
 }
 
@@ -204,7 +383,8 @@ func TestX402V2TargetRoutesThroughRelay(t *testing.T) {
 	signer := &mockSigner{txID: "unused-legacy-path"}
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, noopLedger())
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: nodes.RunLedger(noopLedger())}
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -251,7 +431,8 @@ func TestX402LegacyTargetBypassesRelay(t *testing.T) {
 	signer := &mockSigner{txID: "TX-SIGNED-123"}
 	usdcSigner := &mockUSDCGroupSigner{}
 
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, noopLedger())
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: nodes.RunLedger(noopLedger())}
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -302,7 +483,8 @@ func TestX402V2TargetWithAmpersandInQueryString(t *testing.T) {
 	signer := &mockSigner{txID: "unused-legacy-path"}
 	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
 
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, noopLedger())
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: nodes.RunLedger(noopLedger())}
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -361,7 +543,8 @@ func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
 
 	// maxAmountRequired (100000) is under the flat-fee-sized ceiling this
 	// ledger.Reserve allows, so this call should succeed and pay.
-	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, ledger)
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: nodes.RunLedger(ledger)}
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +568,8 @@ func TestX402V2RelayPreflightUsesRealAmount(t *testing.T) {
 		Commit:  func(context.Context, string, int64, string) {},
 		Release: func(context.Context, int64) {},
 	}
-	_, err = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, strictLedger)
+	strictRelayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: nodes.RunLedger(strictLedger)}
+	_, err = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, strictRelayCfg)
 	if err == nil {
 		t.Fatal("want insufficient-credits error when real amount exceeds balance")
 	}
@@ -430,7 +614,8 @@ func TestX402V2RelayRejectsPayment(t *testing.T) {
 		Commit:  func(context.Context, string, int64, string) { committed = true },
 		Release: func(context.Context, int64) { released = true },
 	}
-	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, ledger)
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: nodes.RunLedger(ledger)}
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, relayCfg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -512,7 +697,8 @@ func TestX402V2RelayReleasesReservationOnPanic(t *testing.T) {
 				t.Fatal("want the panic to propagate out of ExecuteTool402V2, got none")
 			}
 		}()
-		nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, usdcSigner, "platform-enc-mnemonic", uint64(10458941), relay.URL, ledger)
+		relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: nodes.RunLedger(ledger)}
+		nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
 		t.Fatal("unreachable: ExecuteTool402V2 should have panicked")
 	}()
 
@@ -524,5 +710,325 @@ func TestX402V2RelayReleasesReservationOnPanic(t *testing.T) {
 	}
 	if committed {
 		t.Fatal("want no commit — the payment never completed")
+	}
+}
+
+// TestX402RunLevelCommitsNotReleasesOnTargetNetworkFailure is a regression
+// test for the run-level path (RunFundingID != "", dispatched by
+// ExecuteTool402V2 into executeTool402RunLevel): PayTargetFromWallet2's
+// Signed field becomes true the instant a real payment group is signed and
+// submitted from Wallet 2 -- real money has already moved -- and stays true
+// even when the subsequent HTTP call to the target fails at the network
+// level (see Wallet2PayResult's doc comment in walletpay.go). Before this
+// fix, executeTool402RunLevel released the ledger reservation whenever
+// payErr != nil, regardless of Signed, which would understate real spend:
+// a later call in the same agent turn could Reserve phantom headroom this
+// pool doesn't actually have. This test hijacks and closes the connection
+// on the paid request specifically (the quote probe beforehand must still
+// succeed normally) to simulate a genuine transport failure after signing.
+func TestX402RunLevelCommitsNotReleasesOnTargetNetworkFailure(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("test server does not support hijacking")
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.Close()
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	var reservedAmount int64
+	var released, committed bool
+	var committedAmount int64
+	ledger := nodes.PaymentLedger{
+		Reserve: func(_ context.Context, amount int64) error { reservedAmount = amount; return nil },
+		Commit:  func(_ context.Context, _ string, amount int64, _ string) { committed = true; committedAmount = amount },
+		Release: func(context.Context, int64) { released = true },
+	}
+
+	var recordSettlementCalled bool
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID:     "test-run-funding-1",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		Ledger:           nodes.RunLedger(ledger),
+		Wallet2: nodes.Wallet2PayConfig{
+			USDCSigner:                usdcSigner,
+			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+			USDCAssetID:               uint64(10458941),
+			RelayFeePayer:             "FEEPAYERADDR",
+			RelayNetwork:              "algorand:testnet",
+		},
+		RecordSettlement: func(_ context.Context, _ string, _ int64, _ bool) error {
+			recordSettlementCalled = true
+			return nil
+		},
+	}
+
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+	if err == nil {
+		t.Fatal("want an error surfaced for the network failure reaching the target")
+	}
+	if reservedAmount != 100000 {
+		t.Fatalf("want 100000 reserved, got %d", reservedAmount)
+	}
+	if !recordSettlementCalled {
+		t.Fatal("want RecordSettlement to still be called even though the target request failed at the network level")
+	}
+	if released {
+		t.Fatal("want the reservation NEVER released -- money already left Wallet 2 once the payment group was signed")
+	}
+	if !committed || committedAmount != 100000 {
+		t.Fatalf("want the reservation committed for 100000 (money already left Wallet 2), got committed=%v amount=%d", committed, committedAmount)
+	}
+}
+
+// TestX402RunLevelReserveFailureIsErrBalanceBlocked is a regression test for
+// executeTool402RunLevel's pool-exhaustion path: unlike its two siblings
+// (the legacy-dialect and per-call v2 reserve failures a few lines above and
+// below it in tool402.go), a failed cfg.Ledger.Reserve here used to return a
+// plain error instead of &ErrBalanceBlocked{}. provider.go's agent loop only
+// hard-stops on errors.As(execErr, &ErrBalanceBlocked{}) -- a plain error
+// gets fed back to the LLM as a retryable tool result, so pool exhaustion
+// would silently turn into repeated real outbound probes against the target
+// (up to the loop's iteration cap) instead of stopping the run once.
+func TestX402RunLevelReserveFailureIsErrBalanceBlocked(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+
+	reserveErr := errors.New("pool exhausted: need 100000, 0 left of 500000")
+	ledger := nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { return reserveErr },
+	}
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID:     "test-run-funding-1",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		Ledger:           nodes.RunLedger(ledger),
+	}
+
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+	if err == nil {
+		t.Fatal("want an error surfaced for the exhausted pool")
+	}
+	var blocked *nodes.ErrBalanceBlocked
+	if !errors.As(err, &blocked) {
+		t.Fatalf("want *ErrBalanceBlocked so the agent loop hard-stops instead of retrying, got %T: %v", err, err)
+	}
+}
+
+// TestX402RunLevelCommitsNotReleasesOnRecordSettlementFailure is the second
+// half of the same regression: when the outbound payment succeeds (the
+// target responds 2xx) but the audit-write call (RecordSettlement, e.g.
+// RecordRunFundedSettlement/RecordOutboundSettlement in production) fails
+// for an unrelated reason (DB blip), the ledger reservation must still be
+// Committed, never Released -- this is a bookkeeping failure, not a payment
+// failure, matching the identical distinction reserveAndFundRun already
+// makes when RecordRunFunding fails after a successful FundRunReserve.
+func TestX402RunLevelCommitsNotReleasesOnRecordSettlementFailure(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			w.Write([]byte(`{"data":"paid tool response"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	var released, committed bool
+	var committedAmount int64
+	ledger := nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { return nil },
+		Commit:  func(_ context.Context, _ string, amount int64, _ string) { committed = true; committedAmount = amount },
+		Release: func(context.Context, int64) { released = true },
+	}
+
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID:     "test-run-funding-2",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		Ledger:           nodes.RunLedger(ledger),
+		Wallet2: nodes.Wallet2PayConfig{
+			USDCSigner:                usdcSigner,
+			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+			USDCAssetID:               uint64(10458941),
+			RelayFeePayer:             "FEEPAYERADDR",
+			RelayNetwork:              "algorand:testnet",
+		},
+		RecordSettlement: func(context.Context, string, int64, bool) error {
+			return errors.New("db unavailable")
+		},
+	}
+
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+	if err != nil {
+		t.Fatalf("want nil error -- a failed audit write doesn't undo a real settled payment, got %v", err)
+	}
+	if released {
+		t.Fatal("want the reservation NEVER released -- the payment settled, only the audit write failed")
+	}
+	if !committed || committedAmount != 100000 {
+		t.Fatalf("want the reservation committed for 100000 despite the RecordSettlement failure, got committed=%v amount=%d", committed, committedAmount)
+	}
+	if paymentResult.SettledUSDMicros != 100000 {
+		t.Fatalf("want SettledUSDMicros 100000, got %d", paymentResult.SettledUSDMicros)
+	}
+}
+
+// TestX402RunLevelNilRecordSettlementDoesNotPanic is a regression test for
+// a nil-func-call panic: executeTool402RunLevel called cfg.RecordSettlement
+// unconditionally, contradicting the "nil-safe like every other ledger call
+// site in this file" comment a few lines above it (which describes exactly
+// this kind of guard applied to cfg.Ledger.Reserve, but not to
+// RecordSettlement). A caller that sets RunFundingID/RunFundedToolIDs
+// without also wiring RecordSettlement must not panic after a real payment
+// has already been signed and sent -- it should alert loudly instead.
+func TestX402RunLevelNilRecordSettlementDoesNotPanic(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			w.Write([]byte(`{"data":"paid tool response"}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	var committed bool
+	ledger := nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { return nil },
+		Commit:  func(context.Context, string, int64, string) { committed = true },
+		Release: func(context.Context, int64) {},
+	}
+
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID:     "test-run-funding-nil-record",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		Ledger:           nodes.RunLedger(ledger),
+		Wallet2: nodes.Wallet2PayConfig{
+			USDCSigner:                usdcSigner,
+			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+			USDCAssetID:               uint64(10458941),
+			RelayFeePayer:             "FEEPAYERADDR",
+			RelayNetwork:              "algorand:testnet",
+		},
+		RecordSettlement: nil,
+	}
+
+	paymentResult, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+	if err != nil {
+		t.Fatalf("want nil error -- a missing RecordSettlement doesn't undo a real settled payment, got %v", err)
+	}
+	if !committed {
+		t.Fatal("want the reservation committed despite RecordSettlement being nil")
+	}
+	if paymentResult.SettledUSDMicros != 100000 {
+		t.Fatalf("want SettledUSDMicros 100000, got %d", paymentResult.SettledUSDMicros)
+	}
+}
+
+// TestX402RunFundedAgentWithUnfundedToolUsesPerCallPath is the direct
+// regression test for the predicate mismatch bug: ExecuteTool402V2's
+// dispatch used to route ANY v2 call into executeTool402RunLevel purely
+// because RunFundingID was non-empty, even for a tool the run's up-front
+// estimate never covered (e.g. its probe failed during reserveAndFundRun,
+// so it's absent from RunFundedToolIDs). That drew the tool's real cost
+// from an in-memory pool sized for OTHER tools. It must instead fall
+// through to the existing per-call relay path, which reserves/pays/settles
+// against the live DB balance independently.
+func TestX402RunFundedAgentWithUnfundedToolUsesPerCallPath(t *testing.T) {
+	relayHit := false
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		relayHit = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer relay.Close()
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "unfunded-tool", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	relayCfg := nodes.X402RelayConfig{
+		USDCSigner:               usdcSigner,
+		PlatformSpendEncMnemonic: "platform-enc-mnemonic",
+		ExpectedAssetID:          uint64(10458941),
+		RelayBaseURL:             relay.URL,
+		// RunFundingID set (this agent's run WAS funded), but this specific
+		// tool's ID is absent from RunFundedToolIDs -- its probe failed
+		// during estimation, so reserveAndFundRun never folded it in.
+		RunFundingID:     "test-run-funding-mismatch",
+		RunFundedToolIDs: map[string]bool{"some-other-tool": true},
+		Ledger:           nodes.RunLedger{},
+	}
+
+	// The per-call relay path (executeTool402V2Relay) needs a configured
+	// USDCSigner/PlatformSpendEncMnemonic to ever dial relay.URL (it
+	// degrades to a no-op error response otherwise) -- aw/signer being
+	// empty just means the unrelated legacy-dialect branch (never reached
+	// here, this is a v2 target) has nothing to pay with. The point of
+	// this test is which CODE PATH is taken, not whether the payment
+	// against the relay ultimately succeeds (the relay returns 500 above).
+	_, _ = nodes.ExecuteTool402V2(context.Background(), node, rc, aw, nil, relayCfg)
+
+	if !relayHit {
+		t.Fatal("want the unfunded tool to route through the per-call relay path (executeTool402V2Relay), not the run-level pool")
+	}
+}
+
+// TestParseMaxAmountRequiredAsMicrosRejectsOversizedFloat reproduces a
+// money-correctness bug: a target's 402 challenge encoding maxAmountRequired
+// as a JSON number (not string) at or beyond int64's range used to convert
+// via a bare int64(t) cast, which is implementation-defined for
+// out-of-range floats -- in practice yielding a large negative int64 that
+// still reported ok=true. That negative "amount" would sail past
+// reserveAndFundRun's ceiling check (amount > ceiling is false for a
+// negative number) and reach store.ReserveCredits as a negative
+// reservation, which reads as a credit INCREASE rather than a decrease.
+func TestParseMaxAmountRequiredAsMicrosRejectsOversizedFloat(t *testing.T) {
+	if _, ok := nodes.ParseMaxAmountRequiredAsMicros(1e20); ok {
+		t.Fatal("want ok=false for a float far beyond int64's range, got ok=true")
+	}
+	if _, ok := nodes.ParseMaxAmountRequiredAsMicros(math.Pow(2, 63)); ok {
+		t.Fatal("want ok=false for a float at int64's overflow boundary, got ok=true")
+	}
+	// Sanity: a large but legitimate whole-number quote still parses.
+	micros, ok := nodes.ParseMaxAmountRequiredAsMicros(float64(500_000_000)) // $500
+	if !ok || micros != 500_000_000 {
+		t.Fatalf("want ok=true micros=500000000 for a legitimate large quote, got ok=%v micros=%d", ok, micros)
 	}
 }
