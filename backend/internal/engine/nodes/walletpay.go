@@ -121,7 +121,20 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 	finalBody, _ := io.ReadAll(io.LimitReader(payResp.Body, 5<<20))
 
 	if payResp.StatusCode < 200 || payResp.StatusCode >= 300 {
-		log.Printf("wallet2 outbound pay to %s rejected: status=%d body=%s payment-required-header=%q", target, payResp.StatusCode, finalBody, payResp.Header.Get("Payment-Required"))
+		// target and its response are externally controlled (the workflow's
+		// configured endpoint, and whatever that endpoint returns) -- quote
+		// and cap both before logging so neither can inject control
+		// characters/forge log lines or blow up log volume.
+		const logSnippetLimit = 512
+		bodySnippet := finalBody
+		if len(bodySnippet) > logSnippetLimit {
+			bodySnippet = bodySnippet[:logSnippetLimit]
+		}
+		headerSnippet := payResp.Header.Get("Payment-Required")
+		if len(headerSnippet) > logSnippetLimit {
+			headerSnippet = headerSnippet[:logSnippetLimit]
+		}
+		log.Printf("wallet2 outbound pay to %s rejected: status=%d body=%s payment-required-header=%s", strconv.Quote(target), payResp.StatusCode, strconv.Quote(string(bodySnippet)), strconv.Quote(headerSnippet))
 	}
 
 	return Wallet2PayResult{
