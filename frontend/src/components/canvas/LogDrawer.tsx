@@ -16,6 +16,12 @@ interface X402Payment {
   txId: string;
   amount?: string;
   explorerURL?: string;
+  // outboundTxId/outboundExplorerURL are the SECOND real settlement leg —
+  // txId above is always the inbound leg (caller -> Wallet 2), this is
+  // Wallet 2 -> the actual target, when the target returned one (not
+  // every target does).
+  outboundTxId?: string;
+  outboundExplorerURL?: string;
   nodeName?: string;
   nodeId?: string;
 }
@@ -323,7 +329,7 @@ export function LogDrawer({
                   </span>
                   {l.output.txId && l.output.explorerURL && (
                     <>
-                      <span style={{ color: "var(--fg-dim)" }}>·</span>
+                      <span style={{ color: "var(--fg-dim)" }}>· in</span>
                       <a
                         href={l.output.explorerURL}
                         target="_blank"
@@ -338,6 +344,26 @@ export function LogDrawer({
                         onClick={(e) => e.stopPropagation()}
                       >
                         {l.output.txId.slice(0, 8)}…
+                      </a>
+                    </>
+                  )}
+                  {l.output.outboundTxId && l.output.outboundExplorerURL && (
+                    <>
+                      <span style={{ color: "var(--fg-dim)" }}>· out</span>
+                      <a
+                        href={l.output.outboundExplorerURL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          color: "#E879F9",
+                          textDecoration: "underline",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: 9.5,
+                          whiteSpace: "nowrap",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {l.output.outboundTxId.slice(0, 8)}…
                       </a>
                     </>
                   )}
