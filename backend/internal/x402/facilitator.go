@@ -35,9 +35,15 @@ type PaymentPayload struct {
 }
 
 type PaymentRequirements struct {
-	Scheme            string         `json:"scheme"`
-	Network           string         `json:"network"`
-	MaxAmountRequired string         `json:"maxAmountRequired"`
+	Scheme  string `json:"scheme"`
+	Network string `json:"network"`
+	// GoPlausible's facilitator reads this key as "amount", not the more
+	// common x402 "maxAmountRequired" — sending the latter left their
+	// server reading undefined and crashing on BigInt(undefined)
+	// (confirmed live 2026-07-31 against /verify). Go field name kept as
+	// MaxAmountRequired since every caller already treats it as such;
+	// only the wire tag changes.
+	MaxAmountRequired string         `json:"amount"`
 	Resource          string         `json:"resource"`
 	Description       string         `json:"description"`
 	MimeType          string         `json:"mimeType"`
@@ -45,6 +51,16 @@ type PaymentRequirements struct {
 	MaxTimeoutSeconds int            `json:"maxTimeoutSeconds"`
 	Asset             string         `json:"asset"`
 	Extra             map[string]any `json:"extra"`
+	// Extensions carries the Bazaar discovery declaration (equivalent to the
+	// TS SDK's declareDiscoveryExtension). Without it here, on the struct
+	// that's actually POSTed to /verify and /settle, the facilitator never
+	// learns this route exists to catalog — extra.tag alone only attributes
+	// an already-discovered route's activity to the challenge, it doesn't
+	// register the route. Confirmed missing 2026-07-31: our own 402 body to
+	// the paying caller carried an "extensions" key, but neither Verify nor
+	// Settle ever sent it, so no catalog entry was ever created regardless
+	// of how many payments settled.
+	Extensions map[string]any `json:"extensions,omitempty"`
 }
 
 type VerifyResult struct {

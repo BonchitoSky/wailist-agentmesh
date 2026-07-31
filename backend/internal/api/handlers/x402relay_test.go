@@ -80,8 +80,8 @@ func TestX402RelayNoPaymentMirrorsTargetPriceAsChallengeTag(t *testing.T) {
 	if body.Accepts[0]["payTo"] != "PLATFORMADDR" {
 		t.Fatalf("want payTo=PLATFORMADDR (our own wallet, not the target's), got %v", body.Accepts[0]["payTo"])
 	}
-	if body.Accepts[0]["maxAmountRequired"] != "100000" {
-		t.Fatalf("want price mirrored from target (100000), got %v", body.Accepts[0]["maxAmountRequired"])
+	if body.Accepts[0]["amount"] != "100000" {
+		t.Fatalf("want price mirrored from target (100000), got %v", body.Accepts[0]["amount"])
 	}
 	_ = x402.PaymentPayload{} // referenced so import stays used once payment-path test is added below
 }
@@ -91,9 +91,10 @@ func TestX402RelayNoPaymentMirrorsTargetPriceAsChallengeTag(t *testing.T) {
 // demo merchant (backend/cmd/x402demo) on 2026-07-31: its challenge uses
 // `amount` (the current real-world x402 dialect — confirmed against Prism's
 // own live endpoint and the official @x402/core v2.20 SDK), not
-// `maxAmountRequired` (this codebase's own historical convention, which the
-// relay still emits on its OWN outward-facing challenge below —
-// unchanged). fetchTargetPriceQuote must still correctly parse a target
+// `maxAmountRequired` (this codebase's own historical convention). The
+// relay's own outward-facing challenge now emits `amount` too, matching
+// GoPlausible's facilitator wire format. fetchTargetPriceQuote must still
+// correctly parse a target
 // that only sends `amount`.
 func TestX402RelayAcceptsTargetAmountFieldDialect(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,8 +131,8 @@ func TestX402RelayAcceptsTargetAmountFieldDialect(t *testing.T) {
 		Accepts []map[string]any `json:"accepts"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &body)
-	if len(body.Accepts) != 1 || body.Accepts[0]["maxAmountRequired"] != "250000" {
-		t.Fatalf("want price parsed from target's `amount` field and mirrored as our own maxAmountRequired=250000, got %+v", body.Accepts)
+	if len(body.Accepts) != 1 || body.Accepts[0]["amount"] != "250000" {
+		t.Fatalf("want price parsed from target's `amount` field and mirrored as our own amount=250000, got %+v", body.Accepts)
 	}
 }
 
@@ -228,7 +229,7 @@ func TestX402RelayPaysTargetFromPlatformWalletAfterInboundSettles(t *testing.T) 
 	// than the previous hardcoded-0/no-enforcement behavior.
 	var verifyReqs, settleReqs struct {
 		PaymentRequirements struct {
-			MaxAmountRequired string `json:"maxAmountRequired"`
+			MaxAmountRequired string `json:"amount"`
 		} `json:"paymentRequirements"`
 	}
 	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

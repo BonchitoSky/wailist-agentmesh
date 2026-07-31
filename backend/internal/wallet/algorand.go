@@ -194,7 +194,7 @@ func (s *Service) SignUSDCPaymentGroup(ctx context.Context, encMnemonic, payTo s
 		return nil, 0, err
 	}
 
-	payTxn, err := transaction.MakeAssetTransferTxn(acc.Address.String(), payTo, amountMicros, nil, params, "", assetID)
+	payTxn, err := transaction.MakeAssetTransferTxn(acc.Address.String(), payTo, amountMicros, []byte("x402-payment-v2"), params, "", assetID)
 	if err != nil {
 		return nil, 0, err
 	}

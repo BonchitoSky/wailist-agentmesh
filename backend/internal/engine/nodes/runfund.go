@@ -53,6 +53,18 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 			"tag":      "x402-global-challenge",
 			"decimals": 6,
 		},
+		// Bazaar discovery declaration on the struct actually POSTed to
+		// /verify — extra.tag alone only attributes an already-discovered
+		// route's activity to the challenge, it doesn't register the route.
+		// Fixed resource/schema here (no pass-through target like the relay
+		// has) since this endpoint always settles the same shape of payment.
+		Extensions: map[string]any{
+			"bazaar": map[string]any{
+				"info": map[string]any{
+					"output": map[string]any{"description": "confirms this run's pre-fund pool was reserved"},
+				},
+			},
+		},
 	}
 
 	group, idx, err := cfg.USDCSigner.SignUSDCPaymentGroup(ctx, cfg.PlatformSpendEncMnemonic, cfg.PlatformWalletAddress, cfg.ExpectedAssetID, uint64(amountUSDMicros), cfg.RelayFeePayer)

@@ -599,7 +599,14 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	accept := relayChallenge.Accepts[0]
 	payTo, _ := accept["payTo"].(string)
 	assetStr, _ := accept["asset"].(string)
-	amountStr, _ := accept["maxAmountRequired"].(string)
+	// Our own relay emits "amount" (matching GoPlausible's facilitator wire
+	// format — see relayInboundChallenge), "maxAmountRequired" kept as a
+	// fallback for the historical dialect.
+	amountStr, ok := accept["amount"].(string)
+	if !ok {
+		amountStr, _ = accept["maxAmountRequired"].(string)
+	}
+	network, _ := accept["network"].(string)
 	var feePayer string
 	if extra, ok := accept["extra"].(map[string]any); ok {
 		feePayer, _ = extra["feePayer"].(string)
@@ -656,7 +663,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay payment signing failed: %w", err)
 	}
 	xPayment, _ := json.Marshal(map[string]any{
-		"x402Version": 2, "scheme": "exact",
+		"x402Version": 2, "scheme": "exact", "network": network,
 		"payload": map[string]any{"paymentGroup": group, "paymentIndex": idx},
 	})
 
