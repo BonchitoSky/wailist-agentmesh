@@ -324,7 +324,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		// didn't, hence the masked-address/no-domain display). Description
 		// mirrors the wording already used in the public 402 challenge.
 		Resource:    d.FrontendURL,
-		Description: "AgentMesh — pays and orchestrates downstream x402 tool calls on the caller's behalf",
+		Description: "AgentMesh — give your AI agents a wallet, let them pay their own way",
 		// Without extra.feePayer the facilitator can't locate the fee-pooled
 		// stub txn in the payment group and throws server-side (confirmed
 		// live 2026-07-31: "Cannot convert undefined to a BigInt") — see the
