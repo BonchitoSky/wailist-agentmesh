@@ -565,6 +565,38 @@ func (s *Store) GetCreditBalance(ctx context.Context, userID string) (int64, err
 	return balance, err
 }
 
+// ListCreditHistory returns a user's credit-ledger rows, most recent first, so
+// the billing UI can render real purchases from the DB instead of a browser-local
+// mock. Returns a non-nil (possibly empty) slice so the JSON is always an array.
+func (s *Store) ListCreditHistory(ctx context.Context, userID string) ([]models.CreditTransaction, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, provider, provider_order_id, provider_payment_id, status,
+		       amount_inr_paise, fx_rate_usd_per_inr, amount_usd_cents, credit_usd_micros,
+		       created_at, completed_at
+		FROM credit_ledger
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+		LIMIT 100`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	history := []models.CreditTransaction{}
+	for rows.Next() {
+		var t models.CreditTransaction
+		if err := rows.Scan(
+			&t.ID, &t.UserID, &t.Provider, &t.ProviderOrderID, &t.ProviderPaymentID, &t.Status,
+			&t.AmountINRPaise, &t.FXRateUSDPerINR, &t.AmountUSDCents, &t.CreditUSDMicros,
+			&t.CreatedAt, &t.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		history = append(history, t)
+	}
+	return history, rows.Err()
+}
+
 // MarkCreditTransactionStatus moves a still-pending ledger row directly to status
 // (e.g. "failed"/"expired" for a NOWPayments IPN that will never complete, or "partial"
 // for partially_paid) without touching the user's balance — a pending row never credited

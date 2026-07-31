@@ -105,6 +105,21 @@ func (d *Deps) GetCreditBalance(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"credit_usd_micros": balance})
 }
 
+// GetCreditHistory returns the caller's credit ledger (most recent first) so the
+// billing UI can show real, DB-backed purchases instead of browser-local mocks.
+func (d *Deps) GetCreditHistory(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+
+	history, err := d.Store.ListCreditHistory(r.Context(), userID)
+	if err != nil {
+		log.Printf("credit history: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	respond.JSON(w, http.StatusOK, map[string]any{"history": history})
+}
+
 // VerifyCashfreePayment is called by the frontend after the Cashfree JS SDK
 // reports payment completion. It fetches the order status from Cashfree's API
 // (server-to-server, so it cannot be spoofed) and credits the user if PAID.
