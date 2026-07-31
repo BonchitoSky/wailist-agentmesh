@@ -360,7 +360,14 @@ func ParseMaxAmountRequiredAsMicros(v any) (int64, bool) {
 		}
 		return n, true
 	case float64:
-		if t != math.Trunc(t) || t < 0 {
+		// Upper-bounded well below int64's range (1e15 micros = $1B/call,
+		// already absurd for a real quote) and safely representable exactly
+		// as a float64 (2^53 ≈ 9e15) -- without this, a target quoting e.g.
+		// 1e20 as a JSON number converts via int64(t) to an
+		// implementation-defined (in practice large-negative) result that
+		// still returns ok=true, which every downstream ceiling check here
+		// and in reserveAndFundRun assumes can't happen for a "valid" parse.
+		if t != math.Trunc(t) || t < 0 || t > 1e15 {
 			return 0, false
 		}
 		return int64(t), true

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1006,5 +1007,28 @@ func TestX402RunFundedAgentWithUnfundedToolUsesPerCallPath(t *testing.T) {
 
 	if !relayHit {
 		t.Fatal("want the unfunded tool to route through the per-call relay path (executeTool402V2Relay), not the run-level pool")
+	}
+}
+
+// TestParseMaxAmountRequiredAsMicrosRejectsOversizedFloat reproduces a
+// money-correctness bug: a target's 402 challenge encoding maxAmountRequired
+// as a JSON number (not string) at or beyond int64's range used to convert
+// via a bare int64(t) cast, which is implementation-defined for
+// out-of-range floats -- in practice yielding a large negative int64 that
+// still reported ok=true. That negative "amount" would sail past
+// reserveAndFundRun's ceiling check (amount > ceiling is false for a
+// negative number) and reach store.ReserveCredits as a negative
+// reservation, which reads as a credit INCREASE rather than a decrease.
+func TestParseMaxAmountRequiredAsMicrosRejectsOversizedFloat(t *testing.T) {
+	if _, ok := nodes.ParseMaxAmountRequiredAsMicros(1e20); ok {
+		t.Fatal("want ok=false for a float far beyond int64's range, got ok=true")
+	}
+	if _, ok := nodes.ParseMaxAmountRequiredAsMicros(math.Pow(2, 63)); ok {
+		t.Fatal("want ok=false for a float at int64's overflow boundary, got ok=true")
+	}
+	// Sanity: a large but legitimate whole-number quote still parses.
+	micros, ok := nodes.ParseMaxAmountRequiredAsMicros(float64(500_000_000)) // $500
+	if !ok || micros != 500_000_000 {
+		t.Fatalf("want ok=true micros=500000000 for a legitimate large quote, got ok=%v micros=%d", ok, micros)
 	}
 }
