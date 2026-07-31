@@ -177,6 +177,30 @@ func fetchTargetPriceQuote(ctx context.Context, target, method string, body []by
 	return targetPriceQuote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount}, nil
 }
 
+// bazaarDiscoveryExtension describes the relay's pass-through shape (any
+// downstream target URL in, that target's own response out) since this
+// endpoint has no fixed schema of its own — see GoPlausible's
+// bazaar-integration reference server. Shared between the public 402
+// challenge (relayInboundChallenge) and the PaymentRequirements actually
+// POSTed to /verify and /settle (relaySettleAndForward) — the facilitator
+// only catalogs a route once it sees this on a real settlement, not from the
+// informational challenge alone.
+func bazaarDiscoveryExtension(target string) map[string]any {
+	return map[string]any{
+		"bazaar": map[string]any{
+			"info": map[string]any{
+				"input":  map[string]any{"target": target},
+				"output": map[string]any{"description": "the target endpoint's own paid response, forwarded unmodified"},
+			},
+			"schema": map[string]any{
+				"properties": map[string]any{
+					"target": map[string]any{"type": "string", "description": "downstream x402 endpoint URL this relay settles payment for and forwards to"},
+				},
+			},
+		},
+	}
+}
+
 // relayInboundChallenge fetches the target's real 402 price and mirrors it
 // back as our own v2 challenge, tagged for the challenge and paid to our
 // platform wallet instead of the target's.
@@ -200,10 +224,15 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 	challenge := map[string]any{
 		"x402Version": 2,
 		"accepts": []map[string]any{{
-			"scheme":            "exact",
-			"network":           d.RelayNetwork,
-			"maxAmountRequired": quote.MaxAmountRequired,
-			"resource":          target,
+			"scheme":  "exact",
+			"network": d.RelayNetwork,
+			// GoPlausible's facilitator reads this key as "amount", not
+			// "maxAmountRequired" — matches PaymentRequirements' wire tag
+			// in facilitator.go. Callers parsing our challenge
+			// (ChallengeAcceptsFromHeader etc.) already accept both names,
+			// so this is safe to change unilaterally.
+			"amount":   quote.MaxAmountRequired,
+			"resource": target,
 			"description":       "AgentMesh x402 relay — settles the inbound leg and forwards payment to " + target,
 			"payTo":             d.PlatformWalletAddress,
 			"maxTimeoutSeconds": 300,
@@ -219,19 +248,7 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 		// shape (any downstream target URL in, that target's own response
 		// out) since this endpoint has no fixed schema of its own — see
 		// GoPlausible's bazaar-integration reference server.
-		"extensions": map[string]any{
-			"bazaar": map[string]any{
-				"info": map[string]any{
-					"input":  map[string]any{"target": target},
-					"output": map[string]any{"description": "the target endpoint's own paid response, forwarded unmodified"},
-				},
-				"schema": map[string]any{
-					"properties": map[string]any{
-						"target": map[string]any{"type": "string", "description": "downstream x402 endpoint URL this relay settles payment for and forwards to"},
-					},
-				},
-			},
-		},
+		"extensions": bazaarDiscoveryExtension(target),
 	}
 
 	challengeJSON, err := json.Marshal(challenge)
@@ -300,6 +317,14 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		PayTo:             d.PlatformWalletAddress,
 		Asset:             strconv.FormatUint(d.USDCAssetID, 10),
 		MaxAmountRequired: quote.MaxAmountRequired,
+		// AgentMesh's own public domain, not target's: this settlement pays
+		// us as the orchestrator, and the facilitator's leaderboard resolves
+		// a merchant's label/logo/domain off this field (confirmed live
+		// 2026-07-31 — every enriched leaderboard entry has one set, ours
+		// didn't, hence the masked-address/no-domain display). Description
+		// mirrors the wording already used in the public 402 challenge.
+		Resource:    d.FrontendURL,
+		Description: "AgentMesh — give your AI agents a wallet, let them pay their own way",
 		// Without extra.feePayer the facilitator can't locate the fee-pooled
 		// stub txn in the payment group and throws server-side (confirmed
 		// live 2026-07-31: "Cannot convert undefined to a BigInt") — see the
@@ -310,6 +335,12 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 			"tag":      "x402-global-challenge",
 			"decimals": 6,
 		},
+		// Same discovery declaration sent in the public 402 challenge above,
+		// now also on the struct actually POSTed to /verify and /settle —
+		// that's the leg the facilitator uses to register a catalog entry,
+		// so this must ride along with the real settlement, not just the
+		// informational challenge shown to the caller.
+		Extensions: bazaarDiscoveryExtension(target),
 	}
 
 	verifyResult, err := d.FacilitatorClient.Verify(ctx, payload, reqs)
