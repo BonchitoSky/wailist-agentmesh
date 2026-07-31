@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 
 	"github.com/agentmesh/backend/internal/db"
@@ -318,16 +317,19 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		PayTo:             d.PlatformWalletAddress,
 		Asset:             strconv.FormatUint(d.USDCAssetID, 10),
 		MaxAmountRequired: quote.MaxAmountRequired,
-		// The real, reachable URL of the challenge this settlement pays --
-		// same convention every other cataloged merchant uses (their
-		// resourceUrl is always the literal 402-issuing endpoint, e.g.
-		// "https://api.syraa.fun/insights/gas-oracle", never a marketing
-		// homepage). FrontendURL (tried first) still left us cataloged
-		// under a masked address with no domain/logo -- this relay route
-		// (GET .../x402/relay?target=...) is the actual URL a caller hits
-		// to receive our 402, so it's what belongs here.
-		Resource:    d.BaseURL + "/x402/relay?target=" + url.QueryEscape(target),
-		Description: "AgentMesh x402 relay — settles the inbound leg and forwards payment to " + target,
+		// FRONTEND_URL, not our own bare JSON relay route: confirmed live
+		// against the facilitator's own leaderboard data (/data/leaderboards)
+		// that resource resolves into two SEPARATE things -- "sub" (domain)
+		// is just a mechanical hostname parse of this URL and resolves for
+		// almost anyone, but "label"/"logo" require the facilitator to
+		// actually crawl this URL's hostname for a <title> tag and a
+		// favicon/apple-touch-icon. That only succeeds for a real browsable
+		// page (confirmed: www.agent-mesh.app serves both) -- a bare JSON
+		// API domain (our own backend, or e.g. prism's onrender.com host)
+		// resolves "sub" but stays permanently masked/logo-less, matching
+		// prism's own real, 20-settlement, still-unbranded leaderboard row.
+		Resource:    d.FrontendURL,
+		Description: "AgentMesh — give your AI agents a wallet, let them pay their own way",
 		// Without extra.feePayer the facilitator can't locate the fee-pooled
 		// stub txn in the payment group and throws server-side (confirmed
 		// live 2026-07-31: "Cannot convert undefined to a BigInt") — see the
