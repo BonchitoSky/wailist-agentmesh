@@ -177,9 +177,10 @@ func newTestStoreForHandlers(t *testing.T) *db.Store {
 	return store
 }
 
-// signCall captures one invocation of fakeUSDCSigner.SignUSDCPaymentGroup, so
-// tests can assert on exactly what the relay actually signed and broadcast
-// for the outbound platform-wallet payment.
+// signCall captures one invocation of fakeUSDCSigner.SignUSDCPaymentSingle
+// (the outbound-to-third-party leg's signer), so tests can assert on exactly
+// what the relay actually signed and broadcast for the outbound
+// platform-wallet payment.
 type signCall struct {
 	payTo        string
 	assetID      uint64
@@ -195,6 +196,11 @@ type fakeUSDCSigner struct {
 }
 
 func (f *fakeUSDCSigner) SignUSDCPaymentGroup(_ context.Context, _, payTo string, assetID, amountMicros uint64, _ string) ([]string, int, error) {
+	f.calls = append(f.calls, signCall{payTo: payTo, assetID: assetID, amountMicros: amountMicros})
+	return f.group, f.idx, f.err
+}
+
+func (f *fakeUSDCSigner) SignUSDCPaymentSingle(_ context.Context, _, payTo string, assetID, amountMicros uint64) ([]string, int, error) {
 	f.calls = append(f.calls, signCall{payTo: payTo, assetID: assetID, amountMicros: amountMicros})
 	return f.group, f.idx, f.err
 }

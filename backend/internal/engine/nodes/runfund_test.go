@@ -33,6 +33,13 @@ func (f *fakeRunFundUSDCSigner) SignUSDCPaymentGroup(_ context.Context, _, _ str
 	return f.group, f.idx, nil
 }
 
+// SignUSDCPaymentSingle is never exercised by FundRunReserve (it always uses
+// the fee-pooled SignUSDCPaymentGroup) — this stub only satisfies the
+// interface.
+func (f *fakeRunFundUSDCSigner) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
+	return f.group, f.idx, f.err
+}
+
 func TestFundRunReserveNoopOnNonPositiveAmount(t *testing.T) {
 	facilitatorHit := false
 	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

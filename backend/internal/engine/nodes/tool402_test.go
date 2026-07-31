@@ -342,6 +342,10 @@ func (m *mockUSDCGroupSigner) SignUSDCPaymentGroup(_ context.Context, _, _ strin
 	return m.group, m.idx, nil
 }
 
+func (m *mockUSDCGroupSigner) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
+	return m.group, m.idx, nil
+}
+
 // noopLedger is a permissive PaymentLedger for tests that need a real
 // payment to go through without asserting anything about reserve/commit/
 // release themselves.
@@ -658,6 +662,10 @@ func (p *panickingUSDCGroupSigner) SignUSDCPaymentGroup(_ context.Context, _, _ 
 	panic("simulated panic mid-payment")
 }
 
+func (p *panickingUSDCGroupSigner) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
+	panic("simulated panic mid-payment")
+}
+
 // TestX402V2RelayReleasesReservationOnPanic is a regression test: a
 // reservation taken by Reserve is a real balance decrement with no durable
 // record of its own (no debit_ledger row exists until Commit runs). If a
@@ -768,7 +776,6 @@ func TestX402RunLevelCommitsNotReleasesOnTargetNetworkFailure(t *testing.T) {
 			USDCSigner:                usdcSigner,
 			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
 			USDCAssetID:               uint64(10458941),
-			RelayFeePayer:             "FEEPAYERADDR",
 			RelayNetwork:              "algorand:testnet",
 		},
 		RecordSettlement: func(_ context.Context, _ string, _ int64, _ bool) error {
@@ -875,7 +882,6 @@ func TestX402RunLevelCommitsNotReleasesOnRecordSettlementFailure(t *testing.T) {
 			USDCSigner:                usdcSigner,
 			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
 			USDCAssetID:               uint64(10458941),
-			RelayFeePayer:             "FEEPAYERADDR",
 			RelayNetwork:              "algorand:testnet",
 		},
 		RecordSettlement: func(context.Context, string, int64, bool) error {
@@ -937,7 +943,6 @@ func TestX402RunLevelNilRecordSettlementDoesNotPanic(t *testing.T) {
 			USDCSigner:                usdcSigner,
 			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
 			USDCAssetID:               uint64(10458941),
-			RelayFeePayer:             "FEEPAYERADDR",
 			RelayNetwork:              "algorand:testnet",
 		},
 		RecordSettlement: nil,

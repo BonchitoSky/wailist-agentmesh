@@ -21,7 +21,6 @@ type Wallet2PayConfig struct {
 	USDCSigner                USDCGroupSigner
 	PlatformWalletEncMnemonic string
 	USDCAssetID               uint64
-	RelayFeePayer             string
 	RelayNetwork              string
 	MaxRelayOutboundUSDMicros int64
 }
@@ -80,7 +79,13 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 		return Wallet2PayResult{}, &Wallet2PayError{StatusCode: http.StatusBadGateway, Msg: "target quoted an amount exceeding the relay's per-call cap"}
 	}
 
-	group, idx, err := cfg.USDCSigner.SignUSDCPaymentGroup(ctx, cfg.PlatformWalletEncMnemonic, quote.PayTo, assetID, amount, cfg.RelayFeePayer)
+	// SignUSDCPaymentSingle, not SignUSDCPaymentGroup: this leg pays an
+	// arbitrary third-party target directly over its own X-Payment header,
+	// never through our own FacilitatorClient — no one is ever going to
+	// cosign a fee-pooled stub on the target's end, so this must be a plain,
+	// self-fee-paying, single signed transaction (confirmed live 2026-07-31:
+	// a real mainnet target generically re-402'd every fee-pooled attempt).
+	group, idx, err := cfg.USDCSigner.SignUSDCPaymentSingle(ctx, cfg.PlatformWalletEncMnemonic, quote.PayTo, assetID, amount)
 	if err != nil {
 		return Wallet2PayResult{}, &Wallet2PayError{StatusCode: http.StatusInternalServerError, Msg: "failed to sign outbound payment: " + err.Error()}
 	}

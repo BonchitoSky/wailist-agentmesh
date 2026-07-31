@@ -171,8 +171,16 @@ func parsePaymentHeader(resp *http.Response) map[string]any {
 
 // USDCGroupSigner signs a gasless USDC atomic-payment group for the relay's
 // X-Payment header. Satisfied by *wallet.Service (SignUSDCPaymentGroup).
+//
+// SignUSDCPaymentSingle is the other half: a plain, self-fee-paying,
+// single-transaction "exact" scheme payment for PayTargetFromWallet2's
+// direct-to-third-party outbound leg, which no arbitrary target's own
+// facilitator can cosign a fee-pooled stub for. Both methods live on the
+// same interface since exactly one concrete type (*wallet.Service) signs
+// for both legs today.
 type USDCGroupSigner interface {
 	SignUSDCPaymentGroup(ctx context.Context, encMnemonic, payTo string, assetID, amountMicros uint64, feePayerAddr string) ([]string, int, error)
+	SignUSDCPaymentSingle(ctx context.Context, encMnemonic, payTo string, assetID, amountMicros uint64) ([]string, int, error)
 }
 
 // X402RelayConfig bundles what an agent-attached tool402 call needs to route

@@ -31,9 +31,13 @@ type NOWPaymentsClient interface {
 }
 
 // USDCSigner builds a gasless USDC atomic-payment group for the X-Payment
-// header. Satisfied by *wallet.Service (SignUSDCPaymentGroup).
+// header. Satisfied by *wallet.Service (SignUSDCPaymentGroup). Mirrors
+// nodes.USDCGroupSigner exactly (including SignUSDCPaymentSingle, used by
+// payTargetAndRespond's outbound-to-third-party leg) so d.USDCSigner keeps
+// satisfying nodes.Wallet2PayConfig.USDCSigner without an explicit assertion.
 type USDCSigner interface {
 	SignUSDCPaymentGroup(ctx context.Context, encMnemonic, payTo string, assetID, amountMicros uint64, feePayerAddr string) ([]string, int, error)
+	SignUSDCPaymentSingle(ctx context.Context, encMnemonic, payTo string, assetID, amountMicros uint64) ([]string, int, error)
 }
 
 var _ USDCSigner = (*wallet.Service)(nil)

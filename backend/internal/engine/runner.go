@@ -618,7 +618,6 @@ func (r *Runner) executeNode(
 				USDCSigner:                usdcSigner,
 				PlatformWalletEncMnemonic: r.x402.PlatformWalletEncMnemonic,
 				USDCAssetID:               r.x402.USDCAssetID,
-				RelayFeePayer:             r.x402.RelayFeePayer,
 				RelayNetwork:              r.x402.RelayNetwork,
 				MaxRelayOutboundUSDMicros: r.x402.MaxRelayOutboundUSDMicros,
 			},

@@ -410,7 +410,6 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 		USDCSigner:                d.USDCSigner,
 		PlatformWalletEncMnemonic: d.PlatformWalletEncMnemonic,
 		USDCAssetID:               d.USDCAssetID,
-		RelayFeePayer:             d.RelayFeePayer,
 		RelayNetwork:              d.RelayNetwork,
 		MaxRelayOutboundUSDMicros: d.MaxRelayOutboundUSDMicros,
 	}

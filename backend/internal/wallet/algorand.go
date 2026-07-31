@@ -228,3 +228,53 @@ func (s *Service) SignUSDCPaymentGroup(ctx context.Context, encMnemonic, payTo s
 		base64.StdEncoding.EncodeToString(signedPay),
 	}, 1, nil
 }
+
+// SignUSDCPaymentSingle builds and signs one standard, self-fee-paying USDC
+// asset-transfer transaction — the plain x402 "exact" scheme on Algorand,
+// not SignUSDCPaymentGroup's gasless fee-pooling convention. The fee-pooled
+// stub only works because our own /x402/relay settles through GoPlausible's
+// facilitator directly (via FacilitatorClient.Verify/Settle), which knows to
+// cosign it; an arbitrary third-party x402 target's own payment middleware
+// has no way to cosign a stub it never agreed to, and (confirmed live
+// 2026-07-31 against a real mainnet target) just re-issues a generic 402
+// instead of settling. This is the one signer PayTargetFromWallet2 (the
+// direct-to-third-party outbound leg) must use instead.
+func (s *Service) SignUSDCPaymentSingle(ctx context.Context, encMnemonic, payTo string, assetID, amountMicros uint64) (paymentGroup []string, paymentIndex int, err error) {
+	mn, err := s.DecryptMnemonic(encMnemonic)
+	if err != nil {
+		return nil, 0, err
+	}
+	privKey, err := mnemonic.ToPrivateKey(mn)
+	if err != nil {
+		return nil, 0, err
+	}
+	acc, err := crypto.AccountFromPrivateKey(privKey)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	client, err := algod.MakeClient(s.algodURL, s.algodToken)
+	if err != nil {
+		return nil, 0, err
+	}
+	params, err := client.SuggestedParams().Do(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	payTxn, err := transaction.MakeAssetTransferTxn(acc.Address.String(), payTo, amountMicros, []byte("x402-payment-v2"), params, "", assetID)
+	if err != nil {
+		return nil, 0, err
+	}
+	// Fee left at params' suggested value (unlike SignUSDCPaymentGroup's
+	// zeroed, pool-covered fee) — the sender covers its own fee directly,
+	// which is what any standard-conformant facilitator/middleware expects
+	// from a single-transaction "exact" scheme payment.
+
+	_, signed, err := crypto.SignTransaction(privKey, payTxn)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return []string{base64.StdEncoding.EncodeToString(signed)}, 0, nil
+}

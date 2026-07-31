@@ -29,12 +29,19 @@ func (f *fakeWallet2Signer) SignUSDCPaymentGroup(_ context.Context, _, _ string,
 	return f.group, f.idx, nil
 }
 
+func (f *fakeWallet2Signer) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, 0, f.err
+	}
+	return f.group, f.idx, nil
+}
+
 func baseWallet2Cfg(signer nodes.USDCGroupSigner) nodes.Wallet2PayConfig {
 	return nodes.Wallet2PayConfig{
 		USDCSigner:                signer,
 		PlatformWalletEncMnemonic: "enc-mnemonic",
 		USDCAssetID:               10458941,
-		RelayFeePayer:             "FEEPAYERADDR",
 		RelayNetwork:              "algorand:testnet",
 	}
 }
