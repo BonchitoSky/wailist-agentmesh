@@ -231,14 +231,15 @@ func (s *Service) SignUSDCPaymentGroup(ctx context.Context, encMnemonic, payTo s
 
 // SignUSDCPaymentSingle builds and signs one standard, self-fee-paying USDC
 // asset-transfer transaction — the plain x402 "exact" scheme on Algorand,
-// not SignUSDCPaymentGroup's gasless fee-pooling convention. The fee-pooled
-// stub only works because our own /x402/relay settles through GoPlausible's
-// facilitator directly (via FacilitatorClient.Verify/Settle), which knows to
-// cosign it; an arbitrary third-party x402 target's own payment middleware
-// has no way to cosign a stub it never agreed to, and (confirmed live
-// 2026-07-31 against a real mainnet target) just re-issues a generic 402
-// instead of settling. This is the one signer PayTargetFromWallet2 (the
-// direct-to-third-party outbound leg) must use instead.
+// for a target whose own challenge names no accepts[0].extra.feePayer.
+// A target that DOES name one is asking for SignUSDCPaymentGroup's
+// fee-pooled convention instead (confirmed live 2026-08-01: a real mainnet
+// target, arbsignal-production.up.railway.app, names the same shared
+// ecosystem fee payer our own inbound leg already uses, and its middleware
+// verifies/settles that group through a facilitator exactly like our own
+// /x402/relay does — nothing about a third party needs to "cosign" the
+// stub itself). PayTargetFromWallet2 (walletpay.go) is the one call site
+// that picks between this and SignUSDCPaymentGroup, based on that field.
 func (s *Service) SignUSDCPaymentSingle(ctx context.Context, encMnemonic, payTo string, assetID, amountMicros uint64) (paymentGroup []string, paymentIndex int, err error) {
 	mn, err := s.DecryptMnemonic(encMnemonic)
 	if err != nil {

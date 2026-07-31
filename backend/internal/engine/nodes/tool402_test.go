@@ -656,6 +656,66 @@ func TestX402V2RelayRejectsPayment(t *testing.T) {
 	}
 }
 
+// TestX402V2RelayReportsFailureWhenTargetRejectsAfterInboundSettles
+// reproduces a real bug found via live mainnet testing 2026-08-01: the
+// inbound leg (caller -> our Wallet 2) settles and gets billed, a real
+// signed outbound payment group goes out, but the actual target rejects it
+// (still 402s, e.g. a scheme/verification mismatch on its end) -- the relay
+// honestly forwards target's real non-2xx status and body, but this
+// function used to only branch on X-Inbound-Settled, never on that status,
+// so the node reported "success" with target's own un-paid challenge body
+// relayed back as if it were real data. Billing must stay unchanged (money
+// already moved); the node must now report failure.
+func TestX402V2RelayReportsFailureWhenTargetRejectsAfterInboundSettles(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer target.Close()
+
+	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" {
+			// Inbound leg settled (billing already happened on the real
+			// relay handler's side) but the outbound leg to target was
+			// itself rejected -- relay honestly forwards target's real
+			// status/body, same as x402relay.go's payTargetAndRespond.
+			w.Header().Set("X-Inbound-Settled", "true")
+			w.Header().Set("X-Settlement-TxId", "REALTXID123")
+			w.WriteHeader(http.StatusPaymentRequired)
+			w.Write([]byte(`{"service":"Target Service","message":"Pay $0.001 USDC to get data."}`))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"PLATFORMADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+	defer relay.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	rc := engine.NewRunContext("r1", nil)
+	aw := models.AgentWallet{AgentNodeID: "a1", EncryptedMnemonic: "enc-mnemonic"}
+	signer := &mockSigner{txID: "unused"}
+	usdcSigner := &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0}
+
+	var committed, released bool
+	ledger := nodes.PaymentLedger{
+		Reserve: func(context.Context, int64) error { return nil },
+		Commit:  func(context.Context, string, int64, string) { committed = true },
+		Release: func(context.Context, int64) { released = true },
+	}
+	relayCfg := nodes.X402RelayConfig{USDCSigner: usdcSigner, PlatformSpendEncMnemonic: "platform-enc-mnemonic", ExpectedAssetID: uint64(10458941), RelayBaseURL: relay.URL, Ledger: nodes.RunLedger(ledger)}
+	_, err := nodes.ExecuteTool402V2(context.Background(), node, rc, aw, signer, relayCfg)
+
+	if err == nil {
+		t.Fatal("want an error — target rejected the paid request, the node must not report success")
+	}
+	if !committed {
+		t.Fatal("want the inbound leg still committed/billed — money already moved regardless of what target did")
+	}
+	if released {
+		t.Fatal("want no release — once billed via X-Inbound-Settled, this is not a release path")
+	}
+}
+
 type panickingUSDCGroupSigner struct{}
 
 func (p *panickingUSDCGroupSigner) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {

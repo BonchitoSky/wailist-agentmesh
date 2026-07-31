@@ -274,6 +274,26 @@ type Tool402PaymentResult struct {
 // relayInboundChallenge in handlers/x402relay.go), so it's a real,
 // currently-used wire format, not a defensive guess.
 func ChallengeAcceptsFromHeader(header http.Header) []map[string]any {
+	challenge := ChallengeFromHeader(header)
+	if challenge == nil {
+		return nil
+	}
+	acceptsRaw, _ := challenge["accepts"].([]any)
+	accepts := make([]map[string]any, 0, len(acceptsRaw))
+	for _, a := range acceptsRaw {
+		if m, ok := a.(map[string]any); ok {
+			accepts = append(accepts, m)
+		}
+	}
+	return accepts
+}
+
+// ChallengeFromHeader decodes a full v2 challenge object (not just its
+// accepts[]) from a Payment-Required response header, when present -- some
+// targets need the whole object echoed back verbatim on the paid retry
+// (see TargetQuote.RawChallenge), not just the parsed fields
+// ChallengeAcceptsFromHeader extracts.
+func ChallengeFromHeader(header http.Header) map[string]any {
 	b64 := header.Get("Payment-Required")
 	if b64 == "" {
 		return nil
@@ -282,13 +302,11 @@ func ChallengeAcceptsFromHeader(header http.Header) []map[string]any {
 	if err != nil {
 		return nil
 	}
-	var challenge struct {
-		Accepts []map[string]any `json:"accepts"`
-	}
+	var challenge map[string]any
 	if json.Unmarshal(decoded, &challenge) != nil {
 		return nil
 	}
-	return challenge.Accepts
+	return challenge
 }
 
 // x402Quote is what a real v2 challenge's accepts[0] entry carries that
@@ -306,6 +324,11 @@ type x402Quote struct {
 	// constant; presence/absence of this exact field on the target's OWN
 	// quote is what selects the signing scheme (see PayTargetFromWallet2).
 	FeePayer string
+	// RawAccept and RawChallenge are the exact accepts[0] entry and the
+	// exact full challenge object the target returned, kept verbatim (not
+	// reconstructed) -- see TargetQuote's matching fields for why.
+	RawAccept    map[string]any
+	RawChallenge map[string]any
 }
 
 // probeTool402Endpoint fetches endpoint's 402 challenge (if any) and reports
@@ -352,12 +375,21 @@ func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []b
 	}
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
+	var rawChallenge map[string]any
+	json.Unmarshal(respBody, &rawChallenge)
 	var v2Challenge struct {
 		Accepts []map[string]any `json:"accepts"`
 	}
 	json.Unmarshal(respBody, &v2Challenge)
 	if len(v2Challenge.Accepts) == 0 {
+		// Body carried no accepts[] -- some real targets (Prism's live
+		// endpoint, confirmed 2026-07-31) put the full challenge in the
+		// Payment-Required header instead, so the raw object has to come
+		// from there too, not the (empty/minimal) body.
 		v2Challenge.Accepts = ChallengeAcceptsFromHeader(resp.Header)
+		if len(v2Challenge.Accepts) > 0 {
+			rawChallenge = ChallengeFromHeader(resp.Header)
+		}
 	}
 	if len(v2Challenge.Accepts) == 0 {
 		return false, false, nil, x402Quote{}, nil
@@ -365,6 +397,10 @@ func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []b
 	accept := v2Challenge.Accepts[0]
 	payTo, _ := accept["payTo"].(string)
 	asset, _ := accept["asset"].(string)
+	var feePayer string
+	if extra, ok := accept["extra"].(map[string]any); ok {
+		feePayer, _ = extra["feePayer"].(string)
+	}
 	// `amount` is the field name the CURRENT real-world dialect uses (Prism's
 	// live endpoint, the official @x402/core v2.20 SDK, confirmed live
 	// 2026-07-31) — `maxAmountRequired` is checked first only because it's
@@ -388,11 +424,7 @@ func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []b
 	if !ok || amount <= 0 {
 		return true, false, nil, x402Quote{}, fmt.Errorf("x402: invalid or missing amount/maxAmountRequired in v2 challenge (maxAmountRequired=%v amount=%v)", accept["maxAmountRequired"], accept["amount"])
 	}
-	var feePayer string
-	if extra, ok := accept["extra"].(map[string]any); ok {
-		feePayer, _ = extra["feePayer"].(string)
-	}
-	return true, false, nil, x402Quote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount, FeePayer: feePayer}, nil
+	return true, false, nil, x402Quote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount, FeePayer: feePayer, RawAccept: accept, RawChallenge: rawChallenge}, nil
 }
 
 // ParseMaxAmountRequiredAsMicros parses a real x402 v2 challenge's
@@ -450,6 +482,15 @@ type TargetQuote struct {
 	// for why its presence/absence (not a blanket default) selects which
 	// signing scheme PayTargetFromWallet2 uses.
 	FeePayer string
+	// RawAccept is the target's own accepts[0] entry, verbatim, and
+	// RawChallenge is its full challenge object, verbatim -- some targets
+	// (confirmed live 2026-08-01: canix402-api.compx.io) require their own
+	// challenge echoed back inside the paid retry rather than a fresh
+	// minimal payload, so PayTargetFromWallet2 needs the exact original
+	// objects, not a reconstruction from the parsed fields above (which
+	// would drop fields specific to that target's own schema).
+	RawAccept    map[string]any
+	RawChallenge map[string]any
 }
 
 // ProbeX402Quote is the exported form the run-level per-call executor
@@ -458,7 +499,14 @@ type TargetQuote struct {
 // ProbeX402Price.
 func ProbeX402Quote(ctx context.Context, endpoint, method string) (isV2 bool, quote TargetQuote, err error) {
 	isV2, _, _, q, err := probeTool402Endpoint(ctx, endpoint, method, nil)
-	return isV2, TargetQuote{PayTo: q.PayTo, Asset: q.Asset, MaxAmountRequired: strconv.FormatInt(q.MaxAmountRequired, 10), FeePayer: q.FeePayer}, err
+	return isV2, TargetQuote{
+		PayTo:             q.PayTo,
+		Asset:             q.Asset,
+		MaxAmountRequired: strconv.FormatInt(q.MaxAmountRequired, 10),
+		FeePayer:          q.FeePayer,
+		RawAccept:         q.RawAccept,
+		RawChallenge:      q.RawChallenge,
+	}, err
 }
 
 // ExecuteTool402V2 is the entry point runner.go calls for tool402 nodes. It
@@ -507,6 +555,8 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 				Asset:             quote.Asset,
 				MaxAmountRequired: strconv.FormatInt(quote.MaxAmountRequired, 10),
 				FeePayer:          quote.FeePayer,
+				RawAccept:         quote.RawAccept,
+				RawChallenge:      quote.RawChallenge,
 			}
 			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired, method, payBody)
 		}
@@ -742,6 +792,36 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 				m["explorerURL"] = explorerURLForAsset(expectedAssetID, txID)
 			}
 		}
+		// The OUTBOUND leg's own settlement id (Wallet 2 -> target) --
+		// separate from txId above, which is only ever the inbound leg
+		// (caller -> Wallet 2). Together they show the full real payment
+		// chain in a run's console log: caller -> Wallet 2 -> target. Not
+		// every target returns one (Settled/StatusCode already say whether
+		// the payment worked regardless), so this is additive/best-effort.
+		if outboundTxID := payResp.Header.Get("X-Outbound-Settlement-TxId"); outboundTxID != "" {
+			if m, ok := out.Response.(map[string]any); ok {
+				m["outboundTxId"] = outboundTxID
+				m["outboundExplorerURL"] = explorerURLForAsset(expectedAssetID, outboundTxID)
+			}
+		}
+		// Billing (above) and target delivery are separate concerns by
+		// design -- but once billed, a non-2xx from target must still
+		// surface as a failed node, or a run silently "succeeds" with the
+		// caller charged and target's own raw 402/error body relayed back
+		// as if it were real data (confirmed live 2026-08-01: a target that
+		// rejected the signed outbound payment still produced a "success"
+		// step with its un-paid challenge merged in as the response).
+		// Deliberately scoped to this branch only -- when the INBOUND leg
+		// itself is rejected (below, nothing billed), returning the relay's
+		// error body as a graceful non-error result is correct as-is.
+		if payResp.StatusCode < 200 || payResp.StatusCode >= 300 {
+			const errSnippetLimit = 512
+			snippet := finalBody
+			if len(snippet) > errSnippetLimit {
+				snippet = snippet[:errSnippetLimit]
+			}
+			return out, fmt.Errorf("x402 relay: target rejected the paid request (status %d): %s", payResp.StatusCode, snippet)
+		}
 	} else {
 		releaseReservation()
 	}
@@ -853,5 +933,35 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	if err := json.Unmarshal(result.ResponseBody, &response); err != nil {
 		response = string(result.ResponseBody)
 	}
+
+	// result.Settled (true only for a 2xx from target) is intentionally
+	// separate from billing above -- money already left Wallet 2 the
+	// instant it was signed, so Commit above is correct regardless. But
+	// the node must still report failure when target rejected the paid
+	// request, or a run silently "succeeds" while relaying target's own
+	// un-paid 402/error body back as if it were real data -- the exact
+	// bug this comment is fixing (confirmed live 2026-08-01, same failure
+	// mode as executeTool402V2Relay above).
+	if !result.Settled {
+		const errSnippetLimit = 512
+		snippet := result.ResponseBody
+		if len(snippet) > errSnippetLimit {
+			snippet = snippet[:errSnippetLimit]
+		}
+		return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost},
+			fmt.Errorf("x402 run-level: target rejected the paid request (status %d): %s", result.StatusCode, snippet)
+	}
+
+	// The outbound leg's own settlement id (Wallet 2 -> target), when the
+	// target returned one -- see the matching merge in
+	// executeTool402V2Relay above for why this is surfaced in the node's
+	// output rather than only the DB audit trail.
+	if result.OutboundTxID != "" {
+		if m, ok := response.(map[string]any); ok {
+			m["outboundTxId"] = result.OutboundTxID
+			m["outboundExplorerURL"] = explorerURLForAsset(cfg.ExpectedAssetID, result.OutboundTxID)
+		}
+	}
+
 	return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost}, nil
 }

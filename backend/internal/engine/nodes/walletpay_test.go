@@ -2,6 +2,7 @@ package nodes_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -12,17 +13,24 @@ import (
 )
 
 // fakeWallet2Signer is a minimal USDCGroupSigner double for
-// PayTargetFromWallet2 tests -- records every call it received and returns
-// a canned group/error.
+// PayTargetFromWallet2 tests -- records every call it received (which
+// method, and the feePayer arg for group calls) and returns a canned
+// group/error.
 type fakeWallet2Signer struct {
 	group []string
 	idx   int
 	err   error
 	calls int
+
+	groupCalls   int
+	singleCalls  int
+	lastFeePayer string
 }
 
-func (f *fakeWallet2Signer) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
+func (f *fakeWallet2Signer) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, feePayerAddr string) ([]string, int, error) {
 	f.calls++
+	f.groupCalls++
+	f.lastFeePayer = feePayerAddr
 	if f.err != nil {
 		return nil, 0, f.err
 	}
@@ -31,6 +39,7 @@ func (f *fakeWallet2Signer) SignUSDCPaymentGroup(_ context.Context, _, _ string,
 
 func (f *fakeWallet2Signer) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
 	f.calls++
+	f.singleCalls++
 	if f.err != nil {
 		return nil, 0, f.err
 	}
@@ -191,6 +200,130 @@ func TestPayTargetFromWallet2SuccessReturnsTargetResponse(t *testing.T) {
 	}
 	if signer.calls != 1 {
 		t.Fatalf("want exactly one sign call, got %d", signer.calls)
+	}
+}
+
+// TestPayTargetFromWallet2ExtractsOutboundTxIDFromPaymentResponseHeader
+// confirms a real target's own settlement id (Wallet 2 -> target) is
+// surfaced back -- confirmed live 2026-08-01: canix402-api.compx.io
+// returns {"success":true,...,"transaction":"<real txid>"} base64-encoded
+// under a Payment-Response header on a successful paid retry. This is what
+// lets a workflow's console log show both real payment legs, not just the
+// inbound one (caller -> Wallet 2).
+func TestPayTargetFromWallet2ExtractsOutboundTxIDFromPaymentResponseHeader(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload := `{"success":true,"payer":"WALLET2ADDR","transaction":"REALOUTBOUNDTXID123","network":"algorand:mainnet"}`
+		w.Header().Set("Payment-Response", base64.StdEncoding.EncodeToString([]byte(payload)))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":"paid response from target"}`))
+	}))
+	defer target.Close()
+
+	signer := &fakeWallet2Signer{group: []string{"g0", "g1"}, idx: 0}
+	cfg := baseWallet2Cfg(signer)
+
+	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "50000"}
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, "", nil, quote)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OutboundTxID != "REALOUTBOUNDTXID123" {
+		t.Fatalf("want OutboundTxID extracted from Payment-Response header, got %q", result.OutboundTxID)
+	}
+}
+
+// TestPayTargetFromWallet2OutboundTxIDEmptyWhenTargetReturnsNone confirms
+// a target that doesn't return a Payment-Response header (most don't) just
+// leaves OutboundTxID empty -- not an error, Settled/StatusCode already
+// say whether the payment worked.
+func TestPayTargetFromWallet2OutboundTxIDEmptyWhenTargetReturnsNone(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"data":"paid response from target"}`))
+	}))
+	defer target.Close()
+
+	signer := &fakeWallet2Signer{group: []string{"g0", "g1"}, idx: 0}
+	cfg := baseWallet2Cfg(signer)
+
+	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "50000"}
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, "", nil, quote)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OutboundTxID != "" {
+		t.Fatalf("want empty OutboundTxID when target returns no Payment-Response header, got %q", result.OutboundTxID)
+	}
+}
+
+// TestPayTargetFromWallet2UsesGroupSignerWhenTargetNamesFeePayer
+// reproduces a real bug found via live mainnet testing 2026-08-01: a real
+// target (arbsignal-production.up.railway.app) named a feePayer in its own
+// challenge's accepts[0].extra, but PayTargetFromWallet2 always signed a
+// plain single transaction regardless -- the target's middleware expected
+// the fee-pooled group convention (verified via a facilitator), didn't
+// recognize what it got, and kept re-402'ing a payment that had, in fact,
+// already left the wallet. quote.FeePayer must route to
+// SignUSDCPaymentGroup, with that exact address passed through.
+func TestPayTargetFromWallet2UsesGroupSignerWhenTargetNamesFeePayer(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"pair":"goBTC/USDC"}`))
+	}))
+	defer target.Close()
+
+	signer := &fakeWallet2Signer{group: []string{"g0", "g1"}, idx: 1}
+	cfg := baseWallet2Cfg(signer)
+
+	quote := nodes.TargetQuote{
+		PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "1000",
+		FeePayer: "ZMFK2OI7ZBD2U27ISERZC4S6LKM6WMFJPZQ4MYNJDZ2VNBNMBA67RA22AA",
+	}
+	result, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, "", nil, quote)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Settled {
+		t.Fatal("want Settled=true")
+	}
+	if signer.groupCalls != 1 {
+		t.Fatalf("want SignUSDCPaymentGroup called once, got %d", signer.groupCalls)
+	}
+	if signer.singleCalls != 0 {
+		t.Fatalf("want SignUSDCPaymentSingle never called, got %d", signer.singleCalls)
+	}
+	if signer.lastFeePayer != "ZMFK2OI7ZBD2U27ISERZC4S6LKM6WMFJPZQ4MYNJDZ2VNBNMBA67RA22AA" {
+		t.Fatalf("want the target's own feePayer passed through, got %q", signer.lastFeePayer)
+	}
+}
+
+// TestPayTargetFromWallet2UsesSingleSignerWhenTargetNamesNoFeePayer keeps
+// the pre-existing behavior for a target whose challenge omits
+// extra.feePayer entirely -- the plain, self-fee-paying "exact" scheme.
+func TestPayTargetFromWallet2UsesSingleSignerWhenTargetNamesNoFeePayer(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+
+	signer := &fakeWallet2Signer{group: []string{"g0"}, idx: 0}
+	cfg := baseWallet2Cfg(signer)
+
+	quote := nodes.TargetQuote{PayTo: "TARGETADDR", Asset: "10458941", MaxAmountRequired: "1000"}
+	_, err := nodes.PayTargetFromWallet2(context.Background(), cfg, target.URL, "", nil, quote)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signer.singleCalls != 1 {
+		t.Fatalf("want SignUSDCPaymentSingle called once, got %d", signer.singleCalls)
+	}
+	if signer.groupCalls != 0 {
+		t.Fatalf("want SignUSDCPaymentGroup never called, got %d", signer.groupCalls)
 	}
 }
 

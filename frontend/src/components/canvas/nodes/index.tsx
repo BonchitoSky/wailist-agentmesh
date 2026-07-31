@@ -883,6 +883,23 @@ function Tool402Node({
         onLeave={onPortLeave}
         onMouseDown={onStartWire}
       />
+      <SidePort
+        side="left"
+        color={magenta}
+        node={node}
+        port="in"
+        onHover={() => onPortHover("in")}
+        onLeave={onPortLeave}
+      />
+      <SidePort
+        side="right"
+        color={magenta}
+        node={node}
+        port="out"
+        onHover={() => onPortHover("out")}
+        onLeave={onPortLeave}
+        onMouseDown={onStartWire}
+      />
     </NodeShell>
   );
 }

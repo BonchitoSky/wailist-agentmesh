@@ -104,6 +104,11 @@ type targetPriceQuote struct {
 	// nodes.PayTargetFromWallet2): a target with no declared feePayer wants
 	// a plain self-funded single transaction instead.
 	FeePayer string
+	// RawAccept and RawChallenge are the exact accepts[0] entry and the
+	// exact full challenge object the target returned, verbatim -- see
+	// nodes.TargetQuote's matching fields.
+	RawAccept    map[string]any
+	RawChallenge map[string]any
 }
 
 // fetchTargetPriceQuote issues an unauthenticated GET to the caller-supplied
@@ -144,16 +149,21 @@ func fetchTargetPriceQuote(ctx context.Context, target, method string, body []by
 	}
 	defer resp.Body.Close()
 
+	var rawChallenge map[string]any
 	var parsed struct {
 		Accepts []map[string]any `json:"accepts"`
 	}
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	json.Unmarshal(respBody, &rawChallenge)
 	json.Unmarshal(respBody, &parsed)
 	if len(parsed.Accepts) == 0 {
 		// Body carried no accepts[] — some real targets (Prism's live
 		// endpoint confirmed 2026-07-31) put the full challenge in the
 		// Payment-Required header instead and leave the body empty/minimal.
 		parsed.Accepts = nodes.ChallengeAcceptsFromHeader(resp.Header)
+		if len(parsed.Accepts) > 0 {
+			rawChallenge = nodes.ChallengeFromHeader(resp.Header)
+		}
 	}
 	if len(parsed.Accepts) == 0 {
 		return targetPriceQuote{}, fmt.Errorf("target did not return a valid x402 challenge")
@@ -161,6 +171,10 @@ func fetchTargetPriceQuote(ctx context.Context, target, method string, body []by
 	accept := parsed.Accepts[0]
 	payTo, _ := accept["payTo"].(string)
 	asset, _ := accept["asset"].(string)
+	var feePayer string
+	if extra, ok := accept["extra"].(map[string]any); ok {
+		feePayer, _ = extra["feePayer"].(string)
+	}
 	// Accept both the usual JSON-string encoding and a JSON-number encoding
 	// of maxAmountRequired — some real targets encode this field as a
 	// number rather than a string, which a string-only type assertion would
@@ -181,11 +195,7 @@ func fetchTargetPriceQuote(ctx context.Context, target, method string, body []by
 	if ok {
 		amount = strconv.FormatInt(micros, 10)
 	}
-	var feePayer string
-	if extra, ok := accept["extra"].(map[string]any); ok {
-		feePayer, _ = extra["feePayer"].(string)
-	}
-	return targetPriceQuote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount, FeePayer: feePayer}, nil
+	return targetPriceQuote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount, FeePayer: feePayer, RawAccept: accept, RawChallenge: rawChallenge}, nil
 }
 
 // bazaarDiscoveryExtension describes the relay's pass-through shape (any
@@ -242,8 +252,8 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 			// in facilitator.go. Callers parsing our challenge
 			// (ChallengeAcceptsFromHeader etc.) already accept both names,
 			// so this is safe to change unilaterally.
-			"amount":   quote.MaxAmountRequired,
-			"resource": target,
+			"amount":            quote.MaxAmountRequired,
+			"resource":          target,
 			"description":       "AgentMesh x402 relay — settles the inbound leg and forwards payment to " + target,
 			"payTo":             d.PlatformWalletAddress,
 			"maxTimeoutSeconds": 300,
@@ -431,6 +441,7 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 	}
 	result, err := nodes.PayTargetFromWallet2(ctx, cfg, target, targetMethod, targetBody, nodes.TargetQuote{
 		PayTo: quote.PayTo, Asset: quote.Asset, MaxAmountRequired: quote.MaxAmountRequired, FeePayer: quote.FeePayer,
+		RawAccept: quote.RawAccept, RawChallenge: quote.RawChallenge,
 	})
 
 	// Signals to the orchestrator's own tool402 caller (tool402.go) that the
@@ -459,6 +470,15 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 		// condition, since that's the only point at which this id is
 		// meaningful to show.
 		w.Header().Set("X-Settlement-TxId", inboundTxID)
+	}
+	// The OUTBOUND leg's own settlement id (Wallet 2 -> target), when the
+	// target returned one -- separate from X-Settlement-TxId above, which
+	// is only ever the inbound leg. Both, together, are what let a
+	// workflow's console log show the full real payment chain: caller ->
+	// Wallet 2 (X-Settlement-TxId) and Wallet 2 -> target
+	// (X-Outbound-Settlement-TxId).
+	if result.OutboundTxID != "" {
+		w.Header().Set("X-Outbound-Settlement-TxId", result.OutboundTxID)
 	}
 
 	if err != nil {

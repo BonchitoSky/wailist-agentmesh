@@ -14,7 +14,10 @@ import {
 import { Workflow } from "@/lib/types";
 import { useAuth } from "@/hooks/useAuth";
 import { workflows as workflowsApi } from "@/lib/api";
-import { buildX402DemoWorkflow } from "@/lib/demoWorkflow";
+import {
+  buildX402DemoWorkflow,
+  buildCanix402DemoWorkflow,
+} from "@/lib/demoWorkflow";
 
 export function WorkflowsPage() {
   const router = useRouter();
@@ -26,6 +29,7 @@ export function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
+  const [creatingCanixDemo, setCreatingCanixDemo] = useState(false);
 
   useEffect(() => {
     workflowsApi
@@ -69,6 +73,19 @@ export function WorkflowsPage() {
       setCreatingDemo(false);
     }
   }, [creatingDemo, router]);
+
+  const handleLoadCanix402Workflow = useCallback(async () => {
+    if (creatingCanixDemo) return;
+    setCreatingCanixDemo(true);
+    try {
+      const wf = await workflowsApi.create("x402 — CANIX402 DeFi Opportunities");
+      const { nodes, edges } = buildCanix402DemoWorkflow();
+      await workflowsApi.update(wf.id, { name: wf.name, nodes, edges });
+      router.push(`/workflows/${wf.id}`);
+    } catch {
+      setCreatingCanixDemo(false);
+    }
+  }, [creatingCanixDemo, router]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -188,6 +205,14 @@ export function WorkflowsPage() {
                 title="Loads a no-agent workflow: a trigger paying Prism's real x402 endpoint on Algorand mainnet, settled on-chain."
               >
                 {creatingDemo ? "Loading…" : "Load demo workflow"}
+              </button>
+              <button
+                onClick={handleLoadCanix402Workflow}
+                disabled={creatingCanixDemo}
+                style={{ ...ghostBtn, opacity: creatingCanixDemo ? 0.6 : 1 }}
+                title="Loads a no-agent workflow: a trigger paying CANIX402's real x402 endpoint (Algorand DeFi opportunities) on mainnet, settled on-chain."
+              >
+                {creatingCanixDemo ? "Loading…" : "Load canix402 workflow"}
               </button>
               <button
                 onClick={handleNewWorkflow}
