@@ -141,7 +141,14 @@ func fetchTargetPriceQuote(ctx context.Context, target, method string, body []by
 		Accepts []map[string]any `json:"accepts"`
 	}
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err := json.Unmarshal(respBody, &parsed); err != nil || len(parsed.Accepts) == 0 {
+	json.Unmarshal(respBody, &parsed)
+	if len(parsed.Accepts) == 0 {
+		// Body carried no accepts[] — some real targets (Prism's live
+		// endpoint confirmed 2026-07-31) put the full challenge in the
+		// Payment-Required header instead and leave the body empty/minimal.
+		parsed.Accepts = nodes.ChallengeAcceptsFromHeader(resp.Header)
+	}
+	if len(parsed.Accepts) == 0 {
 		return targetPriceQuote{}, fmt.Errorf("target did not return a valid x402 challenge")
 	}
 	accept := parsed.Accepts[0]

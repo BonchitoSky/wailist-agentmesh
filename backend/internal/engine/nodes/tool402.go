@@ -257,6 +257,32 @@ type Tool402PaymentResult struct {
 	DebitKind        string
 }
 
+// ChallengeAcceptsFromHeader extracts a v2 challenge's accepts[] from a
+// Payment-Required response header, for targets that put the full
+// base64-encoded challenge there and leave the JSON body empty/minimal —
+// Prism's live endpoint does exactly this (confirmed 2026-07-31: body is
+// `{}`, the real accepts[] is only in this header). This is the same header
+// name and encoding this codebase's own relay emits (see
+// relayInboundChallenge in handlers/x402relay.go), so it's a real,
+// currently-used wire format, not a defensive guess.
+func ChallengeAcceptsFromHeader(header http.Header) []map[string]any {
+	b64 := header.Get("Payment-Required")
+	if b64 == "" {
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return nil
+	}
+	var challenge struct {
+		Accepts []map[string]any `json:"accepts"`
+	}
+	if json.Unmarshal(decoded, &challenge) != nil {
+		return nil
+	}
+	return challenge.Accepts
+}
+
 // x402Quote is what a real v2 challenge's accepts[0] entry carries that
 // callers in this package need — payTo/asset for actually paying it,
 // MaxAmountRequired (parsed to USD micros) for gating/estimating.
@@ -313,7 +339,11 @@ func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []b
 	var v2Challenge struct {
 		Accepts []map[string]any `json:"accepts"`
 	}
-	if json.Unmarshal(respBody, &v2Challenge) != nil || len(v2Challenge.Accepts) == 0 {
+	json.Unmarshal(respBody, &v2Challenge)
+	if len(v2Challenge.Accepts) == 0 {
+		v2Challenge.Accepts = ChallengeAcceptsFromHeader(resp.Header)
+	}
+	if len(v2Challenge.Accepts) == 0 {
 		return false, false, nil, x402Quote{}, nil
 	}
 	accept := v2Challenge.Accepts[0]
