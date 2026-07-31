@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -88,7 +89,8 @@ func (c *FacilitatorClient) post(ctx context.Context, path string, payload Payme
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 500 {
-		return fmt.Errorf("facilitator %s: server error %d", path, resp.StatusCode)
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("facilitator %s: server error %d: %s", path, resp.StatusCode, errBody)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }

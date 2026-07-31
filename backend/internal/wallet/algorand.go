@@ -200,25 +200,31 @@ func (s *Service) SignUSDCPaymentGroup(ctx context.Context, encMnemonic, payTo s
 	}
 	payTxn.Fee = 0 // fee-pooled: the stub below covers both txns' fees
 
-	feeStub, err := transaction.MakePaymentTxn(feePayerAddr, feePayerAddr, 0, nil, "", params)
+	feeStub, err := transaction.MakePaymentTxn(feePayerAddr, feePayerAddr, 0, []byte("x402-fee-payer"), "", params)
 	if err != nil {
 		return nil, 0, err
 	}
 	feeStub.Fee = types.MicroAlgos(params.MinFee * 2) // covers this txn + the fee-pooled payment txn
 
-	grouped, err := transaction.AssignGroupID([]types.Transaction{payTxn, feeStub}, "")
+	// Group order matches GoPlausible's documented convention: [0] is the
+	// unsigned fee-payer stub, [1] is the signed payment — not the reverse.
+	// The facilitator reads group[0] as the fee payer when computing the
+	// pooled fee; sending the signed (Fee-omitted, since it's 0) payment
+	// there instead made it read an absent field as undefined and crash
+	// (confirmed live: "Cannot convert undefined to a BigInt").
+	grouped, err := transaction.AssignGroupID([]types.Transaction{feeStub, payTxn}, "")
 	if err != nil {
 		return nil, 0, err
 	}
 
-	_, signedPay, err := crypto.SignTransaction(privKey, grouped[0])
+	unsignedStubBytes := msgpack.Encode(grouped[0])
+	_, signedPay, err := crypto.SignTransaction(privKey, grouped[1])
 	if err != nil {
 		return nil, 0, err
 	}
-	unsignedStubBytes := msgpack.Encode(grouped[1])
 
 	return []string{
-		base64.StdEncoding.EncodeToString(signedPay),
 		base64.StdEncoding.EncodeToString(unsignedStubBytes),
-	}, 0, nil
+		base64.StdEncoding.EncodeToString(signedPay),
+	}, 1, nil
 }
