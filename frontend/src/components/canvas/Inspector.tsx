@@ -945,7 +945,7 @@ function Tool402Inspector({
     }
   };
 
-  if (!node.custom) {
+  if (!node.custom && tpl) {
     return (
       <>
         <Section label="x402 endpoint">
