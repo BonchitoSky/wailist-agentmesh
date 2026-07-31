@@ -1,58 +1,77 @@
-import * as simpleIcons from "simple-icons";
+import {
+  siAnthropic,
+  siGooglegemini,
+  siMistralai,
+  siDiscord,
+  siGooglechat,
+  siNtfy,
+  siTelegram,
+  siGithub,
+  siGitlab,
+  siJira,
+  siLinear,
+  siSentry,
+  siNotion,
+  siAirtable,
+  siTrello,
+  siAsana,
+  siClickup,
+  siTodoist,
+  siHubspot,
+  siMailchimp,
+  siSupabase,
+  siWoocommerce,
+  siElevenlabs,
+  type SimpleIcon,
+} from "simple-icons";
 import type { ReactNode } from "react";
 
-// Maps a node template id to its simple-icons export name. The logo is drawn in
+// Maps a node template id to its simple-icons export. The logo is drawn in
 // currentColor (monochrome) so it inherits the exact colour the placeholder
 // letter used — the node's icon box, size, and styling are untouched; only the
 // glyph shape changes from a letter to the service's real mark.
 //
-// Lookup is dynamic (simpleIcons[name]) so any brand simple-icons doesn't ship
-// resolves to `undefined` and cleanly falls back to the original letter — no
-// build break, no missing-icon gaps.
-const BRAND_ICON_NAMES: Record<string, string> = {
+// Imports are static (not a dynamic simpleIcons[name] lookup) so the bundler
+// can tree-shake everything but these ~23 icons instead of shipping all
+// ~3450 in simple-icons. OpenAI and Groq are deliberately absent: simple-icons
+// no longer ships either mark (removed at the brands' request, like Slack and
+// Microsoft Teams below), and unlike Slack/Teams no custom mark has been drawn
+// for them yet, so those two templates fall back to the placeholder letter.
+const BRAND_ICONS: Record<string, SimpleIcon> = {
   // LLM providers
-  openai: "siOpenai",
-  anthropic: "siAnthropic",
-  gemini: "siGooglegemini",
-  mistral: "siMistralai",
-  groq: "siGroq",
+  anthropic: siAnthropic,
+  gemini: siGooglegemini,
+  mistral: siMistralai,
   // Messaging
-  slack: "siSlack",
-  discord: "siDiscord",
-  teams: "siMicrosoftteams",
-  google_chat: "siGooglechat",
-  ntfy: "siNtfy",
-  telegram: "siTelegram",
+  discord: siDiscord,
+  google_chat: siGooglechat,
+  ntfy: siNtfy,
+  telegram: siTelegram,
   // Dev tools
-  github: "siGithub",
-  gitlab: "siGitlab",
-  jira: "siJira",
-  linear: "siLinear",
-  sentry: "siSentry",
+  github: siGithub,
+  gitlab: siGitlab,
+  jira: siJira,
+  linear: siLinear,
+  sentry: siSentry,
   // Productivity
-  notion: "siNotion",
-  airtable: "siAirtable",
-  trello: "siTrello",
-  asana: "siAsana",
-  clickup: "siClickup",
-  todoist: "siTodoist",
+  notion: siNotion,
+  airtable: siAirtable,
+  trello: siTrello,
+  asana: siAsana,
+  clickup: siClickup,
+  todoist: siTodoist,
   // Data / commerce
-  hubspot: "siHubspot",
-  mailchimp: "siMailchimp",
-  supabase: "siSupabase",
-  woocommerce: "siWoocommerce",
+  hubspot: siHubspot,
+  mailchimp: siMailchimp,
+  supabase: siSupabase,
+  woocommerce: siWoocommerce,
   // Media
-  elevenlabs: "siElevenlabs",
+  elevenlabs: siElevenlabs,
 };
-
-type SimpleIcon = { path: string; title: string };
 
 function iconFor(template?: string): SimpleIcon | undefined {
   if (!template) return undefined;
-  const name = BRAND_ICON_NAMES[template];
-  if (!name) return undefined;
-  const icon = (simpleIcons as Record<string, SimpleIcon | undefined>)[name];
-  return icon?.path ? icon : undefined;
+  return BRAND_ICONS[template];
 }
 
 // Custom marks for brands simple-icons no longer ships (Slack and Microsoft

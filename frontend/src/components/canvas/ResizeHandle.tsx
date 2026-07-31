@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // A thin vertical drag bar that sits between the canvas and a side panel.
 // Uses Pointer Events with pointer capture so the drag keeps tracking even when
@@ -31,6 +31,19 @@ export function ResizeHandle({
   const drag = useRef<{ startX: number; startVal: number } | null>(null);
   const [active, setActive] = useState(false);
   const [hover, setHover] = useState(false);
+
+  // If this handle unmounts mid-drag (e.g. a route change fires while the
+  // pointer is still down), pointerup/pointercancel never reach `end()`, so
+  // without this the body is left stuck with cursor: col-resize and no text
+  // selection for the rest of the session.
+  useEffect(
+    () => () => {
+      if (!drag.current) return;
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    },
+    [],
+  );
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
