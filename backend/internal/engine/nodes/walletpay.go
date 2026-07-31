@@ -65,8 +65,11 @@ type Wallet2PayResult struct {
 // GET-compatible (e.g. a POST-only resource 404s a bare GET before payment
 // state is even considered), so this can't stay hardcoded to GET.
 func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, method string, body []byte, quote TargetQuote) (Wallet2PayResult, error) {
-	assetID, _ := strconv.ParseUint(quote.Asset, 10, 64)
-	amount, _ := strconv.ParseUint(quote.MaxAmountRequired, 10, 64)
+	assetID, assetErr := strconv.ParseUint(quote.Asset, 10, 64)
+	amount, amountErr := strconv.ParseUint(quote.MaxAmountRequired, 10, 64)
+	if assetErr != nil || amountErr != nil {
+		return Wallet2PayResult{}, &Wallet2PayError{StatusCode: http.StatusBadGateway, Msg: "target quote had an unparseable asset or amount"}
+	}
 
 	if assetID != cfg.USDCAssetID {
 		return Wallet2PayResult{}, &Wallet2PayError{StatusCode: http.StatusBadGateway, Msg: "target quoted an unexpected asset id"}
@@ -91,7 +94,15 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 	if method != http.MethodGet && len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
 	}
-	payReq, _ := http.NewRequestWithContext(ctx, method, target, bodyReader)
+	payReq, err := http.NewRequestWithContext(ctx, method, target, bodyReader)
+	if err != nil {
+		// Signed==true: SignUSDCPaymentGroup above already succeeded, so a
+		// real signed group exists even though the paid request to target
+		// was never sent -- same "money already committed" accounting as
+		// the transport-failure case below, just failing before the
+		// request even goes out instead of after.
+		return Wallet2PayResult{Signed: true}, &Wallet2PayError{StatusCode: http.StatusBadGateway, Msg: "failed to build paid request to target: " + err.Error()}
+	}
 	if bodyReader != nil {
 		payReq.Header.Set("Content-Type", "application/json")
 	}
