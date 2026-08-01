@@ -213,6 +213,16 @@ func (d *Deps) relaySelfSettle(w http.ResponseWriter, r *http.Request, xPaymentH
 		Resource:          d.FrontendURL,
 		Description:       relaySelfDescription,
 		MimeType:          "application/json",
+		// Was omitted entirely here, so the struct actually POSTed to
+		// /verify and /settle carried maxTimeoutSeconds: 0 (Go's zero value,
+		// no omitempty on the field) while the public challenge above
+		// advertised 300. The real v2 requirements schema types this as
+		// z.number().positive() -- zero is a hard validation failure, not a
+		// missing-value default -- so every settlement from this path was
+		// schema-invalid to any consumer that parses it, even though the AVM
+		// settle mechanism itself never reads the field and happily moved
+		// real money regardless. 300 mirrors the challenge exactly.
+		MaxTimeoutSeconds: 300,
 		Extra: map[string]any{
 			"asset":    strconv.FormatUint(d.USDCAssetID, 10),
 			"feePayer": d.RelayFeePayer,
@@ -231,6 +241,18 @@ func (d *Deps) relaySelfSettle(w http.ResponseWriter, r *http.Request, xPaymentH
 	// back onto its own payload.
 	payload.Resource = resourceInfo(d.FrontendURL, relaySelfDescription)
 	payload.Extensions = bazaarDiscoveryExtension("")
+	// Required field of the v2 payload schema that this codebase has never
+	// sent -- see PaymentPayload.Accepted's doc comment. Set from reqs, so
+	// the echo is guaranteed to match what we're actually charging rather
+	// than being assembled a second time and drifting.
+	payload.Accepted = reqs.AcceptedV2()
+	// x402Version comes off the caller's own header and is only ever read,
+	// never set, here. The facilitator's discovery extraction switches hard
+	// on it (=== 2 / === 1 / else return null), so a caller that omitted it
+	// (decoding to 0) silently opted this settlement out of cataloging
+	// entirely. We are the resource server and this route is v2 by
+	// construction, so assert it rather than inherit it.
+	payload.X402Version = 2
 
 	verifyResult, err := d.FacilitatorClient.Verify(ctx, payload, reqs)
 	if err != nil {
@@ -659,6 +681,11 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		Resource:    d.FrontendURL,
 		Description: "AgentMesh — give your AI agents a wallet, let them pay their own way",
 		MimeType:    "application/json",
+		// See the matching comment in relaySelfSettle: omitted here too, so
+		// this path also POSTed a schema-invalid maxTimeoutSeconds: 0 while
+		// advertising 300 in the challenge relayInboundChallenge showed the
+		// same caller moments earlier.
+		MaxTimeoutSeconds: 300,
 		// Without extra.feePayer the facilitator can't locate the fee-pooled
 		// stub txn in the payment group and throws server-side (confirmed
 		// live 2026-07-31: "Cannot convert undefined to a BigInt") — see the
@@ -686,6 +713,10 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 	// reverted), same relayTargetDescription for the per-request specifics.
 	payload.Resource = resourceInfo(d.FrontendURL, relayTargetDescription(target))
 	payload.Extensions = bazaarDiscoveryExtension(target)
+	// See relaySelfSettle for both of these -- same reasoning, same required
+	// v2 fields, and this is the higher-volume of the two settle paths.
+	payload.Accepted = reqs.AcceptedV2()
+	payload.X402Version = 2
 
 	verifyResult, err := d.FacilitatorClient.Verify(ctx, payload, reqs)
 	if err != nil {

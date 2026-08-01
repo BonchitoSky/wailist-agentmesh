@@ -122,6 +122,12 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 		// settlement path did before its own matching fix today.
 		Resource:   map[string]any{"url": cfg.FrontendURL, "description": description, "mimeType": "application/json", "serviceName": "AgentMesh", "tags": []string{"x402-global-challenge"}},
 		Extensions: reqs.Extensions,
+		// Required field of the v2 payload schema -- see
+		// x402.PaymentPayload.Accepted's doc comment. This path already set
+		// a positive maxTimeoutSeconds on reqs (unlike x402relay.go's two
+		// settle paths, which sent zero until this fix), so the projection
+		// below is schema-valid as-is.
+		Accepted: reqs.AcceptedV2(),
 	}
 
 	verifyResult, err := cfg.Facilitator.Verify(ctx, payload, reqs)

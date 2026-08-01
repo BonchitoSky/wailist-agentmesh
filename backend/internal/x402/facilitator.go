@@ -52,6 +52,58 @@ type PaymentPayload struct {
 	// internal engine self-call) remembering to echo it back.
 	Resource   map[string]any `json:"resource,omitempty"`
 	Extensions map[string]any `json:"extensions,omitempty"`
+	// Accepted echoes back the single PaymentRequirements entry this payment
+	// was created against. It is a REQUIRED field of the real v2 payload
+	// schema -- @x402-avm/core's PaymentPayloadV2Schema is
+	// z.object({x402Version, resource: ResourceInfoSchema.optional(),
+	// accepted: PaymentRequirementsV2Schema, payload, extensions}), with
+	// `accepted` carrying no .optional(). The real client's own
+	// createPaymentPayload sets it verbatim (`accepted: requirements`).
+	//
+	// The AVM scheme mechanism never reads it -- it works off
+	// paymentRequirements and payload.paymentGroup -- which is exactly why
+	// every real settlement this codebase has performed succeeded and moved
+	// real money while omitting it. Anything that runs the payload through
+	// the published schema first (parsePaymentPayload/isPaymentPayloadV2),
+	// however, sees a hard validation failure on a field the settle path
+	// never needed, and the Bazaar catalog is the one consumer known to sit
+	// behind such a gate.
+	Accepted *AcceptedV2 `json:"accepted,omitempty"`
+}
+
+// AcceptedV2 is exactly PaymentRequirementsV2Schema's field set -- scheme,
+// network, amount, asset, payTo, maxTimeoutSeconds, extra -- and nothing
+// else. Deliberately a separate, narrower type rather than reusing
+// PaymentRequirements: that struct still carries the v1-dialect resource/
+// description/mimeType/outputSchema fields, which the v2 requirements schema
+// does not declare and which a plain zod object silently strips. Sending the
+// clean subset means what the facilitator parses is what we meant to send.
+type AcceptedV2 struct {
+	Scheme  string `json:"scheme"`
+	Network string `json:"network"`
+	Amount  string `json:"amount"`
+	Asset   string `json:"asset"`
+	PayTo   string `json:"payTo"`
+	// Must be strictly positive: the schema types this as
+	// z.number().positive(), so a zero here is a validation failure, not a
+	// "use the default" signal.
+	MaxTimeoutSeconds int            `json:"maxTimeoutSeconds"`
+	Extra             map[string]any `json:"extra,omitempty"`
+}
+
+// AcceptedV2 projects these requirements onto the v2 accepted-requirements
+// shape, for assignment to PaymentPayload.Accepted at every verify/settle
+// call site.
+func (r PaymentRequirements) AcceptedV2() *AcceptedV2 {
+	return &AcceptedV2{
+		Scheme:            r.Scheme,
+		Network:           r.Network,
+		Amount:            r.MaxAmountRequired,
+		Asset:             r.Asset,
+		PayTo:             r.PayTo,
+		MaxTimeoutSeconds: r.MaxTimeoutSeconds,
+		Extra:             r.Extra,
+	}
 }
 
 type PaymentRequirements struct {

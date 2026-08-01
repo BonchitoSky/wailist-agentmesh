@@ -368,6 +368,84 @@ func TestX402RelaySelfSettleSetsResourceOnPayloadRegardlessOfCaller(t *testing.T
 	}
 }
 
+// TestX402RelaySelfSettleSendsSchemaValidV2Payload pins the two fields that
+// made every settlement this codebase ever performed invalid against the real
+// published v2 schemas, while leaving the settlement itself working (the AVM
+// scheme mechanism reads neither field, so real money moved every time):
+//
+//   - paymentPayload.accepted -- a REQUIRED field of @x402-avm/core's
+//     PaymentPayloadV2Schema, never sent at all before this fix.
+//   - paymentRequirements.maxTimeoutSeconds -- typed z.number().positive(),
+//     but omitted from this handler's requirements literal, so Go's zero
+//     value went out on the wire while the public challenge advertised 300.
+//
+// Both are exactly the kind of defect a consumer that parses the payload
+// (the Bazaar discovery catalog being the known one) rejects silently.
+func TestX402RelaySelfSettleSendsSchemaValidV2Payload(t *testing.T) {
+	inboundTxID := fmt.Sprintf("SELF-SCHEMA-TX-%d", time.Now().UnixNano())
+	var captured struct {
+		PaymentPayload      map[string]any `json:"paymentPayload"`
+		PaymentRequirements map[string]any `json:"paymentRequirements"`
+	}
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/verify" {
+			json.NewDecoder(r.Body).Decode(&captured)
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
+	}))
+	defer facilitator.Close()
+
+	store := newTestStoreForHandlers(t)
+	d := &handlers.Deps{
+		PlatformWalletAddress: "PLATFORMADDR",
+		USDCAssetID:           10458941,
+		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+		RelayFeePayer:         "FEEPAYERADDR",
+		FrontendURL:           "https://www.agent-mesh.app",
+		FacilitatorClient:     x402.NewFacilitatorClient(facilitator.URL),
+		Store:                 store,
+	}
+
+	// Same minimal caller payload as the sibling test above: no accepted, no
+	// resource, no extensions. The resource server must supply all of them.
+	minimalPayload := `{"x402Version":2,"scheme":"exact","network":"algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=","payload":{"paymentGroup":["AAAA"],"paymentIndex":0}}`
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
+	req.Header.Set("X-Payment", minimalPayload)
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	accepted, _ := captured.PaymentPayload["accepted"].(map[string]any)
+	if accepted == nil {
+		t.Fatalf("want payload.accepted (required by PaymentPayloadV2Schema), got %v", captured.PaymentPayload["accepted"])
+	}
+	for _, field := range []string{"scheme", "network", "amount", "asset", "payTo"} {
+		if s, _ := accepted[field].(string); s == "" {
+			t.Fatalf("want payload.accepted.%s to be a non-empty string, got %v", field, accepted[field])
+		}
+	}
+	// z.number().positive() -- zero is a validation failure, not a default.
+	if secs, _ := accepted["maxTimeoutSeconds"].(float64); secs <= 0 {
+		t.Fatalf("want payload.accepted.maxTimeoutSeconds > 0, got %v", accepted["maxTimeoutSeconds"])
+	}
+	if secs, _ := captured.PaymentRequirements["maxTimeoutSeconds"].(float64); secs <= 0 {
+		t.Fatalf("want paymentRequirements.maxTimeoutSeconds > 0, got %v", captured.PaymentRequirements["maxTimeoutSeconds"])
+	}
+	// The v2 requirements schema has no resource/description/mimeType of its
+	// own -- those live on the payload's ResourceInfo. accepted must not
+	// smuggle the v1 fields back in, or it stops being the shape it claims.
+	for _, v1Only := range []string{"resource", "description", "mimeType", "extensions", "maxAmountRequired"} {
+		if _, present := accepted[v1Only]; present {
+			t.Fatalf("want payload.accepted to carry only PaymentRequirementsV2 fields, found v1-only %q", v1Only)
+		}
+	}
+}
+
 // TestX402RelaySelfSettleRecordsRealSettlement confirms a real payment
 // against the bare-route fixed listing actually settles through the
 // facilitator (same Verify/Settle calls every other settlement uses) and
