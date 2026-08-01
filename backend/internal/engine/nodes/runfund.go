@@ -8,6 +8,12 @@ import (
 	"github.com/agentmesh/backend/internal/x402"
 )
 
+// runFundingPublicPath is this route as reached through our own branded
+// domain's /api proxy (frontend/next.config.ts rewrites /api/:path* to the
+// backend). Used for both the declared resource URL and the bazaar
+// routeTemplate, which must agree -- see x402relay.go's relayPublicPath.
+const runFundingPublicPath = "/api/x402/relay/run-funding"
+
 // RunPreFundConfig carries what's needed to settle a single lump-sum inbound
 // x402 payment (Wallet 1 -> Wallet 2) before an agent node's tool-calling
 // loop starts. Distinct from Wallet2PayConfig (Task 3), which drives the
@@ -44,7 +50,7 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 	}
 
 	description := "AgentMesh workflow run funding — pre-settled pool for this run's downstream x402 tool calls"
-	resourceURL := cfg.FrontendURL + "/api/x402/relay/run-funding"
+	resourceURL := cfg.FrontendURL + runFundingPublicPath
 	reqs := x402.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           cfg.RelayNetwork,
@@ -73,10 +79,10 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 		// verify/settle both succeeded and real money moved every time.
 		Extensions: map[string]any{
 			"bazaar": map[string]any{
-				// See x402relay.go's bazaarDiscoveryExtension doc comment on
-				// routeTemplate -- same reasoning, this route's path never
-				// varies either.
-				"routeTemplate": "/x402/relay/run-funding",
+				// Public /api proxy path, matching resourceURL above --
+				// origin+routeTemplate has to resolve to a real URL, see
+				// x402relay.go's routeTemplate comment.
+				"routeTemplate": runFundingPublicPath,
 				"info": map[string]any{
 					"input": map[string]any{"type": "http", "method": "GET"},
 				},

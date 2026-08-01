@@ -538,7 +538,17 @@ func bazaarDiscoveryExtension(target string) map[string]any {
 			// facilitator has no reason to merge them and nothing changes
 			// today; this only starts mattering if a future route here ever
 			// grows a path param instead of a query param.
-			"routeTemplate": "/x402/relay",
+			// MUST stay the public path (relayPublicPath), not this backend's
+			// own internal route. routeTemplate exists so the facilitator can
+			// canonicalize the resource as origin+routeTemplate instead of
+			// origin+request-pathname -- so a stale value here doesn't just
+			// mislabel, it names a URL that does not exist. Hardcoding
+			// "/x402/relay" while resource.url moved to the /api proxy
+			// produced exactly that: origin+routeTemplate resolved to
+			// https://www.agent-mesh.app/x402/relay, a confirmed 404, since
+			// Vercel only rewrites /api/*. Derived from the same constant as
+			// the URL itself so the two cannot drift again.
+			"routeTemplate": relayPublicPath,
 			"info": map[string]any{
 				"input":  input,
 				"output": map[string]any{"type": "json", "example": outputExample},
