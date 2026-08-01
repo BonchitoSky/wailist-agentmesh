@@ -33,6 +33,11 @@ type X402Config struct {
 	RelayNetwork              string
 	RelayFeePayer             string
 	MaxRelayOutboundUSDMicros int64
+	// FrontendURL is our own branded origin, used (with the /api proxy
+	// path) as the run-funding settlement's declared resource -- see
+	// nodes.RunPreFundConfig.FrontendURL. Distinct from Runner.relayBaseURL,
+	// which is the bare backend origin the engine actually dials.
+	FrontendURL string
 }
 
 type Runner struct {
@@ -329,7 +334,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		RelayNetwork:             r.x402.RelayNetwork,
 		RelayFeePayer:            r.x402.RelayFeePayer,
 		ExpectedAssetID:          r.x402.USDCAssetID,
-		BaseURL:                  r.relayBaseURL,
+		FrontendURL:              r.x402.FrontendURL,
 	}
 	txID, err := nodes.FundRunReserve(ctx, fundCfg, run.ID, estimate)
 	if err != nil {

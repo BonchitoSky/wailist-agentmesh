@@ -139,6 +139,30 @@ func incomingPaymentJSON(r *http.Request) (payloadJSON string, ok bool, err erro
 // $0.01) -- this exists purely to be a genuinely payable, catalogable
 // resource, not free metadata.
 const relaySelfServiceUSDMicros = "10000" // $0.01
+
+// relayPublicPath is this route as reached from our own branded domain,
+// via the /api/:path* rewrite already configured in frontend/next.config.ts
+// (it proxies to BACKEND_URL, so FRONTEND_URL + this path serves the exact
+// same real 402 this handler produces -- verified live, HTTP 402 with the
+// full challenge body). Appended to d.FrontendURL, never d.BaseURL.
+//
+// This is the identity every resource.url in this file declares, and it is
+// the only form that satisfies all four constraints at once, where both
+// earlier attempts each broke one:
+//
+//   - Real path, not a bare root. Of 748 entries in /discovery/resources,
+//     ZERO have a root path; FRONTEND_URL alone normalized to
+//     "https://www.agent-mesh.app/" and could never have been cataloged.
+//   - Genuinely serves a 402 at that exact URL, so the declaration is true
+//     rather than a pointer at unrelated marketing HTML.
+//   - Resolves the leaderboard's label/logo, which the facilitator crawls
+//     from the resource URL's host. BASE_URL (the bare Railway host) is
+//     real and pathful but serves JSON, so it strips the branding our
+//     merchant row currently shows.
+//   - Keeps one root domain per payTo, which the challenge rules call out
+//     as IMPORTANT three separate times. BASE_URL made railway.app a second
+//     root domain under the same merchant.
+const relayPublicPath = "/api/x402/relay"
 const relaySelfDescription = "AgentMesh x402 relay — pays real x402 endpoints on your behalf. Append ?target=<url> to route a specific payment through this relay."
 
 // relaySelfChallenge issues the fixed, always-identical 402 challenge for a
@@ -146,30 +170,12 @@ const relaySelfDescription = "AgentMesh x402 relay — pays real x402 endpoints 
 // why this exists: a Bazaar crawler visiting the bare route previously got
 // a 400, never a real 402 to catalog.
 func (d *Deps) relaySelfChallenge(w http.ResponseWriter, r *http.Request) {
-	// d.BaseURL + the real route path, NOT d.FrontendURL: every actually-
-	// cataloged mainnet resource pulled from the real facilitator (Amarok,
-	// Syra) uses its own real API endpoint path as resource.url, never a
-	// separate marketing domain's bare root -- confirmed live 2026-08-01
-	// after the mimeType/routeTemplate fixes still left us completely absent
-	// from /discovery/resources despite a schema-perfect declaration and a
-	// real settlement landing. FrontendURL bought the leaderboard's cosmetic
-	// label/logo (a real crawlable page resolves those) at the cost of
-	// cataloging never firing at all; matching the real working examples
-	// matters more than the cosmetic hit.
-	//
-	// Reapplied 2026-08-02 on hard evidence rather than inference, after
-	// being reverted once on the (correct at the time) grounds that it alone
-	// changed nothing: of all 748 entries in /discovery/resources, ZERO have
-	// a bare root path -- every single one is origin+real-path. The catalog
-	// also happily lists http:// and localhost: resources, so the
-	// "crawlable public page" property FrontendURL was chosen for is
-	// demonstrably not what the catalog gates on; that property only ever
-	// mattered to the separate merchant leaderboard, which we already appear
-	// on and which keys off payTo, not resource.url. The first attempt was
-	// confounded: it shipped while every payload was still schema-invalid
-	// (missing accepted, maxTimeoutSeconds: 0), so a correct URL had no
-	// chance to matter.
-	selfResourceURL := d.BaseURL + "/x402/relay"
+	// See relayPublicPath. Two earlier attempts at this identity each broke
+	// one constraint: FRONTEND_URL alone was a bare root path (0 of 748
+	// cataloged resources have one), and BASE_URL + "/x402/relay" was a real
+	// path but on a second root domain that serves JSON, stripping the
+	// leaderboard branding our merchant row currently resolves.
+	selfResourceURL := d.FrontendURL + relayPublicPath
 	challenge := map[string]any{
 		"x402Version": 2,
 		// Top-level, spec-shaped ResourceInfo -- see resourceInfo's doc
@@ -228,7 +234,7 @@ func (d *Deps) relaySelfSettle(w http.ResponseWriter, r *http.Request, xPaymentH
 		return
 	}
 
-	selfResourceURL := d.BaseURL + "/x402/relay"
+	selfResourceURL := d.FrontendURL + relayPublicPath
 	reqs := x402.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           d.RelayNetwork,
@@ -583,20 +589,17 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 	}
 
 	description := relayTargetDescription(target)
-	// d.BaseURL + the real route path, NOT d.FrontendURL and NOT target: see
-	// relaySelfChallenge's doc comment -- every actually-cataloged mainnet
-	// resource (Amarok, Syra) uses its own real API path as resource.url,
-	// never a separate marketing domain. Using target here was tried
-	// earlier and re-branded our own leaderboard row as whichever downstream
-	// target was paid through us most recently (confirmed live -- one
-	// CANIX402 settlement relabeled us as "CANIX402", complete with their
-	// logo); using FrontendURL kept branding stable but never once
-	// cataloged. This keeps branding stable AND uses a real path --
+	// Our own branded proxy path, NOT target: see relayPublicPath. Using
+	// target here was tried earlier and re-branded our own leaderboard row
+	// as whichever downstream target was paid through us most recently
+	// (confirmed live -- one CANIX402 settlement relabeled us as "CANIX402",
+	// complete with their logo). This keeps branding stable AND uses a real
+	// path that genuinely answers 402 --
 	// bazaarDiscoveryExtension(target)'s queryParams + routeTemplate already
 	// model every ?target= value as one parameterized resource, not N
 	// per-target ones, so collapsing them under this one URL costs no
 	// precision.
-	targetResourceURL := d.BaseURL + "/x402/relay"
+	targetResourceURL := d.FrontendURL + relayPublicPath
 	challenge := map[string]any{
 		"x402Version": 2,
 		// Top-level, spec-shaped ResourceInfo -- see resourceInfo's doc
@@ -692,7 +695,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
-	targetResourceURL := d.BaseURL + "/x402/relay"
+	targetResourceURL := d.FrontendURL + relayPublicPath
 	reqs := x402.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           d.RelayNetwork,

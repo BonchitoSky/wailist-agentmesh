@@ -99,7 +99,7 @@ func TestX402RelayWithNoTargetIssuesFixedSelfChallenge(t *testing.T) {
 		USDCAssetID:           10458941,
 		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
 		RelayFeePayer:         "FEEPAYERADDR",
-		BaseURL:               "https://api.example.test",
+		FrontendURL:           "https://api.example.test",
 	}
 	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
 	w := httptest.NewRecorder()
@@ -122,7 +122,7 @@ func TestX402RelayWithNoTargetIssuesFixedSelfChallenge(t *testing.T) {
 	if body.Accepts[0]["amount"] != "10000" {
 		t.Fatalf("want the fixed $0.01 self-listing price, got %v", body.Accepts[0]["amount"])
 	}
-	if body.Accepts[0]["resource"] != "https://api.example.test/x402/relay" {
+	if body.Accepts[0]["resource"] != "https://api.example.test/api/x402/relay" {
 		t.Fatalf("want resource=BaseURL+real path (matches every actually-cataloged mainnet resource's own-domain convention), got %v", body.Accepts[0]["resource"])
 	}
 	extra, _ := body.Accepts[0]["extra"].(map[string]any)
@@ -153,7 +153,7 @@ func TestX402RelayChallengeResourceIsTopLevelSpecShape(t *testing.T) {
 		USDCAssetID:           10458941,
 		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
 		RelayFeePayer:         "FEEPAYERADDR",
-		BaseURL:               "https://api.example.test",
+		FrontendURL:           "https://api.example.test",
 	}
 	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
 	w := httptest.NewRecorder()
@@ -169,7 +169,7 @@ func TestX402RelayChallengeResourceIsTopLevelSpecShape(t *testing.T) {
 	if body.Resource == nil {
 		t.Fatal("want a top-level `resource` object on the challenge body (ResourceInfo shape), got none")
 	}
-	if body.Resource["url"] != "https://api.example.test/x402/relay" {
+	if body.Resource["url"] != "https://api.example.test/api/x402/relay" {
 		t.Fatalf("want resource.url=BaseURL+real path, got %v", body.Resource["url"])
 	}
 	if body.Resource["description"] == nil || body.Resource["description"] == "" {
@@ -338,7 +338,7 @@ func TestX402RelaySelfSettleSetsResourceOnPayloadRegardlessOfCaller(t *testing.T
 		USDCAssetID:           10458941,
 		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
 		RelayFeePayer:         "FEEPAYERADDR",
-		BaseURL:               "https://api.example.test",
+		FrontendURL:           "https://api.example.test",
 		FacilitatorClient:     x402.NewFacilitatorClient(facilitator.URL),
 		Store:                 store,
 	}
@@ -359,7 +359,7 @@ func TestX402RelaySelfSettleSetsResourceOnPayloadRegardlessOfCaller(t *testing.T
 		t.Fatal("facilitator never received a paymentPayload")
 	}
 	resource, _ := capturedPayload["resource"].(map[string]any)
-	if resource == nil || resource["url"] != "https://api.example.test/x402/relay" {
+	if resource == nil || resource["url"] != "https://api.example.test/api/x402/relay" {
 		t.Fatalf("want the facilitator to receive payload.resource despite the caller never sending one, got %v", capturedPayload["resource"])
 	}
 	extensions, _ := capturedPayload["extensions"].(map[string]any)
@@ -481,7 +481,7 @@ func TestX402RelaySelfSettleRecordsRealSettlement(t *testing.T) {
 		USDCAssetID:               10458941,
 		RelayNetwork:              "algorand:testnet",
 		RelayFeePayer:             "FEEPAYERADDR",
-		BaseURL:                   "https://api.example.test",
+		FrontendURL:               "https://api.example.test",
 	}
 
 	payload, _ := json.Marshal(map[string]any{"x402Version": 2, "scheme": "exact", "network": "algorand:testnet"})
@@ -500,7 +500,7 @@ func TestX402RelaySelfSettleRecordsRealSettlement(t *testing.T) {
 	if settleReqs.PaymentRequirements.MaxAmountRequired != "10000" {
 		t.Fatalf("want facilitator Settle called with the fixed $0.01 price, got %q", settleReqs.PaymentRequirements.MaxAmountRequired)
 	}
-	if settleReqs.PaymentRequirements.Resource != "https://api.example.test/x402/relay" {
+	if settleReqs.PaymentRequirements.Resource != "https://api.example.test/api/x402/relay" {
 		t.Fatalf("want Resource=BaseURL+real path sent to the facilitator (not just the challenge), got %q", settleReqs.PaymentRequirements.Resource)
 	}
 

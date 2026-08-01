@@ -21,25 +21,21 @@ type RunPreFundConfig struct {
 	RelayNetwork             string
 	RelayFeePayer            string
 	ExpectedAssetID          uint64
-	// BaseURL is our own backend's real, reachable origin (BASE_URL) --
-	// combined with the real /x402/relay/run-funding path below for
-	// PaymentRequirements.Resource and PaymentPayload.Resource. Was
-	// FrontendURL (a separate marketing domain) until confirmed live
-	// 2026-08-01 that every actually-cataloged mainnet resource on the real
-	// facilitator uses its OWN API domain+path as resource.url, never a
-	// separate marketing site -- our FrontendURL-based declaration was
-	// schema-perfect and still never once appeared in
-	// /discovery/resources across multiple real settlements.
-	BaseURL string
+	// FrontendURL is our own branded origin (FRONTEND_URL), combined below
+	// with the /api/... proxy path that frontend/next.config.ts already
+	// rewrites to this backend. Same identity x402relay.go declares -- see
+	// its relayPublicPath doc comment for why the origin has to be this one
+	// and the path has to be a real, non-root, genuinely-402-answering one.
+	FrontendURL string
 }
 
 // FundRunReserve settles one real GoPlausible payment for amountUSDMicros
 // from the platform's Wallet 1 spend wallet into Wallet 2
 // (cfg.PlatformWalletAddress) — same payTo as every per-call relay
 // settlement, so leaderboard attribution (keyed on payTo, not resource) is
-// unaffected. Resource points at cfg.BaseURL's real run-funding route on our
-// own domain, rather than an opaque identifier string or a separate
-// marketing domain.
+// unaffected. Resource points at the real run-funding route as reached
+// through our own branded domain's /api proxy, rather than an opaque
+// identifier string or a bare backend host.
 // amountUSDMicros <= 0 is a no-op (an agent with no attached tool402 nodes,
 // or all-legacy-dialect ones, needs no pre-fund at all).
 func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amountUSDMicros int64) (string, error) {
@@ -48,12 +44,12 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 	}
 
 	description := "AgentMesh workflow run funding — pre-settled pool for this run's downstream x402 tool calls"
-	resourceURL := cfg.BaseURL + "/x402/relay/run-funding"
+	resourceURL := cfg.FrontendURL + "/api/x402/relay/run-funding"
 	reqs := x402.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           cfg.RelayNetwork,
 		MaxAmountRequired: strconv.FormatInt(amountUSDMicros, 10),
-		// See RunPreFundConfig.BaseURL's doc comment.
+		// See RunPreFundConfig.FrontendURL's doc comment.
 		Resource:          resourceURL,
 		Description:       description,
 		MimeType:          "application/json",

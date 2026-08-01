@@ -56,7 +56,7 @@ func TestFundRunReserveNoopOnNonPositiveAmount(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		BaseURL:                  "https://example.test",
+		FrontendURL:              "https://example.test",
 	}
 
 	for _, amount := range []int64{0, -1, -100} {
@@ -108,7 +108,7 @@ func TestFundRunReserveSuccess(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		BaseURL:                  "https://example.test",
+		FrontendURL:              "https://example.test",
 	}
 
 	txID, err := nodes.FundRunReserve(context.Background(), cfg, "run-1", 500000)
@@ -138,7 +138,7 @@ func TestFundRunReserveSuccess(t *testing.T) {
 	// per-run runId-specific URL -- matches every actually-cataloged real
 	// resource's convention of a real API endpoint on the resource server's
 	// own domain, not an opaque identifier or a separate marketing domain.
-	if want := "https://example.test/x402/relay/run-funding"; settleReqs.PaymentRequirements.Resource != want {
+	if want := "https://example.test/api/x402/relay/run-funding"; settleReqs.PaymentRequirements.Resource != want {
 		t.Fatalf("want Resource=%q, got %q", want, settleReqs.PaymentRequirements.Resource)
 	}
 }
@@ -163,7 +163,7 @@ func TestFundRunReserveVerifyInvalidSurfacesError(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		BaseURL:                  "https://example.test",
+		FrontendURL:              "https://example.test",
 	}
 
 	txID, err := nodes.FundRunReserve(context.Background(), cfg, "run-1", 500000)
@@ -198,7 +198,7 @@ func TestFundRunReserveSettleFailureSurfacesError(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		BaseURL:                  "https://example.test",
+		FrontendURL:              "https://example.test",
 	}
 
 	txID, err := nodes.FundRunReserve(context.Background(), cfg, "run-1", 500000)
@@ -236,7 +236,7 @@ func TestFundRunReserveSettleTransportErrorIsIndeterminate(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		BaseURL:                  "https://example.test",
+		FrontendURL:              "https://example.test",
 	}
 
 	txID, err := nodes.FundRunReserve(context.Background(), cfg, "run-1", 500000)
