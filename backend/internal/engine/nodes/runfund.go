@@ -3,7 +3,6 @@ package nodes
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strconv"
 
 	"github.com/agentmesh/backend/internal/x402"
@@ -22,15 +21,21 @@ type RunPreFundConfig struct {
 	RelayNetwork             string
 	RelayFeePayer            string
 	ExpectedAssetID          uint64
-	PublicBaseURL            string // for Resource below — a real, reachable URL, not an opaque string
+	// FrontendURL is the real, crawlable page (title + favicon resolve here)
+	// used for both PaymentRequirements.Resource and PaymentPayload.Resource
+	// below -- same domain every other settlement path (x402relay.go's
+	// relay) uses for exactly this reason: a bare backend API domain
+	// resolves "sub" on the leaderboard but stays permanently masked/
+	// logo-less, confirmed live before this fix existed.
+	FrontendURL string
 }
 
 // FundRunReserve settles one real GoPlausible payment for amountUSDMicros
 // from the platform's Wallet 1 spend wallet into Wallet 2
 // (cfg.PlatformWalletAddress) — same payTo as every per-call relay
 // settlement, so leaderboard attribution (keyed on payTo, not resource) is
-// unaffected. Resource points at a real, static, reachable route on our own
-// domain (Step 3 below) rather than an opaque identifier string.
+// unaffected. Resource points at cfg.FrontendURL, a real, static, crawlable
+// page on our own domain, rather than an opaque identifier string.
 // amountUSDMicros <= 0 is a no-op (an agent with no attached tool402 nodes,
 // or all-legacy-dialect ones, needs no pre-fund at all).
 func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amountUSDMicros int64) (string, error) {
@@ -38,12 +43,18 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 		return "", nil
 	}
 
+	description := "AgentMesh workflow run funding — pre-settled pool for this run's downstream x402 tool calls"
 	reqs := x402.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           cfg.RelayNetwork,
 		MaxAmountRequired: strconv.FormatInt(amountUSDMicros, 10),
-		Resource:          cfg.PublicBaseURL + "/x402/relay/run-funding?runId=" + url.QueryEscape(runID),
-		Description:       "AgentMesh workflow run funding — pre-settled pool for this run's downstream x402 tool calls",
+		// See RunPreFundConfig.FrontendURL's doc comment. This used to point
+		// at PublicBaseURL + the informational /x402/relay/run-funding
+		// route (X402RunFundingInfo — still real, reachable, and mounted,
+		// just no longer referenced here); switched for the same reason
+		// x402relay.go's relaySettleAndForward already was.
+		Resource:          cfg.FrontendURL,
+		Description:       description,
 		PayTo:             cfg.PlatformWalletAddress,
 		MaxTimeoutSeconds: 300,
 		Asset:             strconv.FormatUint(cfg.ExpectedAssetID, 10),
@@ -56,12 +67,32 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 		// Bazaar discovery declaration on the struct actually POSTed to
 		// /verify — extra.tag alone only attributes an already-discovered
 		// route's activity to the challenge, it doesn't register the route.
-		// Fixed resource/schema here (no pass-through target like the relay
-		// has) since this endpoint always settles the same shape of payment.
+		// Schema-valid shape (info.input.type/method + a schema sibling) --
+		// see x402relay.go's bazaarDiscoveryExtension doc comment for why
+		// the {info:{output:{...}}} shape this had before this fix failed
+		// the facilitator's ajv validation unconditionally (no schema at
+		// all, no info.input.type) and so never once cataloged, even though
+		// verify/settle both succeeded and real money moved every time.
 		Extensions: map[string]any{
 			"bazaar": map[string]any{
 				"info": map[string]any{
-					"output": map[string]any{"description": "confirms this run's pre-fund pool was reserved"},
+					"input": map[string]any{"type": "http", "method": "GET"},
+				},
+				"schema": map[string]any{
+					"$schema": "https://json-schema.org/draft/2020-12/schema",
+					"type":    "object",
+					"properties": map[string]any{
+						"input": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"type":   map[string]any{"type": "string", "const": "http"},
+								"method": map[string]any{"type": "string", "enum": []string{"GET", "HEAD", "DELETE"}},
+							},
+							"required":             []string{"type", "method"},
+							"additionalProperties": false,
+						},
+					},
+					"required": []string{"input"},
 				},
 			},
 		},
@@ -76,6 +107,16 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 		Scheme:      "exact",
 		Network:     cfg.RelayNetwork,
 		Payload:     x402.PaymentGroup{PaymentGroup: group, PaymentIndex: idx},
+		// Set authoritatively regardless of the fact that WE are both payer
+		// and resource server here -- same reasoning as x402relay.go's
+		// relaySelfSettle/relaySettleAndForward: the facilitator's discovery
+		// extraction reads resource/extensions off the PAYLOAD, not off
+		// PaymentRequirements above, so without these two fields this
+		// settlement (real money, real facilitator round trip) still had
+		// nothing for the catalog to key off, exactly like every other
+		// settlement path did before its own matching fix today.
+		Resource:   map[string]any{"url": cfg.FrontendURL, "description": description, "mimeType": "application/json", "serviceName": "AgentMesh", "tags": []string{"x402-global-challenge"}},
+		Extensions: reqs.Extensions,
 	}
 
 	verifyResult, err := cfg.Facilitator.Verify(ctx, payload, reqs)

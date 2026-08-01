@@ -39,8 +39,33 @@ interface LogDrawerProps {
 }
 
 const _CONFIGURED = process.env.NEXT_PUBLIC_API_URL ?? "";
-const BASE =
-  _CONFIGURED && typeof window !== "undefined" ? "/api" : _CONFIGURED;
+
+// The SSE stream deliberately bypasses the /api rewrite proxy that every
+// other API call in this codebase uses (see lib/api.ts's BASE pattern, kept
+// for those calls since they're quick request/response and benefit from the
+// same-site cookie handling that proxy exists for). Confirmed live
+// (2026-08-01) that Next's rewrite (both `next dev`'s built-in proxy,
+// unverified but plausibly also true of Vercel's edge rewrite in
+// production) does not correctly hold a long-lived text/event-stream
+// connection open: a real x402 settlement taking ~30s+ (a completely
+// normal duration for a real facilitator+algod round trip) caused the
+// proxied stream to silently fail with a bare 500 after ~30s, never
+// delivering a single log event, while the exact same run watched directly
+// against the backend delivered every event correctly. The frontend has no
+// way to tell "the run legitimately finished with nothing to show" apart
+// from "my SSE connection just broke" (see the identical es.onerror
+// handling below), so this presented as "run complete · 0/0 nodes
+// succeeded" for a run that had, in fact, fully succeeded and moved real
+// money.
+//
+// Safe to go directly to the backend here specifically because it already
+// sets the auth cookie as SameSite=None; Secure whenever its own BASE_URL
+// is https (auth.go's setAuthCookie) -- exactly the condition under which a
+// direct cross-origin EventSource with withCredentials:true correctly
+// carries it. That's true in real production (Railway's BASE_URL is https)
+// and was true in the local setup this bug was diagnosed against (BASE_URL
+// pointed at an https cloudflared tunnel).
+const SSE_BASE = _CONFIGURED;
 
 export function LogDrawer({
   open,
@@ -68,7 +93,7 @@ export function LogDrawer({
       setElapsed(Math.floor((Date.now() - startRef.current!) / 100) / 10);
     }, 100);
 
-    const url = BASE ? `${BASE}/runs/${runId}/stream` : null;
+    const url = SSE_BASE ? `${SSE_BASE}/runs/${runId}/stream` : null;
 
     if (!url) return;
 

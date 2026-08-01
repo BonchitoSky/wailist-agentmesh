@@ -667,6 +667,19 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 
 	var relayChallenge struct {
 		Accepts []map[string]any `json:"accepts"`
+		// Resource/Extensions are captured here so the paid retry below can
+		// echo them back verbatim onto its own payment payload -- a real v2
+		// client is expected to copy these straight from the challenge it
+		// received, and without them here even a correctly-signed payment
+		// has nothing for the facilitator's discovery extraction to catalog
+		// against (see x402relay.go's resourceInfo/bazaarDiscoveryExtension
+		// doc comments). The relay itself now also sets these fields
+		// server-side regardless of what this payload carries, so this is
+		// belt-and-suspenders rather than load-bearing for OUR OWN relay --
+		// but it's what makes this call correct/spec-compliant client
+		// behavior in general, not just against our own endpoint.
+		Resource   map[string]any `json:"resource"`
+		Extensions map[string]any `json:"extensions"`
 	}
 	if json.Unmarshal(quoteBody, &relayChallenge) != nil || len(relayChallenge.Accepts) == 0 {
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: invalid challenge response")
@@ -737,10 +750,17 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		releaseReservation()
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay payment signing failed: %w", err)
 	}
-	xPayment, _ := json.Marshal(map[string]any{
+	xPaymentFields := map[string]any{
 		"x402Version": 2, "scheme": "exact", "network": network,
 		"payload": map[string]any{"paymentGroup": group, "paymentIndex": idx},
-	})
+	}
+	if relayChallenge.Resource != nil {
+		xPaymentFields["resource"] = relayChallenge.Resource
+	}
+	if relayChallenge.Extensions != nil {
+		xPaymentFields["extensions"] = relayChallenge.Extensions
+	}
+	xPayment, _ := json.Marshal(xPaymentFields)
 
 	payReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
 	payReq.Header.Set("X-Payment", string(xPayment))

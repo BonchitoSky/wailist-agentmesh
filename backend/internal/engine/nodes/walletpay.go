@@ -237,9 +237,13 @@ const canix402Host = "canix402-api.compx.io"
 // buildPaymentHeader picks the outbound payment header name/value for
 // target, matching its own dialect. quote.RawAccept/RawChallenge (the
 // target's own challenge, kept verbatim from the probe that fetched it)
-// are only required for the canix402 branch -- every other target keeps
-// using the plain, minimal payload this function always sent before the
-// canix402 branch existed.
+// are required for the canix402 branch, and also used (best-effort) in the
+// default branch below to echo the target's own resource/extensions back
+// onto the payload -- a real v2 client is expected to copy these verbatim
+// from the challenge it received, and it's what lets a spec-compliant
+// target catalog OUR platform wallet's payment the same way we now catalog
+// payments made to us (see x402relay.go's resourceInfo/bazaarDiscoveryExtension
+// doc comments for the mechanism this mirrors).
 func buildPaymentHeader(target, relayNetwork string, group []string, idx int, quote TargetQuote) (name, value string) {
 	if u, err := url.Parse(target); err == nil && u.Hostname() == canix402Host && quote.RawAccept != nil && quote.RawChallenge != nil {
 		wrapper := map[string]any{
@@ -253,9 +257,18 @@ func buildPaymentHeader(target, relayNetwork string, group []string, idx int, qu
 		b, _ := json.Marshal(wrapper)
 		return "Payment-Signature", base64.StdEncoding.EncodeToString(b)
 	}
-	xPaymentOut, _ := json.Marshal(map[string]any{
+	xPaymentFields := map[string]any{
 		"x402Version": 2, "scheme": "exact", "network": relayNetwork,
 		"payload": map[string]any{"paymentGroup": group, "paymentIndex": idx},
-	})
+	}
+	if quote.RawChallenge != nil {
+		if res, ok := quote.RawChallenge["resource"]; ok {
+			xPaymentFields["resource"] = res
+		}
+		if ext, ok := quote.RawChallenge["extensions"]; ok {
+			xPaymentFields["extensions"] = ext
+		}
+	}
+	xPaymentOut, _ := json.Marshal(xPaymentFields)
 	return "X-Payment", string(xPaymentOut)
 }

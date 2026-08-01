@@ -29,9 +29,28 @@ import (
 // then pay the target from the platform wallet (credited to them), then
 // relay the target's paid response back to the caller.
 func (d *Deps) X402Relay(w http.ResponseWriter, r *http.Request) {
+	xPayment, hasPayment, err := incomingPaymentJSON(r)
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid Payment-Signature header: "+err.Error())
+		return
+	}
+
 	target := r.URL.Query().Get("target")
 	if target == "" {
-		respond.Error(w, http.StatusBadRequest, "target query param required")
+		// No ?target= at all -- previously a flat 400, meaning there was no
+		// stable, real, always-answering 402 challenge anywhere on this
+		// route for a Bazaar crawler to ever find and catalog (every real
+		// challenge this handler otherwise issues varies per ?target=, so
+		// there's no single fixed "resource" for the crawler to settle
+		// against). This branch is that fixed listing -- same price, same
+		// description, every single time. Real dynamic usage (every actual
+		// workflow call) always supplies ?target= and is completely
+		// unaffected by this branch existing.
+		if hasPayment {
+			d.relaySelfSettle(w, r, xPayment)
+			return
+		}
+		d.relaySelfChallenge(w, r)
 		return
 	}
 	// target is caller-supplied and this route is public/unauthenticated —
@@ -72,12 +91,186 @@ func (d *Deps) X402Relay(w http.ResponseWriter, r *http.Request) {
 		targetBody = decoded
 	}
 
-	xPayment := r.Header.Get("X-Payment")
-	if xPayment == "" {
+	if !hasPayment {
 		d.relayInboundChallenge(w, r, target, targetMethod, targetBody)
 		return
 	}
 	d.relaySettleAndForward(w, r, target, xPayment, targetMethod, targetBody)
+}
+
+// incomingPaymentJSON reads the caller's payment off whichever header they
+// actually used, normalized to a raw JSON string (relaySelfSettle/
+// relaySettleAndForward's existing json.Unmarshal is untouched either way).
+//
+// Payment-Signature is the real x402 v2 spec's canonical header name --
+// base64-encoded JSON, matching Payment-Required's own encoding (see
+// @x402/core's encodePaymentSignatureHeader/decodePaymentSignatureHeader,
+// and the reference resource-server implementation's own readPayment, which
+// checks this header first). A real v2-compliant client -- the official SDK,
+// or GoPlausible's own Bazaar crawler if it ever pays to sample/catalog a
+// resource -- sends this by default and never X-Payment. Before this fix,
+// this relay only ever read X-Payment, meaning no real external payer using
+// a standard client could ever reach it at all -- only this codebase's own
+// internal callers (tool402.go, the throwaway verification scripts used to
+// test this endpoint), which all happen to use X-Payment.
+//
+// X-Payment is kept exactly as it always was here -- raw, unencoded JSON,
+// checked second -- for zero risk to every already-verified real settlement
+// this session performed through it; this is purely additive.
+func incomingPaymentJSON(r *http.Request) (payloadJSON string, ok bool, err error) {
+	if b64 := r.Header.Get("Payment-Signature"); b64 != "" {
+		decoded, decErr := base64.StdEncoding.DecodeString(b64)
+		if decErr != nil {
+			return "", false, decErr
+		}
+		return string(decoded), true, nil
+	}
+	if raw := r.Header.Get("X-Payment"); raw != "" {
+		return raw, true, nil
+	}
+	return "", false, nil
+}
+
+// relaySelfServiceUSDMicros/relaySelfDescription describe the relay itself
+// as a fixed, always-payable resource -- unlike every other challenge this
+// handler issues (all priced/described dynamically off whatever ?target=
+// the caller supplied), this one never changes. Nominal price, matching the
+// cheapest real tier already confirmed working this session (CANIX402's
+// $0.01) -- this exists purely to be a genuinely payable, catalogable
+// resource, not free metadata.
+const relaySelfServiceUSDMicros = "10000" // $0.01
+const relaySelfDescription = "AgentMesh x402 relay — pays real x402 endpoints on your behalf. Append ?target=<url> to route a specific payment through this relay."
+
+// relaySelfChallenge issues the fixed, always-identical 402 challenge for a
+// bare /x402/relay request (no ?target=). See X402Relay's doc comment for
+// why this exists: a Bazaar crawler visiting the bare route previously got
+// a 400, never a real 402 to catalog.
+func (d *Deps) relaySelfChallenge(w http.ResponseWriter, r *http.Request) {
+	challenge := map[string]any{
+		"x402Version": 2,
+		// Top-level, spec-shaped ResourceInfo -- see resourceInfo's doc
+		// comment for why this (not accepts[0].resource below, which is only
+		// kept for the v1-dialect stragglers that still read it there) is
+		// what actually makes this endpoint catalogable.
+		"resource": resourceInfo(d.FrontendURL, relaySelfDescription),
+		"accepts": []map[string]any{{
+			"scheme":            "exact",
+			"network":           d.RelayNetwork,
+			"amount":            relaySelfServiceUSDMicros,
+			"resource":          d.FrontendURL,
+			"description":       relaySelfDescription,
+			"payTo":             d.PlatformWalletAddress,
+			"maxTimeoutSeconds": 300,
+			"asset":             strconv.FormatUint(d.USDCAssetID, 10),
+			"extra": map[string]any{
+				"asset":    strconv.FormatUint(d.USDCAssetID, 10),
+				"feePayer": d.RelayFeePayer,
+				"tag":      "x402-global-challenge",
+				"decimals": 6,
+			},
+		}},
+		"extensions": bazaarDiscoveryExtension(""),
+	}
+	challengeJSON, err := json.Marshal(challenge)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, "failed to encode challenge")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	// Bazaar's discovery crawler reads the challenge off this header (base64
+	// JSON), not just the body — same convention relayInboundChallenge uses.
+	w.Header().Set("Payment-Required", base64.StdEncoding.EncodeToString(challengeJSON))
+	w.WriteHeader(http.StatusPaymentRequired)
+	w.Write(challengeJSON)
+}
+
+// relaySelfSettle verifies+settles a real payment against the fixed
+// self-challenge above. No target to fetch or forward to -- this IS the
+// product being paid for, not a proxy for a downstream one. Real,
+// GoPlausible-settled, same facilitator calls every other settlement this
+// handler performs uses.
+func (d *Deps) relaySelfSettle(w http.ResponseWriter, r *http.Request, xPaymentHeader string) {
+	ctx := r.Context()
+
+	var payload x402.PaymentPayload
+	if err := json.Unmarshal([]byte(xPaymentHeader), &payload); err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid X-Payment payload")
+		return
+	}
+
+	amountAssetMicros, err := strconv.ParseInt(relaySelfServiceUSDMicros, 10, 64)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, "internal error parsing fixed price")
+		return
+	}
+
+	reqs := x402.PaymentRequirements{
+		Scheme:            "exact",
+		Network:           d.RelayNetwork,
+		PayTo:             d.PlatformWalletAddress,
+		Asset:             strconv.FormatUint(d.USDCAssetID, 10),
+		MaxAmountRequired: relaySelfServiceUSDMicros,
+		Resource:          d.FrontendURL,
+		Description:       relaySelfDescription,
+		Extra: map[string]any{
+			"asset":    strconv.FormatUint(d.USDCAssetID, 10),
+			"feePayer": d.RelayFeePayer,
+			"tag":      "x402-global-challenge",
+			"decimals": 6,
+		},
+	}
+
+	// Set authoritatively, server-side, regardless of what the caller's own
+	// payload carried -- see PaymentPayload.Resource's doc comment. This is
+	// what actually makes a self-listing settlement catalogable: WE are the
+	// resource server for this route, so we already know exactly what this
+	// payment is for, and correctness here must not depend on every caller
+	// (including this codebase's own internal engine self-call in
+	// tool402.go) remembering to echo the challenge's resource/extensions
+	// back onto its own payload.
+	payload.Resource = resourceInfo(d.FrontendURL, relaySelfDescription)
+	payload.Extensions = bazaarDiscoveryExtension("")
+
+	verifyResult, err := d.FacilitatorClient.Verify(ctx, payload, reqs)
+	if err != nil {
+		respond.Error(w, http.StatusBadGateway, "facilitator verify failed: "+err.Error())
+		return
+	}
+	if !verifyResult.IsValid {
+		respond.Error(w, http.StatusPaymentRequired, "payment invalid: "+verifyResult.Invalid)
+		return
+	}
+
+	settleResult, err := d.FacilitatorClient.Settle(ctx, payload, reqs)
+	if err != nil {
+		respond.Error(w, http.StatusBadGateway, "facilitator settle failed: "+err.Error())
+		return
+	}
+	if !settleResult.Success {
+		respond.Error(w, http.StatusPaymentRequired, "settlement failed: "+settleResult.Error)
+		return
+	}
+
+	// "self" -- a fixed, non-URL label, distinct from every other row this
+	// table records (all real per-target URLs) -- target_url isn't the
+	// dedup key (inbound_tx_id is, real and unique per settlement), so a
+	// constant label across many real self-listing settlements is safe.
+	if _, err := d.Store.RecordInboundSettlement(ctx, "self", settleResult.TxID, amountAssetMicros); err != nil {
+		if err == db.ErrDuplicateSettlement {
+			respond.Error(w, http.StatusConflict, "payment already processed")
+			return
+		}
+		log.Printf("x402 relay: failed to record self-listing settlement: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error recording settlement")
+		return
+	}
+
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"service":     "AgentMesh x402 relay",
+		"description": relaySelfDescription,
+		"docs":        d.FrontendURL,
+		"txId":        settleResult.TxID,
+	})
 }
 
 // X402RunFundingInfo is the static, informational resource FundRunReserve's
@@ -198,25 +391,107 @@ func fetchTargetPriceQuote(ctx context.Context, target, method string, body []by
 	return targetPriceQuote{PayTo: payTo, Asset: asset, MaxAmountRequired: amount, FeePayer: feePayer, RawAccept: accept, RawChallenge: rawChallenge}, nil
 }
 
-// bazaarDiscoveryExtension describes the relay's pass-through shape (any
-// downstream target URL in, that target's own response out) since this
-// endpoint has no fixed schema of its own — see GoPlausible's
-// bazaar-integration reference server. Shared between the public 402
-// challenge (relayInboundChallenge) and the PaymentRequirements actually
-// POSTed to /verify and /settle (relaySettleAndForward) — the facilitator
-// only catalogs a route once it sees this on a real settlement, not from the
-// informational challenge alone.
+// resourceInfo builds the v2 `resource` object per the official @x402/core
+// v2.20 SDK's ResourceInfo type ({url, description?, mimeType?, serviceName?,
+// tags?, iconUrl?}) — decompiled and confirmed against the real published
+// npm package, not inferred from prose docs. This MUST be a top-level field
+// on the PaymentRequired body, never nested inside accepts[0] — that's a
+// different field (PaymentRequirementsV1.resource: string) on the old v1
+// dialect's type, which the v2 client code path never reads. A real v2
+// client's own createPaymentPayload does `resource: paymentRequired.resource`
+// — a verbatim top-level copy onto the outgoing payment payload — and the
+// facilitator's own discovery extraction (extractDiscoveryInfo in
+// @x402/extensions) reads paymentPayload.resource.url to build a Bazaar
+// catalog entry. Omit the top-level field, as this handler did before this
+// fix, and no client — however spec-compliant, however many times it pays —
+// has anything to echo back, so nothing here can ever be cataloged.
+// relayTargetDescription is the shared description string for a
+// target-mirroring challenge -- used both in the public 402 shown to the
+// caller (relayInboundChallenge) and in the payload.Resource this handler
+// sets server-side before Verify/Settle (relaySettleAndForward). Kept as one
+// function so the two never drift apart: a catalog entry should describe
+// exactly what the paying caller actually saw in its own challenge.
+func relayTargetDescription(target string) string {
+	return "AgentMesh x402 relay — settles the inbound leg and forwards payment to " + target
+}
+
+func resourceInfo(url, description string) map[string]any {
+	return map[string]any{
+		"url":         url,
+		"description": description,
+		"mimeType":    "application/json",
+		"serviceName": "AgentMesh",
+		"tags":        []string{"x402-global-challenge"},
+	}
+}
+
+// bazaarDiscoveryExtension builds a schema-valid `extensions.bazaar`
+// declaration ({info, schema} both required, info.input.type set) — also
+// decompiled from @x402/extensions v2.20 (declareDiscoveryExtension /
+// validateDiscoveryExtensionSpec). The facilitator runs this exact shape
+// through an ajv validator (extractDiscoveryInfo -> validateDiscoveryExtension)
+// before ever building a catalog entry; the extension this handler emitted
+// before this fix had no `schema` sibling and no `info.input.type` at all,
+// which fails that validation unconditionally — so even a payment that
+// correctly echoed back a top-level `resource` (see resourceInfo above)
+// would still never catalog, because the extension itself was being silently
+// rejected before discoveryInfo was ever set.
+//
+// Describes the relay's own pass-through shape (any downstream target URL
+// in, that target's own response out) since this endpoint has no fixed
+// schema of its own. target == "" describes the fixed self-listing (no
+// query params at all). Shared between the public 402 challenge
+// (relayInboundChallenge/relaySelfChallenge) and the PaymentRequirements
+// actually POSTed to /verify and /settle (relaySettleAndForward) — the
+// facilitator only catalogs a route once it sees this on a real settlement,
+// not from the informational challenge alone.
 func bazaarDiscoveryExtension(target string) map[string]any {
+	input := map[string]any{"type": "http", "method": "GET"}
+	inputSchemaProps := map[string]any{
+		"type":   map[string]any{"type": "string", "const": "http"},
+		"method": map[string]any{"type": "string", "enum": []string{"GET", "HEAD", "DELETE"}},
+	}
+	required := []string{"type", "method"}
+	// outputExample is optional per the real spec (only `input` is in the
+	// schema's own `required` list) -- added anyway because every live,
+	// genuinely-cataloged entry pulled from the real facilitator
+	// (facilitator.goplausible.xyz/discovery/resources) has one, so this
+	// closes the one structural gap left between our declaration and a
+	// real working example, even though it isn't a hard requirement.
+	var outputExample map[string]any
+	if target != "" {
+		input["queryParams"] = map[string]any{"target": target}
+		inputSchemaProps["queryParams"] = map[string]any{"type": "object"}
+		outputExample = map[string]any{"ok": true, "note": "the target endpoint's own paid response, forwarded unmodified"}
+	} else {
+		outputExample = map[string]any{"service": "AgentMesh x402 relay", "docs": true, "txId": "..."}
+	}
 	return map[string]any{
 		"bazaar": map[string]any{
 			"info": map[string]any{
-				"input":  map[string]any{"target": target},
-				"output": map[string]any{"description": "the target endpoint's own paid response, forwarded unmodified"},
+				"input":  input,
+				"output": map[string]any{"type": "json", "example": outputExample},
 			},
 			"schema": map[string]any{
+				"$schema": "https://json-schema.org/draft/2020-12/schema",
+				"type":    "object",
 				"properties": map[string]any{
-					"target": map[string]any{"type": "string", "description": "downstream x402 endpoint URL this relay settles payment for and forwards to"},
+					"input": map[string]any{
+						"type":                 "object",
+						"properties":           inputSchemaProps,
+						"required":             required,
+						"additionalProperties": false,
+					},
+					"output": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"type":    map[string]any{"type": "string"},
+							"example": map[string]any{"type": "object"},
+						},
+						"required": []string{"type"},
+					},
 				},
+				"required": []string{"input"},
 			},
 		},
 	}
@@ -242,8 +517,29 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
+	description := relayTargetDescription(target)
 	challenge := map[string]any{
 		"x402Version": 2,
+		// Top-level, spec-shaped ResourceInfo -- see resourceInfo's doc
+		// comment. Without this, no real v2 client has anything to echo
+		// back onto its payment payload, so this route (despite varying
+		// price per ?target=) can never catalog any of its settlements.
+		//
+		// url is d.FrontendURL, NOT target: the facilitator's leaderboard
+		// branding (label/logo) reads this same resource.url off the most
+		// recent settlement for a payTo address, and using target here
+		// meant our own merchant row kept re-branding itself as whichever
+		// downstream target was paid through us most recently (confirmed
+		// live -- one CANIX402 settlement was enough to relabel our
+		// leaderboard entry as "CANIX402", complete with their logo).
+		// d.FrontendURL keeps that branding stable as AgentMesh regardless
+		// of target; relayTargetDescription(target) below still carries the
+		// per-request specificity (what this particular payment was for),
+		// and bazaarDiscoveryExtension(target)'s queryParams already models
+		// this route as one parameterized resource, not N per-target ones --
+		// so this doesn't cost any real precision, only removes an
+		// unintended side effect.
+		"resource": resourceInfo(d.FrontendURL, description),
 		"accepts": []map[string]any{{
 			"scheme":  "exact",
 			"network": d.RelayNetwork,
@@ -254,7 +550,7 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 			// so this is safe to change unilaterally.
 			"amount":            quote.MaxAmountRequired,
 			"resource":          target,
-			"description":       "AgentMesh x402 relay — settles the inbound leg and forwards payment to " + target,
+			"description":       description,
 			"payTo":             d.PlatformWalletAddress,
 			"maxTimeoutSeconds": 300,
 			"asset":             strconv.FormatUint(d.USDCAssetID, 10),
@@ -368,6 +664,16 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		// informational challenge shown to the caller.
 		Extensions: bazaarDiscoveryExtension(target),
 	}
+
+	// Set authoritatively, server-side, regardless of what the caller's own
+	// payload carried -- see PaymentPayload.Resource's doc comment. Mirrors
+	// exactly what relayInboundChallenge showed this same caller a moment
+	// earlier: same d.FrontendURL identity as reqs.Resource above (kept
+	// deliberately in sync now -- see resourceInfo's call site in
+	// relayInboundChallenge for why target's own URL was tried first and
+	// reverted), same relayTargetDescription for the per-request specifics.
+	payload.Resource = resourceInfo(d.FrontendURL, relayTargetDescription(target))
+	payload.Extensions = bazaarDiscoveryExtension(target)
 
 	verifyResult, err := d.FacilitatorClient.Verify(ctx, payload, reqs)
 	if err != nil {

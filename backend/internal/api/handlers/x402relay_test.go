@@ -86,6 +86,358 @@ func TestX402RelayNoPaymentMirrorsTargetPriceAsChallengeTag(t *testing.T) {
 	_ = x402.PaymentPayload{} // referenced so import stays used once payment-path test is added below
 }
 
+// TestX402RelayWithNoTargetIssuesFixedSelfChallenge is a reproduce-then-fix
+// regression test: a bare /x402/relay request (no ?target= at all) used to
+// return a flat 400 "target query param required" -- meaning there was no
+// stable, real, always-answering 402 challenge anywhere on this route for a
+// Bazaar crawler to ever find and catalog (every other challenge this
+// handler issues varies per-call, keyed off whatever ?target= was given).
+// Confirms the bare route now issues a real, fixed 402 challenge instead.
+func TestX402RelayWithNoTargetIssuesFixedSelfChallenge(t *testing.T) {
+	d := &handlers.Deps{
+		PlatformWalletAddress: "PLATFORMADDR",
+		USDCAssetID:           10458941,
+		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+		RelayFeePayer:         "FEEPAYERADDR",
+		FrontendURL:           "https://www.agent-mesh.app",
+	}
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("want 402, got %d: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Accepts []map[string]any `json:"accepts"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if len(body.Accepts) != 1 {
+		t.Fatalf("want 1 accepts entry, got %d", len(body.Accepts))
+	}
+	if body.Accepts[0]["payTo"] != "PLATFORMADDR" {
+		t.Fatalf("want payTo=PLATFORMADDR, got %v", body.Accepts[0]["payTo"])
+	}
+	if body.Accepts[0]["amount"] != "10000" {
+		t.Fatalf("want the fixed $0.01 self-listing price, got %v", body.Accepts[0]["amount"])
+	}
+	if body.Accepts[0]["resource"] != "https://www.agent-mesh.app" {
+		t.Fatalf("want resource=FrontendURL (crawlable, branded), got %v", body.Accepts[0]["resource"])
+	}
+	extra, _ := body.Accepts[0]["extra"].(map[string]any)
+	if extra["tag"] != "x402-global-challenge" {
+		t.Fatalf("want tag x402-global-challenge in extra, got %v", extra)
+	}
+	if w.Header().Get("Payment-Required") == "" {
+		t.Fatal("want a Payment-Required header, same as every other challenge this handler issues")
+	}
+}
+
+// TestX402RelayChallengeResourceIsTopLevelSpecShape is a reproduce-then-fix
+// regression test for the actual Bazaar-cataloging root cause: the official
+// @x402/core v2.20 SDK's PaymentRequired type has `resource` as a top-level
+// ResourceInfo object ({url, description, ...}), not a string nested inside
+// accepts[0] (that's the older, different v1 dialect's field). A real v2
+// client's createPaymentPayload does `resource: paymentRequired.resource` --
+// a verbatim top-level copy onto the outgoing payment payload -- and the
+// facilitator's discovery extraction reads paymentPayload.resource.url to
+// build a catalog entry. Before this fix, this handler never set the
+// top-level field at all, so no compliant client had anything to echo back,
+// meaning no settlement against this endpoint could ever be cataloged no
+// matter how many times it was paid. Checked on both challenge branches
+// (self-listing and target-mirroring) since both had the same gap.
+func TestX402RelayChallengeResourceIsTopLevelSpecShape(t *testing.T) {
+	d := &handlers.Deps{
+		PlatformWalletAddress: "PLATFORMADDR",
+		USDCAssetID:           10458941,
+		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+		RelayFeePayer:         "FEEPAYERADDR",
+		FrontendURL:           "https://www.agent-mesh.app",
+	}
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	var body struct {
+		Resource map[string]any `json:"resource"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode challenge body: %v", err)
+	}
+	if body.Resource == nil {
+		t.Fatal("want a top-level `resource` object on the challenge body (ResourceInfo shape), got none")
+	}
+	if body.Resource["url"] != "https://www.agent-mesh.app" {
+		t.Fatalf("want resource.url=FrontendURL, got %v", body.Resource["url"])
+	}
+	if body.Resource["description"] == nil || body.Resource["description"] == "" {
+		t.Fatalf("want a non-empty resource.description, got %v", body.Resource["description"])
+	}
+	tags, _ := body.Resource["tags"].([]any)
+	if len(tags) == 0 || tags[0] != "x402-global-challenge" {
+		t.Fatalf("want resource.tags to include x402-global-challenge, got %v", body.Resource["tags"])
+	}
+}
+
+// TestX402RelayBazaarExtensionIsSchemaValid is a reproduce-then-fix
+// regression test: @x402/extensions v2.20's own discovery-extension
+// validator (validateDiscoveryExtensionSpec) requires an `extensions.bazaar`
+// declaration to carry BOTH `info` and `schema`, with `info.input.type` set
+// to "http" or "mcp". Before this fix, this handler emitted `bazaar.info`
+// with no `schema` sibling and no `input.type` at all -- which fails that
+// validation unconditionally, so even a payment that correctly echoed back
+// a top-level `resource` would still never catalog, because the facilitator
+// rejects the malformed extension before ever building a catalog entry.
+func TestX402RelayBazaarExtensionIsSchemaValid(t *testing.T) {
+	d := &handlers.Deps{
+		PlatformWalletAddress: "PLATFORMADDR",
+		USDCAssetID:           10458941,
+		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+		RelayFeePayer:         "FEEPAYERADDR",
+		FrontendURL:           "https://www.agent-mesh.app",
+	}
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	var body struct {
+		Extensions struct {
+			Bazaar struct {
+				Info   map[string]any `json:"info"`
+				Schema map[string]any `json:"schema"`
+			} `json:"bazaar"`
+		} `json:"extensions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode challenge body: %v", err)
+	}
+	if body.Extensions.Bazaar.Schema == nil {
+		t.Fatal("want extensions.bazaar.schema to be present (required by validateDiscoveryExtensionSpec), got none")
+	}
+	input, _ := body.Extensions.Bazaar.Info["input"].(map[string]any)
+	if input == nil || input["type"] != "http" {
+		t.Fatalf("want extensions.bazaar.info.input.type=\"http\", got %v", input)
+	}
+	// Optional per the real spec's own schema validator (only `input` is in
+	// `required`), but every genuinely-cataloged entry pulled live from
+	// facilitator.goplausible.xyz/discovery/resources has one -- confirms
+	// this handler emits it too, closing that gap.
+	output, _ := body.Extensions.Bazaar.Info["output"].(map[string]any)
+	if output == nil || output["type"] != "json" || output["example"] == nil {
+		t.Fatalf("want extensions.bazaar.info.output={type:\"json\",example:{...}}, got %v", output)
+	}
+}
+
+// TestX402RelayAcceptsPaymentSignatureHeader is a reproduce-then-fix
+// regression test: this relay previously only ever read the X-Payment
+// header (raw, unencoded JSON). The real x402 v2 spec's canonical header is
+// Payment-Signature, base64-encoded JSON -- what the official @x402/core
+// client sends by default, and what reference resource-server
+// implementations (e.g. the Tendril example server) check first. Without
+// accepting it, no real external payer using a standard v2 client could
+// ever reach this relay at all -- only this codebase's own internal callers
+// (which all happen to use X-Payment) could pay it. Confirms a
+// Payment-Signature-only request (no X-Payment at all) now settles
+// identically to the pre-existing X-Payment path.
+func TestX402RelayAcceptsPaymentSignatureHeader(t *testing.T) {
+	store := newTestStoreForHandlers(t)
+	inboundTxID := fmt.Sprintf("PAYMENT-SIGNATURE-TX-%d", time.Now().UnixNano())
+
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/verify" {
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
+	}))
+	defer facilitator.Close()
+
+	d := &handlers.Deps{
+		Store:                     store,
+		PlatformWalletAddress:     "PLATFORMADDR",
+		PlatformWalletEncMnemonic: "enc-mnemonic",
+		FacilitatorClient:         x402.NewFacilitatorClient(facilitator.URL),
+		USDCAssetID:               10458941,
+		RelayNetwork:              "algorand:testnet",
+		RelayFeePayer:             "FEEPAYERADDR",
+		FrontendURL:               "https://www.agent-mesh.app",
+	}
+
+	payloadJSON, _ := json.Marshal(map[string]any{"x402Version": 2, "scheme": "exact", "network": "algorand:testnet"})
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
+	// Payment-Signature only -- deliberately no X-Payment at all, matching
+	// what a real v2-compliant client actually sends.
+	req.Header.Set("Payment-Signature", base64.StdEncoding.EncodeToString(payloadJSON))
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 via Payment-Signature header alone, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestX402RelayRejectsMalformedPaymentSignatureHeader confirms invalid
+// base64 in Payment-Signature fails loudly (400) rather than silently
+// falling through to the no-payment challenge path, which would mask a
+// real caller's broken payment as if they'd never tried to pay at all.
+func TestX402RelayRejectsMalformedPaymentSignatureHeader(t *testing.T) {
+	d := &handlers.Deps{FrontendURL: "https://www.agent-mesh.app"}
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
+	req.Header.Set("Payment-Signature", "not-valid-base64!!!")
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for malformed Payment-Signature, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestX402RelaySelfSettleSetsResourceOnPayloadRegardlessOfCaller is a
+// reproduce-then-fix regression test for the deepest layer of the Bazaar
+// cataloging bug: even after the challenge itself carried a correct
+// top-level `resource` (see TestX402RelayChallengeResourceIsTopLevelSpecShape),
+// the facilitator's discovery extraction reads resource/extensions off the
+// PAYMENT PAYLOAD the caller sends -- not off anything the resource server
+// declares in PaymentRequirements. x402.PaymentPayload had no Resource/
+// Extensions fields at all before this fix, so even a caller that DID send
+// them got them silently dropped on decode (Go ignores unknown JSON
+// fields), and this codebase's own internal engine self-call (tool402.go)
+// never sent them in the first place. Fixed by having the relay set them
+// authoritatively, server-side, regardless of what the caller's payload
+// carried -- this test sends a payload with neither field set (the exact
+// shape tool402.go sent before its own matching fix) and confirms the
+// facilitator still receives a fully-formed resource/extensions pair.
+func TestX402RelaySelfSettleSetsResourceOnPayloadRegardlessOfCaller(t *testing.T) {
+	// Unique per run (like every sibling settlement test in this file) --
+	// RecordInboundSettlement dedups on this txid, so a hardcoded value
+	// would 409 on any second run against the same persistent test DB.
+	inboundTxID := fmt.Sprintf("SELF-RESOURCE-TX-%d", time.Now().UnixNano())
+	var capturedPayload map[string]any
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			PaymentPayload map[string]any `json:"paymentPayload"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if r.URL.Path == "/verify" {
+			capturedPayload = body.PaymentPayload
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
+	}))
+	defer facilitator.Close()
+
+	store := newTestStoreForHandlers(t) // TEST_DATABASE_URL-gated, see helper below
+	d := &handlers.Deps{
+		PlatformWalletAddress: "PLATFORMADDR",
+		USDCAssetID:           10458941,
+		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+		RelayFeePayer:         "FEEPAYERADDR",
+		FrontendURL:           "https://www.agent-mesh.app",
+		FacilitatorClient:     x402.NewFacilitatorClient(facilitator.URL),
+		Store:                 store,
+	}
+
+	// Deliberately the exact minimal shape tool402.go's engine self-call
+	// sent before its own matching fix -- no resource, no extensions.
+	minimalPayload := `{"x402Version":2,"scheme":"exact","network":"algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=","payload":{"paymentGroup":["AAAA"],"paymentIndex":0}}`
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
+	req.Header.Set("X-Payment", minimalPayload)
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if capturedPayload == nil {
+		t.Fatal("facilitator never received a paymentPayload")
+	}
+	resource, _ := capturedPayload["resource"].(map[string]any)
+	if resource == nil || resource["url"] != "https://www.agent-mesh.app" {
+		t.Fatalf("want the facilitator to receive payload.resource despite the caller never sending one, got %v", capturedPayload["resource"])
+	}
+	extensions, _ := capturedPayload["extensions"].(map[string]any)
+	if extensions == nil || extensions["bazaar"] == nil {
+		t.Fatalf("want the facilitator to receive payload.extensions.bazaar despite the caller never sending one, got %v", capturedPayload["extensions"])
+	}
+}
+
+// TestX402RelaySelfSettleRecordsRealSettlement confirms a real payment
+// against the bare-route fixed listing actually settles through the
+// facilitator (same Verify/Settle calls every other settlement uses) and
+// gets recorded, rather than being a no-op or an error.
+func TestX402RelaySelfSettleRecordsRealSettlement(t *testing.T) {
+	store := newTestStoreForHandlers(t)
+
+	inboundTxID := fmt.Sprintf("SELF-TX-%d", time.Now().UnixNano())
+
+	var verifyReqs, settleReqs struct {
+		PaymentRequirements struct {
+			MaxAmountRequired string `json:"amount"`
+			Resource          string `json:"resource"`
+		} `json:"paymentRequirements"`
+	}
+	facilitator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path == "/verify" {
+			json.Unmarshal(body, &verifyReqs)
+			json.NewEncoder(w).Encode(map[string]any{"isValid": true})
+			return
+		}
+		json.Unmarshal(body, &settleReqs)
+		json.NewEncoder(w).Encode(map[string]any{"success": true, "transaction": inboundTxID})
+	}))
+	defer facilitator.Close()
+
+	d := &handlers.Deps{
+		Store:                     store,
+		PlatformWalletAddress:     "PLATFORMADDR",
+		PlatformWalletEncMnemonic: "enc-mnemonic",
+		FacilitatorClient:         x402.NewFacilitatorClient(facilitator.URL),
+		USDCAssetID:               10458941,
+		RelayNetwork:              "algorand:testnet",
+		RelayFeePayer:             "FEEPAYERADDR",
+		FrontendURL:               "https://www.agent-mesh.app",
+	}
+
+	payload, _ := json.Marshal(map[string]any{"x402Version": 2, "scheme": "exact", "network": "algorand:testnet"})
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay", nil)
+	req.Header.Set("X-Payment", string(payload))
+	w := httptest.NewRecorder()
+
+	d.X402Relay(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if verifyReqs.PaymentRequirements.MaxAmountRequired != "10000" {
+		t.Fatalf("want facilitator Verify called with the fixed $0.01 price, got %q", verifyReqs.PaymentRequirements.MaxAmountRequired)
+	}
+	if settleReqs.PaymentRequirements.MaxAmountRequired != "10000" {
+		t.Fatalf("want facilitator Settle called with the fixed $0.01 price, got %q", settleReqs.PaymentRequirements.MaxAmountRequired)
+	}
+	if settleReqs.PaymentRequirements.Resource != "https://www.agent-mesh.app" {
+		t.Fatalf("want Resource=FrontendURL sent to the facilitator (not just the challenge), got %q", settleReqs.PaymentRequirements.Resource)
+	}
+
+	row, err := store.GetX402RelaySettlementByInboundTx(context.Background(), inboundTxID)
+	if err != nil {
+		t.Fatalf("want to find the recorded ledger row: %v", err)
+	}
+	if row.AmountAssetMicros != 10000 {
+		t.Fatalf("want ledger row to record the fixed amount (10000), got %d", row.AmountAssetMicros)
+	}
+	if row.TargetURL != "self" {
+		t.Fatalf("want target_url=\"self\" (fixed label, distinct from real per-target rows), got %q", row.TargetURL)
+	}
+}
+
 // TestX402RelayAcceptsTargetAmountFieldDialect is a reproduce-then-fix
 // regression test for the real bug found live against our own Prism-schema
 // demo merchant (backend/cmd/x402demo) on 2026-07-31: its challenge uses

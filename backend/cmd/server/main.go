@@ -62,7 +62,7 @@ func main() {
 		log.Fatalf("PLATFORM_SPEND_WALLET_ADDRESS (%s) does not match the address derived from PLATFORM_SPEND_WALLET_ENC_MNEMONIC (%s) — these must be the same wallet", platformSpendWalletAddr, derivedAddr)
 	}
 
-	usdcAssetID := uint64(10458941) // testnet default
+	usdcAssetID := uint64(10458941)                                         // testnet default
 	relayNetwork := "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=" // testnet default
 	relayFeePayer := "ZMFK2OI7ZBD2U27ISERZC4S6LKM6WMFJPZQ4MYNJDZ2VNBNMBA67RA22AA"
 	if envOr("ALGORAND_NETWORK", "testnet") == "mainnet" {
@@ -92,6 +92,7 @@ func main() {
 		RelayNetwork:              relayNetwork,
 		RelayFeePayer:             relayFeePayer,
 		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
+		FrontendURL:               envOr("FRONTEND_URL", "http://localhost:3000"),
 	})
 	runner.SetPlatformKeys(map[string]string{
 		"gemini":    os.Getenv("PLATFORM_GEMINI_API_KEY"),

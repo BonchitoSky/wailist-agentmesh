@@ -32,6 +32,26 @@ type PaymentPayload struct {
 	Scheme      string       `json:"scheme"`
 	Network     string       `json:"network"`
 	Payload     PaymentGroup `json:"payload"`
+	// Resource/Extensions carry the Bazaar-catalogable identity of what this
+	// payment is for. The facilitator's discovery extraction
+	// (extractDiscoveryInfo, @x402/extensions) reads these fields off the
+	// payment PAYLOAD, not off PaymentRequirements below -- a real v2 client
+	// is expected to copy them verbatim from the challenge it received onto
+	// its own outgoing payload. Before this field existed, any caller that
+	// did send them here (correctly) got them silently dropped on decode
+	// (Go's json.Unmarshal ignores unknown fields), so they could never
+	// reach the facilitator at all regardless of what the caller sent.
+	// Optional on the wire (omitempty): a minimal/legacy caller that omits
+	// them decodes safely into a nil map either way -- see
+	// x402relay.go's relaySettleAndForward and relaySelfSettle, which now
+	// set these fields SERVER-SIDE, authoritatively, before forwarding to
+	// Verify/Settle regardless of what the caller's own payload carried:
+	// the resource server, not the caller, is the one that actually knows
+	// what a payment against its own route is for, so correctness here
+	// should never depend on every caller (including this codebase's own
+	// internal engine self-call) remembering to echo it back.
+	Resource   map[string]any `json:"resource,omitempty"`
+	Extensions map[string]any `json:"extensions,omitempty"`
 }
 
 type PaymentRequirements struct {
