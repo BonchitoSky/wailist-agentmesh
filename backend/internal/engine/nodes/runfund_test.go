@@ -56,7 +56,7 @@ func TestFundRunReserveNoopOnNonPositiveAmount(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		FrontendURL:              "https://example.test",
+		BaseURL:                  "https://example.test",
 	}
 
 	for _, amount := range []int64{0, -1, -100} {
@@ -108,7 +108,7 @@ func TestFundRunReserveSuccess(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		FrontendURL:              "https://example.test",
+		BaseURL:                  "https://example.test",
 	}
 
 	txID, err := nodes.FundRunReserve(context.Background(), cfg, "run-1", 500000)
@@ -134,13 +134,12 @@ func TestFundRunReserveSuccess(t *testing.T) {
 	if settleReqs.PaymentRequirements.Extra["tag"] != "x402-global-challenge" {
 		t.Fatalf("want settle Extra.tag=x402-global-challenge, got %v", settleReqs.PaymentRequirements.Extra["tag"])
 	}
-	// Resource is cfg.FrontendURL, not a per-run informational route with a
-	// runId query param -- same real, crawlable-page identity every other
-	// settlement path uses, so the facilitator's leaderboard label/logo
-	// crawl (which only resolves against a real browsable page) stays
-	// consistent instead of resolving to a bare, ever-changing backend URL.
-	if settleReqs.PaymentRequirements.Resource != "https://example.test" {
-		t.Fatalf("want Resource=FrontendURL, got %q", settleReqs.PaymentRequirements.Resource)
+	// Resource is cfg.BaseURL + the real /x402/relay/run-funding path, not a
+	// per-run runId-specific URL -- matches every actually-cataloged real
+	// resource's convention of a real API endpoint on the resource server's
+	// own domain, not an opaque identifier or a separate marketing domain.
+	if want := "https://example.test/x402/relay/run-funding"; settleReqs.PaymentRequirements.Resource != want {
+		t.Fatalf("want Resource=%q, got %q", want, settleReqs.PaymentRequirements.Resource)
 	}
 }
 
@@ -164,7 +163,7 @@ func TestFundRunReserveVerifyInvalidSurfacesError(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		FrontendURL:              "https://example.test",
+		BaseURL:                  "https://example.test",
 	}
 
 	txID, err := nodes.FundRunReserve(context.Background(), cfg, "run-1", 500000)
@@ -199,7 +198,7 @@ func TestFundRunReserveSettleFailureSurfacesError(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		FrontendURL:              "https://example.test",
+		BaseURL:                  "https://example.test",
 	}
 
 	txID, err := nodes.FundRunReserve(context.Background(), cfg, "run-1", 500000)
@@ -237,7 +236,7 @@ func TestFundRunReserveSettleTransportErrorIsIndeterminate(t *testing.T) {
 		RelayNetwork:             "algorand:testnet",
 		RelayFeePayer:            "FEEPAYERADDR",
 		ExpectedAssetID:          10458941,
-		FrontendURL:              "https://example.test",
+		BaseURL:                  "https://example.test",
 	}
 
 	txID, err := nodes.FundRunReserve(context.Background(), cfg, "run-1", 500000)
