@@ -75,6 +75,10 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 		// verify/settle both succeeded and real money moved every time.
 		Extensions: map[string]any{
 			"bazaar": map[string]any{
+				// See x402relay.go's bazaarDiscoveryExtension doc comment on
+				// routeTemplate -- same reasoning, this route's path never
+				// varies either.
+				"routeTemplate": "/x402/relay/run-funding",
 				"info": map[string]any{
 					"input": map[string]any{"type": "http", "method": "GET"},
 				},

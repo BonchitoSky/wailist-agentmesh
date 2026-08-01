@@ -468,6 +468,16 @@ func bazaarDiscoveryExtension(target string) map[string]any {
 	}
 	return map[string]any{
 		"bazaar": map[string]any{
+			// routeTemplate (sibling of info/schema, same convention as
+			// GoPlausible's own Tendril reference implementation) tells the
+			// facilitator to canonicalize this resource as origin+routeTemplate
+			// instead of origin+actual-request-pathname. Every call this
+			// route ever handles -- self-listing or any ?target= value --
+			// is physically the same path, /x402/relay, so without this the
+			// facilitator has no reason to merge them and nothing changes
+			// today; this only starts mattering if a future route here ever
+			// grows a path param instead of a query param.
+			"routeTemplate": "/x402/relay",
 			"info": map[string]any{
 				"input":  input,
 				"output": map[string]any{"type": "json", "example": outputExample},
