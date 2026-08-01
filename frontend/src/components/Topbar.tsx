@@ -11,6 +11,15 @@ export function Topbar() {
   const pathname = usePathname();
   const { signOut, user } = useAuth();
 
+  // Avatar initials from the signed-in email's local part (first two
+  // alphanumerics, uppercased). Falls back to "AC" while auth is still loading.
+  const initials =
+    (user?.email ?? "")
+      .split("@")[0]
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .slice(0, 2)
+      .toUpperCase() || "AC";
+
   // Account menu opens two ways: hovering with a mouse (soft — closes shortly
   // after the pointer leaves the avatar and panel) or clicking/tapping (pinned —
   // survives mouse-leave, closes on outside press, Escape, or item selection).
@@ -137,7 +146,7 @@ export function Topbar() {
               setMenuState((s) => (s === "pinned" ? "closed" : "pinned"))
             }
           >
-            AC
+            {initials}
           </button>
           {menuOpen && (
             <div className="profile-menu__panel" role="menu">
@@ -165,7 +174,7 @@ export function Topbar() {
                       flexShrink: 0,
                     }}
                   >
-                    AC
+                    {initials}
                   </div>
                   <div style={{ minWidth: 0 }}>
                     <div
