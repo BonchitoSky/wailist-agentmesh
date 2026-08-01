@@ -146,18 +146,29 @@ const relaySelfDescription = "AgentMesh x402 relay — pays real x402 endpoints 
 // why this exists: a Bazaar crawler visiting the bare route previously got
 // a 400, never a real 402 to catalog.
 func (d *Deps) relaySelfChallenge(w http.ResponseWriter, r *http.Request) {
+	// d.BaseURL + the real route path, NOT d.FrontendURL: every actually-
+	// cataloged mainnet resource pulled from the real facilitator (Amarok,
+	// Syra) uses its own real API endpoint path as resource.url, never a
+	// separate marketing domain's bare root -- confirmed live 2026-08-01
+	// after the mimeType/routeTemplate fixes still left us completely absent
+	// from /discovery/resources despite a schema-perfect declaration and a
+	// real settlement landing. FrontendURL bought the leaderboard's cosmetic
+	// label/logo (a real crawlable page resolves those) at the cost of
+	// cataloging never firing at all; matching the real working examples
+	// matters more than the cosmetic hit.
+	selfResourceURL := d.BaseURL + "/x402/relay"
 	challenge := map[string]any{
 		"x402Version": 2,
 		// Top-level, spec-shaped ResourceInfo -- see resourceInfo's doc
 		// comment for why this (not accepts[0].resource below, which is only
 		// kept for the v1-dialect stragglers that still read it there) is
 		// what actually makes this endpoint catalogable.
-		"resource": resourceInfo(d.FrontendURL, relaySelfDescription),
+		"resource": resourceInfo(selfResourceURL, relaySelfDescription),
 		"accepts": []map[string]any{{
 			"scheme":            "exact",
 			"network":           d.RelayNetwork,
 			"amount":            relaySelfServiceUSDMicros,
-			"resource":          d.FrontendURL,
+			"resource":          selfResourceURL,
 			"description":       relaySelfDescription,
 			"payTo":             d.PlatformWalletAddress,
 			"maxTimeoutSeconds": 300,
@@ -204,13 +215,14 @@ func (d *Deps) relaySelfSettle(w http.ResponseWriter, r *http.Request, xPaymentH
 		return
 	}
 
+	selfResourceURL := d.BaseURL + "/x402/relay"
 	reqs := x402.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           d.RelayNetwork,
 		PayTo:             d.PlatformWalletAddress,
 		Asset:             strconv.FormatUint(d.USDCAssetID, 10),
 		MaxAmountRequired: relaySelfServiceUSDMicros,
-		Resource:          d.FrontendURL,
+		Resource:          selfResourceURL,
 		Description:       relaySelfDescription,
 		MimeType:          "application/json",
 		Extra: map[string]any{
@@ -229,7 +241,7 @@ func (d *Deps) relaySelfSettle(w http.ResponseWriter, r *http.Request, xPaymentH
 	// (including this codebase's own internal engine self-call in
 	// tool402.go) remembering to echo the challenge's resource/extensions
 	// back onto its own payload.
-	payload.Resource = resourceInfo(d.FrontendURL, relaySelfDescription)
+	payload.Resource = resourceInfo(selfResourceURL, relaySelfDescription)
 	payload.Extensions = bazaarDiscoveryExtension("")
 
 	verifyResult, err := d.FacilitatorClient.Verify(ctx, payload, reqs)
@@ -529,28 +541,27 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 	}
 
 	description := relayTargetDescription(target)
+	// d.BaseURL + the real route path, NOT d.FrontendURL and NOT target: see
+	// relaySelfChallenge's doc comment -- every actually-cataloged mainnet
+	// resource (Amarok, Syra) uses its own real API path as resource.url,
+	// never a separate marketing domain. Using target here was tried
+	// earlier and re-branded our own leaderboard row as whichever downstream
+	// target was paid through us most recently (confirmed live -- one
+	// CANIX402 settlement relabeled us as "CANIX402", complete with their
+	// logo); using FrontendURL kept branding stable but never once
+	// cataloged. This keeps branding stable AND uses a real path --
+	// bazaarDiscoveryExtension(target)'s queryParams + routeTemplate already
+	// model every ?target= value as one parameterized resource, not N
+	// per-target ones, so collapsing them under this one URL costs no
+	// precision.
+	targetResourceURL := d.BaseURL + "/x402/relay"
 	challenge := map[string]any{
 		"x402Version": 2,
 		// Top-level, spec-shaped ResourceInfo -- see resourceInfo's doc
 		// comment. Without this, no real v2 client has anything to echo
 		// back onto its payment payload, so this route (despite varying
 		// price per ?target=) can never catalog any of its settlements.
-		//
-		// url is d.FrontendURL, NOT target: the facilitator's leaderboard
-		// branding (label/logo) reads this same resource.url off the most
-		// recent settlement for a payTo address, and using target here
-		// meant our own merchant row kept re-branding itself as whichever
-		// downstream target was paid through us most recently (confirmed
-		// live -- one CANIX402 settlement was enough to relabel our
-		// leaderboard entry as "CANIX402", complete with their logo).
-		// d.FrontendURL keeps that branding stable as AgentMesh regardless
-		// of target; relayTargetDescription(target) below still carries the
-		// per-request specificity (what this particular payment was for),
-		// and bazaarDiscoveryExtension(target)'s queryParams already models
-		// this route as one parameterized resource, not N per-target ones --
-		// so this doesn't cost any real precision, only removes an
-		// unintended side effect.
-		"resource": resourceInfo(d.FrontendURL, description),
+		"resource": resourceInfo(targetResourceURL, description),
 		"accepts": []map[string]any{{
 			"scheme":  "exact",
 			"network": d.RelayNetwork,
@@ -639,24 +650,21 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
+	targetResourceURL := d.BaseURL + "/x402/relay"
 	reqs := x402.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           d.RelayNetwork,
 		PayTo:             d.PlatformWalletAddress,
 		Asset:             strconv.FormatUint(d.USDCAssetID, 10),
 		MaxAmountRequired: quote.MaxAmountRequired,
-		// FRONTEND_URL, not our own bare JSON relay route: confirmed live
-		// against the facilitator's own leaderboard data (/data/leaderboards)
-		// that resource resolves into two SEPARATE things -- "sub" (domain)
-		// is just a mechanical hostname parse of this URL and resolves for
-		// almost anyone, but "label"/"logo" require the facilitator to
-		// actually crawl this URL's hostname for a <title> tag and a
-		// favicon/apple-touch-icon. That only succeeds for a real browsable
-		// page (confirmed: www.agent-mesh.app serves both) -- a bare JSON
-		// API domain (our own backend, or e.g. prism's onrender.com host)
-		// resolves "sub" but stays permanently masked/logo-less, matching
-		// prism's own real, 20-settlement, still-unbranded leaderboard row.
-		Resource:    d.FrontendURL,
+		// d.BaseURL + real path, matching relayInboundChallenge's challenge
+		// above and every actually-cataloged mainnet resource (Amarok,
+		// Syra) -- see targetResourceURL's doc comment there. FrontendURL
+		// bought a nicer label/logo at the cost of never once appearing in
+		// /discovery/resources (confirmed live 2026-08-01: schema-perfect
+		// declaration, real settlement, still zero catalog entries) --
+		// matching the working examples' convention takes priority.
+		Resource:    targetResourceURL,
 		Description: "AgentMesh — give your AI agents a wallet, let them pay their own way",
 		MimeType:    "application/json",
 		// Without extra.feePayer the facilitator can't locate the fee-pooled
@@ -680,11 +688,9 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 	// Set authoritatively, server-side, regardless of what the caller's own
 	// payload carried -- see PaymentPayload.Resource's doc comment. Mirrors
 	// exactly what relayInboundChallenge showed this same caller a moment
-	// earlier: same d.FrontendURL identity as reqs.Resource above (kept
-	// deliberately in sync now -- see resourceInfo's call site in
-	// relayInboundChallenge for why target's own URL was tried first and
-	// reverted), same relayTargetDescription for the per-request specifics.
-	payload.Resource = resourceInfo(d.FrontendURL, relayTargetDescription(target))
+	// earlier: same targetResourceURL identity as reqs.Resource above, same
+	// relayTargetDescription for the per-request specifics.
+	payload.Resource = resourceInfo(targetResourceURL, relayTargetDescription(target))
 	payload.Extensions = bazaarDiscoveryExtension(target)
 
 	verifyResult, err := d.FacilitatorClient.Verify(ctx, payload, reqs)

@@ -92,7 +92,6 @@ func main() {
 		RelayNetwork:              relayNetwork,
 		RelayFeePayer:             relayFeePayer,
 		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
-		FrontendURL:               envOr("FRONTEND_URL", "http://localhost:3000"),
 	})
 	runner.SetPlatformKeys(map[string]string{
 		"gemini":    os.Getenv("PLATFORM_GEMINI_API_KEY"),
