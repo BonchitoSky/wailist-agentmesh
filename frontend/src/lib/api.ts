@@ -104,7 +104,9 @@ export const workflows = {
       const res = await fetch(`${BASE}/workflows/${id}`, {
         credentials: "include",
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "workflow fetch failed");
+      return data;
     }
     await delay(150);
     if (id === "new")
@@ -121,7 +123,9 @@ export const workflows = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "workflow create failed");
+      return data;
     }
     await delay(300);
     return { id: `wf-${Date.now()}`, name, nodes: [], edges: [] };
@@ -136,7 +140,9 @@ export const workflows = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(wf),
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "workflow update failed");
+      return data;
     }
     await delay(200);
     return {
@@ -178,7 +184,9 @@ export const workflows = {
         headers: input ? { "Content-Type": "application/json" } : {},
         body: input ? JSON.stringify(input) : undefined,
       });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "run failed");
+      return data;
     }
     await delay(200);
     return { runId: `r-${Math.floor(1800 + Math.random() * 200)}` };
@@ -233,7 +241,9 @@ export const agents = {
           body: JSON.stringify({ amount }),
         },
       );
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "fund failed");
+      return data;
     }
     await delay(500);
     return {
@@ -302,12 +312,19 @@ export const waitlist = {
 
 // -- Payments ---------------------------------------------------------------
 export const payments = {
-  createRazorpayOrder: async (
-    amountINRPaise: number
-  ): Promise<{ order_id: string; amount: number; currency: string; key_id: string }> => {
+  createCashfreeOrder: async (
+    amountINRPaise: number,
+  ): Promise<{
+    order_id: string;
+    payment_session_id: string;
+    amount: number;
+    currency: string;
+    app_id: string;
+  }> => {
     if (!BASE) throw new Error("payments require a configured backend");
-    const res = await fetch(`${BASE}/payments/razorpay/order`, {
-      method: "POST", credentials: "include",
+    const res = await fetch(`${BASE}/payments/cashfree/order`, {
+      method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ amount_inr_paise: amountINRPaise }),
     });
@@ -316,16 +333,15 @@ export const payments = {
     return data;
   },
 
-  verifyRazorpayPayment: async (payload: {
-    razorpay_order_id: string;
-    razorpay_payment_id: string;
-    razorpay_signature: string;
-  }): Promise<{ status: string; credited_usd_micros: number }> => {
+  verifyCashfreePayment: async (
+    orderId: string,
+  ): Promise<{ status: string; credited_usd_micros: number }> => {
     if (!BASE) throw new Error("payments require a configured backend");
-    const res = await fetch(`${BASE}/payments/razorpay/verify`, {
-      method: "POST", credentials: "include",
+    const res = await fetch(`${BASE}/payments/cashfree/verify`, {
+      method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ order_id: orderId }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "payment verification failed");

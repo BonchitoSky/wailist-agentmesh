@@ -18,14 +18,16 @@ import (
 )
 
 const (
-	minRazorpayAmountPaise = 100
-	// 5,00,000 INR — well above any real top-up preset, guards against fat-fingered or
-	// abusive amounts and keeps values comfortably inside float64 precision for the credit
-	// math in CreateCreditTransaction.
-	maxRazorpayAmountPaise = 5_00_000_00
+	minCashfreeAmountPaise = 100
+	// 5,00,000 INR cap — well above any real top-up preset, guards against
+	// fat-fingered or abusive amounts.
+	maxCashfreeAmountPaise = 5_00_000_00
+
+	minCryptoAmountUSDCents = 100     // $1
+	maxCryptoAmountUSDCents = 600_000 // $6,000
 )
 
-func (d *Deps) CreateRazorpayOrder(w http.ResponseWriter, r *http.Request) {
+func (d *Deps) CreateCashfreeOrder(w http.ResponseWriter, r *http.Request) {
 	userID, _ := r.Context().Value(CtxUserID).(string)
 
 	var body struct {
@@ -35,42 +37,58 @@ func (d *Deps) CreateRazorpayOrder(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if body.AmountINRPaise < minRazorpayAmountPaise {
+	if body.AmountINRPaise < minCashfreeAmountPaise {
 		respond.Error(w, http.StatusBadRequest, "amount must be at least 100 paise")
 		return
 	}
-	if body.AmountINRPaise > maxRazorpayAmountPaise {
+	if body.AmountINRPaise > maxCashfreeAmountPaise {
 		respond.Error(w, http.StatusBadRequest, "amount exceeds maximum allowed")
 		return
 	}
 
 	rate, err := payments.FetchINRToUSDRate(r.Context())
 	if err != nil {
-		log.Printf("razorpay order: fx rate: %v", err)
+		log.Printf("cashfree order: fx rate: %v", err)
 		go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("FX rate fetch failing, top-ups are down: %v", err))
 		respond.Error(w, http.StatusBadGateway, "could not fetch exchange rate")
 		return
 	}
 
-	receipt := uuid.New().String()
-	order, err := d.Razorpay.CreateOrder(r.Context(), body.AmountINRPaise, receipt)
+	user, err := d.Store.GetUserByID(r.Context(), userID)
 	if err != nil {
-		log.Printf("razorpay order: create order: %v", err)
-		respond.Error(w, http.StatusBadGateway, "razorpay order creation failed")
-		return
-	}
-
-	if _, err := d.Store.CreateCreditTransaction(r.Context(), userID, order.ID, body.AmountINRPaise, rate); err != nil {
-		log.Printf("razorpay order: create ledger row: %v", err)
+		log.Printf("cashfree order: get user: %v", err)
 		respond.Error(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
+	orderID := uuid.New().String()
+
+	// Create the ledger row before calling Cashfree so a Cashfree failure
+	// leaves a harmless dead pending row rather than a real payable order
+	// with no ledger row to complete.
+	if _, err := d.Store.CreateCreditTransaction(r.Context(), userID, orderID, body.AmountINRPaise, rate); err != nil {
+		log.Printf("cashfree order: create ledger row: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// Cashfree requires a phone; use a placeholder since our user model
+	// does not collect phone numbers.
+	const placeholderPhone = "9999999999"
+
+	order, err := d.Cashfree.CreateOrder(r.Context(), body.AmountINRPaise, orderID, userID, user.Email, placeholderPhone)
+	if err != nil {
+		log.Printf("cashfree order: create order: %v", err)
+		respond.Error(w, http.StatusBadGateway, "cashfree order creation failed")
+		return
+	}
+
 	respond.JSON(w, http.StatusCreated, map[string]any{
-		"order_id": order.ID,
-		"amount":   body.AmountINRPaise,
-		"currency": "INR",
-		"key_id":   d.RazorpayKeyID,
+		"order_id":           order.OrderID,
+		"payment_session_id": order.PaymentSessionID,
+		"amount":             body.AmountINRPaise,
+		"currency":           "INR",
+		"app_id":             d.CashfreeAppID,
 	})
 }
 
@@ -87,35 +105,41 @@ func (d *Deps) GetCreditBalance(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"credit_usd_micros": balance})
 }
 
-func (d *Deps) VerifyRazorpayPayment(w http.ResponseWriter, r *http.Request) {
+// VerifyCashfreePayment is called by the frontend after the Cashfree JS SDK
+// reports payment completion. It fetches the order status from Cashfree's API
+// (server-to-server, so it cannot be spoofed) and credits the user if PAID.
+func (d *Deps) VerifyCashfreePayment(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		OrderID   string `json:"razorpay_order_id"`
-		PaymentID string `json:"razorpay_payment_id"`
-		Signature string `json:"razorpay_signature"`
+		OrderID string `json:"order_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil ||
-		body.OrderID == "" || body.PaymentID == "" || body.Signature == "" {
-		respond.Error(w, http.StatusBadRequest, "missing required fields")
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OrderID == "" {
+		respond.Error(w, http.StatusBadRequest, "missing order_id")
 		return
 	}
 
-	if !d.Razorpay.VerifySignature(body.OrderID, body.PaymentID, body.Signature) {
-		respond.Error(w, http.StatusBadRequest, "signature verification failed")
+	status, err := d.Cashfree.GetOrderStatus(r.Context(), body.OrderID)
+	if err != nil {
+		log.Printf("cashfree verify: get order status: %v", err)
+		respond.Error(w, http.StatusBadGateway, "could not verify payment with cashfree")
+		return
+	}
+	if status != "PAID" {
+		respond.Error(w, http.StatusPaymentRequired, "payment not completed")
 		return
 	}
 
-	creditedMicros, applied, err := d.Store.CompleteCreditTransaction(r.Context(), body.OrderID, body.PaymentID)
+	creditedMicros, applied, err := d.Store.CompleteCreditTransaction(r.Context(), "cashfree", body.OrderID, body.OrderID)
 	if errors.Is(err, db.ErrCreditTransactionNotFound) {
 		respond.Error(w, http.StatusBadRequest, "unknown order")
 		return
 	}
 	if err != nil {
-		log.Printf("razorpay verify: complete transaction: %v", err)
+		log.Printf("cashfree verify: complete transaction: %v", err)
 		respond.Error(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	if applied {
-		go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s)", float64(creditedMicros)/1e6, body.OrderID, body.PaymentID))
+		go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, via cashfree)", float64(creditedMicros)/1e6, body.OrderID))
 	}
 
 	respond.JSON(w, http.StatusOK, map[string]any{
@@ -124,101 +148,203 @@ func (d *Deps) VerifyRazorpayPayment(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RazorpayWebhook is the server-side backstop for CreateRazorpayOrder/VerifyRazorpayPayment:
-// if a client-side verify call never lands (dropped connection, closed tab) after Razorpay
-// actually captures a payment, this webhook independently completes the same ledger row.
-// CompleteCreditTransaction is idempotent, so it's safe to call from both this webhook and
-// the client verify path for the same order without double-crediting.
+// CashfreeWebhook is the server-side backstop for CreateCashfreeOrder /
+// VerifyCashfreePayment: if a client-side verify call never lands (dropped
+// connection, closed tab) after Cashfree actually captures a payment, this
+// webhook independently completes the same ledger row.
+// CompleteCreditTransaction is idempotent, so it is safe to call from both
+// this webhook and the client verify path for the same order.
 //
-// This is a public, unauthenticated route (registered outside the JWT auth group) because
-// Razorpay's servers call it directly, with no user session — the request is instead
-// authenticated by the HMAC signature in the X-Razorpay-Signature header, verified against
-// the webhook secret configured in the Razorpay dashboard.
-func (d *Deps) RazorpayWebhook(w http.ResponseWriter, r *http.Request) {
+// Public, unauthenticated route — Cashfree's servers call it directly,
+// authenticated by the HMAC-SHA256 signature in the x-webhook-signature
+// header, verified against the webhook secret configured in Cashfree's
+// dashboard.
+func (d *Deps) CashfreeWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		respond.Error(w, http.StatusBadRequest, "could not read body")
 		return
 	}
 
-	signature := r.Header.Get("X-Razorpay-Signature")
-	if signature == "" || !d.Razorpay.VerifyWebhookSignature(body, signature) {
-		log.Printf("razorpay webhook: rejected signature from %s", r.RemoteAddr)
-		go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("rejected webhook signature from %s", r.RemoteAddr))
+	signature := r.Header.Get("x-webhook-signature")
+	timestamp := r.Header.Get("x-webhook-timestamp")
+	if signature == "" || timestamp == "" || !d.Cashfree.VerifyWebhookSignature(body, signature, timestamp) {
+		log.Printf("cashfree webhook: rejected signature from %s", r.RemoteAddr)
+		go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("rejected cashfree webhook signature from %s", r.RemoteAddr))
 		respond.Error(w, http.StatusBadRequest, "signature verification failed")
 		return
 	}
 
 	var event struct {
-		Event   string `json:"event"`
-		Payload struct {
+		Type string `json:"type"`
+		Data struct {
+			Order struct {
+				OrderID string `json:"order_id"`
+				OrderStatus string `json:"order_status"`
+			} `json:"order"`
 			Payment struct {
-				Entity struct {
-					ID             string `json:"id"`
-					OrderID        string `json:"order_id"`
-					AmountRefunded int64  `json:"amount_refunded"`
-				} `json:"entity"`
+				PaymentID     string `json:"cf_payment_id"`
+				PaymentStatus string `json:"payment_status"`
 			} `json:"payment"`
-		} `json:"payload"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &event); err != nil {
 		respond.Error(w, http.StatusBadRequest, "invalid payload")
 		return
 	}
 
-	orderID := event.Payload.Payment.Entity.OrderID
+	orderID := event.Data.Order.OrderID
+	if orderID == "" {
+		respond.JSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+		return
+	}
 
-	switch event.Event {
-	case "payment.captured":
-		paymentID := event.Payload.Payment.Entity.ID
-		if orderID == "" || paymentID == "" {
-			respond.Error(w, http.StatusBadRequest, "missing order or payment id")
-			return
-		}
-
-		creditedMicros, applied, err := d.Store.CompleteCreditTransaction(r.Context(), orderID, paymentID)
+	switch event.Type {
+	case "PAYMENT_SUCCESS_WEBHOOK":
+		paymentID := event.Data.Payment.PaymentID
+		creditedMicros, applied, err := d.Store.CompleteCreditTransaction(r.Context(), "cashfree", orderID, paymentID)
 		if err != nil {
 			if errors.Is(err, db.ErrCreditTransactionNotFound) {
-				// A 4xx here tells Razorpay to stop retrying — this order will never exist,
-				// so retrying is pure noise, not a path to eventual success.
-				log.Printf("razorpay webhook: unknown order_id %s (payment %s)", orderID, paymentID)
+				log.Printf("cashfree webhook: unknown order_id %s (payment %s)", orderID, paymentID)
 				respond.Error(w, http.StatusBadRequest, "unknown order")
 				return
 			}
-			log.Printf("razorpay webhook: complete transaction: %v", err)
+			log.Printf("cashfree webhook: complete transaction: %v", err)
 			go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("failed to complete order %s: %v", orderID, err))
 			respond.Error(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 		if applied {
-			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s, via webhook)", float64(creditedMicros)/1e6, orderID, paymentID))
+			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s, via cashfree webhook)", float64(creditedMicros)/1e6, orderID, paymentID))
 		}
-
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
-	case "refund.processed", "payment.refunded":
-		if orderID == "" {
-			respond.Error(w, http.StatusBadRequest, "missing order id")
+	case "PAYMENT_FAILED_WEBHOOK", "ORDER_EXPIRED_WEBHOOK":
+		if err := d.Store.MarkCreditTransactionStatus(r.Context(), "cashfree", orderID, "failed"); err != nil {
+			log.Printf("cashfree webhook: mark failed: %v", err)
+			respond.Error(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
-		reversed, applied, err := d.Store.RefundCreditTransaction(r.Context(), orderID, event.Payload.Payment.Entity.AmountRefunded)
+	default:
+		respond.JSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+	}
+}
+
+// CreateCryptoInvoice opens a hosted NOWPayments checkout for a USD-denominated top-up.
+func (d *Deps) CreateCryptoInvoice(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+
+	var body struct {
+		AmountUSDCents int64 `json:"amount_usd_cents"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.AmountUSDCents < minCryptoAmountUSDCents {
+		respond.Error(w, http.StatusBadRequest, "amount must be at least 100 cents")
+		return
+	}
+	if body.AmountUSDCents > maxCryptoAmountUSDCents {
+		respond.Error(w, http.StatusBadRequest, "amount exceeds maximum allowed")
+		return
+	}
+
+	orderID := uuid.New().String()
+	if _, err := d.Store.CreateCryptoCreditTransaction(r.Context(), userID, "nowpayments", orderID, body.AmountUSDCents); err != nil {
+		log.Printf("nowpayments invoice: create ledger row: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	invoice, err := d.NOWPayments.CreateInvoice(
+		r.Context(),
+		body.AmountUSDCents,
+		orderID,
+		d.BaseURL+"/payments/nowpayments/webhook",
+		d.FrontendURL+"/billing?crypto=success",
+		d.FrontendURL+"/billing?crypto=cancelled",
+	)
+	if err != nil {
+		log.Printf("nowpayments invoice: %v", err)
+		respond.Error(w, http.StatusBadGateway, "nowpayments invoice creation failed")
+		return
+	}
+
+	respond.JSON(w, http.StatusCreated, map[string]any{
+		"order_id":    orderID,
+		"invoice_url": invoice.InvoiceURL,
+	})
+}
+
+// NOWPaymentsWebhook is the sole completion path for crypto top-ups.
+func (d *Deps) NOWPaymentsWebhook(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "could not read body")
+		return
+	}
+
+	signature := r.Header.Get("x-nowpayments-sig")
+	if signature == "" || !d.NOWPayments.VerifyIPNSignature(body, signature) {
+		log.Printf("nowpayments webhook: rejected signature from %s", r.RemoteAddr)
+		go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("rejected nowpayments webhook signature from %s", r.RemoteAddr))
+		respond.Error(w, http.StatusBadRequest, "signature verification failed")
+		return
+	}
+
+	var event struct {
+		PaymentID     json.Number `json:"payment_id"`
+		OrderID       string      `json:"order_id"`
+		PaymentStatus string      `json:"payment_status"`
+	}
+	if err := json.Unmarshal(body, &event); err != nil {
+		respond.Error(w, http.StatusBadRequest, "invalid payload")
+		return
+	}
+	if event.OrderID == "" {
+		respond.Error(w, http.StatusBadRequest, "missing order id")
+		return
+	}
+	paymentID := event.PaymentID.String()
+
+	switch event.PaymentStatus {
+	case "finished":
+		creditedMicros, applied, err := d.Store.CompleteCreditTransaction(r.Context(), "nowpayments", event.OrderID, paymentID)
 		if err != nil {
 			if errors.Is(err, db.ErrCreditTransactionNotFound) {
-				log.Printf("razorpay webhook: refund for unknown order_id %s", orderID)
+				log.Printf("nowpayments webhook: unknown order_id %s (payment %s)", event.OrderID, paymentID)
 				respond.Error(w, http.StatusBadRequest, "unknown order")
 				return
 			}
-			log.Printf("razorpay webhook: refund order %s: %v", orderID, err)
-			go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("failed to process refund for order %s: %v", orderID, err))
+			log.Printf("nowpayments webhook: complete transaction: %v", err)
+			go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("failed to complete crypto order %s: %v", event.OrderID, err))
 			respond.Error(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 		if applied {
-			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("refunded $%.2f reversed (order %s)", float64(reversed)/1e6, orderID))
+			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s, via nowpayments)", float64(creditedMicros)/1e6, event.OrderID, paymentID))
 		}
+		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
-		respond.JSON(w, http.StatusOK, map[string]any{"status": "refunded", "reversed_usd_micros": reversed})
+	case "failed", "expired":
+		if err := d.Store.MarkCreditTransactionStatus(r.Context(), "nowpayments", event.OrderID, "failed"); err != nil {
+			log.Printf("nowpayments webhook: mark failed: %v", err)
+			respond.Error(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+
+	case "partially_paid":
+		if err := d.Store.MarkCreditTransactionStatus(r.Context(), "nowpayments", event.OrderID, "partial"); err != nil {
+			log.Printf("nowpayments webhook: mark partial: %v", err)
+			respond.Error(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		go alert.Notify(context.Background(), alert.ChannelPayments, fmt.Sprintf("crypto order %s partially paid — needs manual reconciliation", event.OrderID))
+		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
 	default:
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ignored"})

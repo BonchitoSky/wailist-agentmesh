@@ -10,12 +10,38 @@ import (
 	"github.com/agentmesh/backend/internal/engine"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/x402"
 )
 
 type noopSigner struct{}
 
 func (n *noopSigner) SignAndSendPayment(_ context.Context, _, _ string, _ uint64) (string, error) {
 	return "", nil
+}
+
+// fakeRelaySigner additionally satisfies nodes.USDCGroupSigner (unlike
+// noopSigner), so a Runner built with it will actually route tool402 relay-
+// dialect payments through the relay/Wallet 1 path instead of degrading
+// gracefully with "no platform spend wallet configured".
+type fakeRelaySigner struct{ noopSigner }
+
+func (f *fakeRelaySigner) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
+	return []string{"g0", "g1"}, 0, nil
+}
+
+func newTestRunnerWithRelay(t *testing.T, relayBaseURL string) (*engine.Runner, *db.Store) {
+	t.Helper()
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	store, err := db.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	broker := sse.NewBroker()
+	return engine.NewRunner(store, broker, &fakeRelaySigner{}, relayBaseURL, "platform-enc-mnemonic", engine.X402Config{USDCAssetID: 10458941}), store
 }
 
 func newTestRunner(t *testing.T) (*engine.Runner, *db.Store) {
@@ -30,7 +56,38 @@ func newTestRunner(t *testing.T) (*engine.Runner, *db.Store) {
 	}
 	t.Cleanup(store.Close)
 	broker := sse.NewBroker()
-	return engine.NewRunner(store, broker, &noopSigner{}), store
+	return engine.NewRunner(store, broker, &noopSigner{}, "http://localhost:8080", "", engine.X402Config{USDCAssetID: 10458941}), store
+}
+
+// newTestRunnerWithRunFunding builds a Runner with the full run-level
+// x402 pre-funding path wired up (platform wallet address/mnemonic,
+// facilitator client, relay network/fee payer) — needed by tests that
+// exercise reserveAndFundRun's real settle-then-in-process-payout flow
+// (Task 5), unlike newTestRunner/newTestRunnerWithRelay above which only
+// need the legacy per-call paths and leave these fields zero-valued.
+// maxRelayOutboundUSDMicros is left at 0 (no cap) — none of these tests
+// need to exercise the outbound cap.
+func newTestRunnerWithRunFunding(t *testing.T, relayBaseURL, facilitatorURL string) (*engine.Runner, *db.Store) {
+	t.Helper()
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	store, err := db.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	broker := sse.NewBroker()
+	return engine.NewRunner(store, broker, &fakeRelaySigner{}, relayBaseURL, "platform-spend-enc-mnemonic", engine.X402Config{
+		USDCAssetID:               10458941,
+		PlatformWalletAddress:     "PLATFORMADDR",
+		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+		FacilitatorClient:         x402.NewFacilitatorClient(facilitatorURL),
+		RelayNetwork:              "algorand:testnet",
+		RelayFeePayer:             "FEEPAYERADDR",
+		MaxRelayOutboundUSDMicros: 0,
+	}), store
 }
 
 // TestStopReturnsFalseWhenNotRunning verifies that Stop returns false

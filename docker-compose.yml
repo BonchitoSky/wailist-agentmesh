@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: agentmesh
       POSTGRES_DB: agentmesh
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - agentmesh_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -19,7 +19,7 @@ services:
     build:
       context: ./backend
     ports:
-      - "8080:8080"
+      - "8081:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -29,14 +29,28 @@ services:
       BASE_URL: http://localhost:8080
       FRONTEND_URL: http://localhost:3000
       CORS_ORIGIN: http://localhost:3000
-      # Dev-only fixed secrets for local docker compose — never reuse these values
-      # anywhere real. ENCRYPTION_KEY must stay exactly 32 raw characters (see
-      # backend/internal/wallet/crypto.go); JWT_SECRET has no length requirement
-      # beyond "long and random."
+      # Dev-only fixed secrets — never reuse in production.
       JWT_SECRET: 5a06faa3d53450f33cb2d4727f7c4bc4b030e0fdd9ddd8995ea0c8a797905a0a
       ENCRYPTION_KEY: "00000000000000000000000000000000"
       ALGOD_URL: https://testnet-api.algonode.cloud
       ALGORAND_NETWORK: testnet
+
+      # Dev Algorand wallets (generated with walletgen -skip-opt-in, testnet only)
+      PLATFORM_WALLET_ADDRESS: XJAS6HBWDZB4JW3SQB7GBP7BY3C2I43SGL5WI2KCZHLIUFW5HO4FPCVAW4
+      PLATFORM_WALLET_ENC_MNEMONIC: "H5FK4E549nJY6jqwt7R60tXmEiTTC4ePh8/zreBlbwbhxbti7F9VlHqIQKMZMTqQrYQK9+wvG75g9rsT5rlWAGjdsfjG3pN/Of7SMcwqy1AnOb4koBmSN8kruBZX/zApzOs9LMKkgUJpcIwhdmT1xsT/i2YbuCpzDTeyfe+2NzOnODSlPHUN7gw0akRZHPdoLGkMLznrCEZ6gbl5sKEAvcJ68JwsBxGzO4FPjt8v2zXxZbE1kf0HIrUVrQ=="
+      PLATFORM_SPEND_WALLET_ADDRESS: JH3LVYHSRO6F2O3RMTVOZIPI5AV5UGJ4ZXQZRF7VKB3D34YEELSTB4GU3Y
+      PLATFORM_SPEND_WALLET_ENC_MNEMONIC: "R1lkI+IptsyATMt8uLZ0FpCdX+WN8nGWIaD8bVrRqMRb2FbIuIaSzR9GYvSaxAXHGVlE+wd1Nj7wDF7zIs1R4rXDNFzIFK1TXkxLg264pxSp/TY4afIMDWq2maZShoUh7rO1m/An7l/lvxLROo4+09N51up7FaEAuypXzRJG4ygWxLRhkpXnx41jrS4uQrEUlQrGBSVYF7BcQXLnCQeVAjnxUPsOrA9K2Thf8ru3Uod26zA="
+
+      # Cashfree — replace with real keys from dashboard.cashfree.com
+      # Set CASHFREE_SANDBOX=true while testing
+      CASHFREE_APP_ID: your_cashfree_app_id_here
+      CASHFREE_SECRET_KEY: your_cashfree_secret_key_here
+      CASHFREE_SANDBOX: "true"
+
+      # NOWPayments (crypto top-ups) — replace with real keys
+      NOWPAYMENTS_API_KEY: placeholder_nowpayments_key
+      NOWPAYMENTS_IPN_SECRET: placeholder_nowpayments_ipn_secret
+      NOWPAYMENTS_SANDBOX: "false"
 
 volumes:
   agentmesh_pgdata:

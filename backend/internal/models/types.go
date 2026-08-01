@@ -42,13 +42,18 @@ type WorkflowNode struct {
 	Balance      string   `json:"balance,omitempty"`
 	APIKey       string   `json:"apiKey,omitempty"`
 	Model        string   `json:"model,omitempty"`
-	URL          string   `json:"url,omitempty"`
-	Method       string   `json:"method,omitempty"`
-	Endpoint     string   `json:"endpoint,omitempty"`
-	Price        string   `json:"price,omitempty"`
-	Unit         string   `json:"unit,omitempty"`
-	Provider     string   `json:"provider,omitempty"`
-	Source       string   `json:"source,omitempty"`
+	// KeyMode selects which API key a Provider node's LLM call uses: "byok"
+	// (default, empty string) uses APIKey; "platform" uses AgentMesh's own
+	// key for that Template, resolved server-side and never round-tripped
+	// to the client.
+	KeyMode  string `json:"keyMode,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Method   string `json:"method,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Price    string `json:"price,omitempty"`
+	Unit     string `json:"unit,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Source   string `json:"source,omitempty"`
 	// email action fields
 	EmailTo       string `json:"emailTo,omitempty"`
 	EmailFrom     string `json:"emailFrom,omitempty"`
@@ -188,9 +193,82 @@ type CreditTransaction struct {
 	ProviderOrderID   string     `json:"providerOrderId"`
 	ProviderPaymentID *string    `json:"providerPaymentId,omitempty"`
 	Status            string     `json:"status"`
-	AmountINRPaise    int64      `json:"amountInrPaise"`
-	FXRateUSDPerINR   float64    `json:"fxRateUsdPerInr"`
+	AmountINRPaise    *int64     `json:"amountInrPaise,omitempty"`
+	FXRateUSDPerINR   *float64   `json:"fxRateUsdPerInr,omitempty"`
+	AmountUSDCents    *int64     `json:"amountUsdCents,omitempty"`
 	CreditUSDMicros   int64      `json:"creditUsdMicros"`
 	CreatedAt         time.Time  `json:"createdAt"`
 	CompletedAt       *time.Time `json:"completedAt,omitempty"`
 }
+
+// DebitEntry is one row of the append-only debit_ledger table — a platform
+// fee charged against a user's credit balance for a metered action inside
+// a workflow run.
+type DebitEntry struct {
+	ID              string    `json:"id"`
+	UserID          string    `json:"userId"`
+	WorkflowID      string    `json:"workflowId"`
+	RunID           string    `json:"runId"`
+	NodeID          string    `json:"nodeId"`
+	Kind            string    `json:"kind"`
+	AmountUSDMicros int64     `json:"amountUsdMicros"`
+	CreatedAt       time.Time `json:"createdAt"`
+	// Model, TokensIn, TokensOut are only set for DebitKindPlatformKeyLLMFee
+	// rows — internal margin-tracking data, not billing-authoritative (the
+	// charge is the flat tier fee regardless of actual token count).
+	Model     *string `json:"model,omitempty"`
+	TokensIn  *int    `json:"tokensIn,omitempty"`
+	TokensOut *int    `json:"tokensOut,omitempty"`
+}
+
+const (
+	DebitKindByokFlatFee       = "byok_flat_fee"
+	DebitKindX402PlatformFee   = "x402_platform_fee"
+	DebitKindX402RelayCost     = "x402_relay_cost"
+	DebitKindPlatformKeyLLMFee = "platform_key_llm_fee"
+)
+
+const (
+	ByokFlatFeeUSDMicros     int64 = 10_000  // $0.01
+	X402PlatformFeeUSDMicros int64 = 500_000 // $0.50
+	// MaxSingleX402QuoteUSDMicros is a sanity ceiling on any one attached
+	// tool402 node's live quote during reserveAndFundRun's estimate
+	// summation — generous against any real tool price, tight against an
+	// adversarial or compromised target quoting near int64's range to
+	// force the running sum to overflow negative.
+	MaxSingleX402QuoteUSDMicros int64 = 1_000_000_000 // $1,000/call
+)
+
+type X402RelaySettlement struct {
+	ID                string    `json:"id"`
+	TargetURL         string    `json:"targetUrl"`
+	InboundTxID       *string   `json:"inboundTxId,omitempty"`
+	OutboundTxID      *string   `json:"outboundTxId,omitempty"`
+	AmountAssetMicros int64     `json:"amountAssetMicros"`
+	Status            string    `json:"status"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
+// X402RunFunding is a single real GoPlausible-facilitated inbound payment
+// (Wallet 1 -> Wallet 2) that pre-funds a whole run's worth of downstream
+// x402 tool calls, instead of settling one inbound payment per call. Mirrors
+// x402_run_fundings' columns exactly.
+type X402RunFunding struct {
+	ID                string    `json:"id"`
+	RunID             string    `json:"runId"`
+	InboundTxID       string    `json:"inboundTxId"`
+	AmountAssetMicros int64     `json:"amountAssetMicros"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
+// Platform-key LLM tiers follow Zapier's flat-multiplier pattern: a fixed
+// credit charge per tier per call (1x/3x/5x the BYOK convenience-fee unit),
+// known upfront so it can feed the pre-run cost estimate, rather than live
+// per-token metering. Token usage is still captured (DebitEntry.TokensIn/
+// TokensOut) purely to confirm these multiples hold a healthy margin
+// against real provider cost as pricing/models change.
+const (
+	PlatformKeyEconomyFeeUSDMicros  int64 = 10_000 // $0.01 (1x)
+	PlatformKeyStandardFeeUSDMicros int64 = 30_000 // $0.03 (3x)
+	PlatformKeyFrontierFeeUSDMicros int64 = 50_000 // $0.05 (5x)
+)

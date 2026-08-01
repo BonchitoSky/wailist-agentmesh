@@ -52,8 +52,10 @@ frontend/next-env.d.ts
 
 # backend
 /backend/server
+/backend/walletgen
 /backend/*.env
 /backend/.env
+*.test
 
 # test utilities (local dev only)
 /test-x402/
@@ -75,3 +77,9 @@ frontend/next-env.d.ts
 /Dashboard_change.md
 # standalone static mock of the usage page
 /usage-preview.html
+# root-level planning/scratch docs
+/Docs/
+# subagent-driven-development progress ledger (scratch, not part of the shipped project)
+/.superpowers/
+# subagent-driven-development plans/specs (scratch, not part of the shipped project)
+/docs/superpowers/
