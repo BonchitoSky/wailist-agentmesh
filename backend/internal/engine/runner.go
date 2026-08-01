@@ -33,6 +33,12 @@ type X402Config struct {
 	RelayNetwork              string
 	RelayFeePayer             string
 	MaxRelayOutboundUSDMicros int64
+	// FrontendURL is the same real, crawlable page used for Bazaar-catalog
+	// identity everywhere else (handlers.Deps.FrontendURL) -- threaded here
+	// too so FundRunReserve's settlement can set PaymentPayload.Resource to
+	// it, keeping leaderboard branding consistent across every settlement
+	// path, not just the per-call relay.
+	FrontendURL string
 }
 
 type Runner struct {
@@ -329,7 +335,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		RelayNetwork:             r.x402.RelayNetwork,
 		RelayFeePayer:            r.x402.RelayFeePayer,
 		ExpectedAssetID:          r.x402.USDCAssetID,
-		BaseURL:                  r.relayBaseURL,
+		FrontendURL:              r.x402.FrontendURL,
 	}
 	txID, err := nodes.FundRunReserve(ctx, fundCfg, run.ID, estimate)
 	if err != nil {
