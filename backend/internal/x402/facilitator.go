@@ -159,7 +159,31 @@ func (c *FacilitatorClient) Settle(ctx context.Context, payload PaymentPayload, 
 }
 
 func (c *FacilitatorClient) post(ctx context.Context, path string, payload PaymentPayload, reqs PaymentRequirements, out any) error {
+	// Three top-level keys, not two. The reference client sends
+	// {x402Version, paymentPayload, paymentRequirements} on both /verify and
+	// /settle (@x402-avm/core, dist/cjs/server/index.js -- the verify body at
+	// :167 and the settle body at :200 are identical in shape); this client
+	// has only ever sent the latter two.
+	//
+	// Load-bearing beyond mere shape-matching: in that same SDK both
+	// PaymentRequiredSchema and PaymentPayloadSchema are
+	// z.discriminatedUnion("x402Version", [V1, V2]), and V1 vs V2
+	// requirements differ in precisely the field this package hand-rolls --
+	// V1 reads maxAmountRequired, V2 reads amount, which is what the
+	// MaxAmountRequired `json:"amount"` tag above emits. A server that keys
+	// its parse off a top-level version it never received can fall through
+	// to the V1 branch, where `amount` is unrecognized and `extra` (carrying
+	// tag: x402-global-challenge) comes along only as far as a half-parsed
+	// object -- which is a plausible route to settlements being classified
+	// `direct` instead of `x402-global-challenge`, exactly what
+	// /data/leaderboards?src=... reports for this merchant today.
+	//
+	// Marked plausible, not proven: inferred from the reference client's
+	// wire shape, not confirmed against GoPlausible's server, which we
+	// cannot read. Applied regardless because it is strictly closer to the
+	// reference implementation and costs nothing.
 	body, err := json.Marshal(map[string]any{
+		"x402Version":         payload.X402Version,
 		"paymentPayload":      payload,
 		"paymentRequirements": reqs,
 	})

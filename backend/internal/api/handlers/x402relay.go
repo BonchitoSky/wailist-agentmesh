@@ -254,6 +254,13 @@ func (d *Deps) relaySelfSettle(w http.ResponseWriter, r *http.Request, xPaymentH
 			"tag":      "x402-global-challenge",
 			"decimals": 6,
 		},
+		// Both siblings (relaySettleAndForward, runfund.go) already set this
+		// on the struct POSTed to /verify and /settle; this path was the only
+		// one that declared a bazaar extension in its public challenge and
+		// then dropped it before the facilitator ever saw it. Same argument
+		// relaySelfChallenge passes, so the declaration the caller was shown
+		// and the one sent at settle time are byte-identical.
+		Extensions: bazaarDiscoveryExtension(""),
 	}
 
 	// Set authoritatively, server-side, regardless of what the caller's own
