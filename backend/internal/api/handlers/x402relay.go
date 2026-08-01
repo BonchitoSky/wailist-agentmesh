@@ -212,6 +212,7 @@ func (d *Deps) relaySelfSettle(w http.ResponseWriter, r *http.Request, xPaymentH
 		MaxAmountRequired: relaySelfServiceUSDMicros,
 		Resource:          d.FrontendURL,
 		Description:       relaySelfDescription,
+		MimeType:          "application/json",
 		Extra: map[string]any{
 			"asset":    strconv.FormatUint(d.USDCAssetID, 10),
 			"feePayer": d.RelayFeePayer,
@@ -657,6 +658,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		// prism's own real, 20-settlement, still-unbranded leaderboard row.
 		Resource:    d.FrontendURL,
 		Description: "AgentMesh — give your AI agents a wallet, let them pay their own way",
+		MimeType:    "application/json",
 		// Without extra.feePayer the facilitator can't locate the fee-pooled
 		// stub txn in the payment group and throws server-side (confirmed
 		// live 2026-07-31: "Cannot convert undefined to a BigInt") — see the

@@ -55,6 +55,7 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 		// x402relay.go's relaySettleAndForward already was.
 		Resource:          cfg.FrontendURL,
 		Description:       description,
+		MimeType:          "application/json",
 		PayTo:             cfg.PlatformWalletAddress,
 		MaxTimeoutSeconds: 300,
 		Asset:             strconv.FormatUint(cfg.ExpectedAssetID, 10),
