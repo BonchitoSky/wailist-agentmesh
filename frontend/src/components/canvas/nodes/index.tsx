@@ -19,7 +19,7 @@ interface NodeProps {
   selected: boolean;
   deployed: boolean;
   onMouseDown: (e: React.MouseEvent) => void;
-  onStartWire: (e: React.MouseEvent) => void;
+  onStartWire: (e: React.MouseEvent, port: PortName) => void;
   onPortHover: (port: PortName) => void;
   onPortLeave: () => void;
   attachedSummary?: { model: string | null; tools: number };
@@ -367,7 +367,7 @@ function TriggerNode({
         port="out"
         onHover={() => onPortHover("out")}
         onLeave={onPortLeave}
-        onMouseDown={onStartWire}
+        onMouseDown={(e) => onStartWire(e, "out")}
       />
     </NodeShell>
   );
@@ -387,9 +387,6 @@ function AgentNode({
   const t = NODE_TYPES.agent;
   const tpl =
     AGENT_TEMPLATES.find((x) => x.id === node.template) ?? AGENT_TEMPLATES[0];
-  const shortAddr = node.wallet
-    ? `${node.wallet.slice(0, 6)}…${node.wallet.slice(-4)}`
-    : null;
 
   return (
     <NodeShell
@@ -463,7 +460,9 @@ function AgentNode({
         )}
       </div>
 
-      {/* Wallet row — fully contained, no overflow */}
+      {/* Status row. Agents have no wallet of their own: paid tool calls are
+          funded by the platform wallets and metered against the user's
+          credits, so there is no per-agent address or balance to show. */}
       <div
         style={{
           padding: "8px 14px 10px",
@@ -476,45 +475,9 @@ function AgentNode({
           overflow: "hidden",
         }}
       >
-        {deployed && shortAddr ? (
-          <>
-            {/* Address pill */}
-            <span
-              style={{
-                flex: 1,
-                minWidth: 0,
-                background: "var(--bg)",
-                border: "1px solid var(--border)",
-                borderRadius: 4,
-                padding: "3px 7px",
-                color: "var(--fg-muted)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {shortAddr}
-            </span>
-            {/* Balance */}
-            <span
-              style={{
-                flexShrink: 0,
-                display: "flex",
-                alignItems: "baseline",
-                gap: 3,
-              }}
-            >
-              <span style={{ color: "var(--accent)", fontWeight: 600 }}>
-                {node.balance ?? "0.00"}
-              </span>
-              <span style={{ color: "var(--fg-dim)", fontSize: 9 }}>ALGO</span>
-            </span>
-          </>
-        ) : (
-          <span style={{ color: "var(--fg-dim)", fontSize: 9.5 }}>
-            {deployed ? "wallet provisioned" : "deploy to provision wallet"}
-          </span>
-        )}
+        <span style={{ color: "var(--fg-dim)", fontSize: 9.5 }}>
+          {deployed ? "live · paid calls billed to credits" : "not deployed"}
+        </span>
       </div>
 
       {/* Sub-port labels */}
@@ -563,7 +526,7 @@ function AgentNode({
         port="out"
         onHover={() => onPortHover("out")}
         onLeave={onPortLeave}
-        onMouseDown={onStartWire}
+        onMouseDown={(e) => onStartWire(e, "out")}
         top={38}
       />
       <BottomPort
@@ -706,7 +669,7 @@ function ProviderNode({
         port="top"
         onHover={() => onPortHover("top")}
         onLeave={onPortLeave}
-        onMouseDown={onStartWire}
+        onMouseDown={(e) => onStartWire(e, "top")}
       />
     </NodeShell>
   );
@@ -747,7 +710,7 @@ function ToolNode({
         port="top"
         onHover={() => onPortHover("top")}
         onLeave={onPortLeave}
-        onMouseDown={onStartWire}
+        onMouseDown={(e) => onStartWire(e, "top")}
       />
     </NodeShell>
   );
@@ -869,7 +832,10 @@ function Tool402Node({
         {price != null ? (
           <span style={{ color: magenta }}>
             {price}
-            <span style={{ color: "var(--fg-dim)" }}> / {unit}</span>
+            <span style={{ color: "var(--fg-dim)" }}>
+              {" "}
+              {node.asset ?? "USDC"} / {unit}
+            </span>
           </span>
         ) : (
           <span style={{ color: "var(--fg-dim)" }}>price — set endpoint</span>
@@ -881,7 +847,7 @@ function Tool402Node({
         port="top"
         onHover={() => onPortHover("top")}
         onLeave={onPortLeave}
-        onMouseDown={onStartWire}
+        onMouseDown={(e) => onStartWire(e, "top")}
       />
       <SidePort
         side="left"
@@ -898,7 +864,7 @@ function Tool402Node({
         port="out"
         onHover={() => onPortHover("out")}
         onLeave={onPortLeave}
-        onMouseDown={onStartWire}
+        onMouseDown={(e) => onStartWire(e, "out")}
       />
     </NodeShell>
   );
@@ -948,7 +914,7 @@ function ActionNode({
         port="out"
         onHover={() => onPortHover("out")}
         onLeave={onPortLeave}
-        onMouseDown={onStartWire}
+        onMouseDown={(e) => onStartWire(e, "out")}
       />
     </NodeShell>
   );

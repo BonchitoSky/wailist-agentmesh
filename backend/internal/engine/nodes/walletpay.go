@@ -27,6 +27,11 @@ type Wallet2PayConfig struct {
 	USDCAssetID               uint64
 	RelayNetwork              string
 	MaxRelayOutboundUSDMicros int64
+	// ContentType is what the outbound body is encoded as. Empty means the
+	// historical default, application/json. A multipart body must carry the
+	// exact content type it was generated with, boundary included, or the
+	// target cannot parse a single field of it.
+	ContentType string
 }
 
 // TargetQuote is defined in tool402.go (used by ProbeX402Quote) — walletpay.go
@@ -168,7 +173,11 @@ func PayTargetFromWallet2(ctx context.Context, cfg Wallet2PayConfig, target, met
 		return Wallet2PayResult{Signed: true}, &Wallet2PayError{StatusCode: http.StatusBadGateway, Msg: "failed to build paid request to target: " + err.Error()}
 	}
 	if bodyReader != nil {
-		payReq.Header.Set("Content-Type", "application/json")
+		contentType := cfg.ContentType
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		payReq.Header.Set("Content-Type", contentType)
 	}
 	payReq.Header.Set(paymentHeaderName, paymentHeaderValue)
 	payResp, err := SafeOutboundPayHTTPClient().Do(payReq)

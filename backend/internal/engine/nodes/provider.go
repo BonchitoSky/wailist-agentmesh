@@ -185,6 +185,26 @@ func buildFuncDecls(tools []models.WorkflowNode) []funcDecl {
 			}
 		}
 
+		// Hand-added fields are part of this tool's real signature too — an
+		// endpoint that publishes no Bazaar schema has nothing in
+		// DiscoveredParams, so without this the model would be handed a
+		// no-argument tool and could never vary the one input that matters.
+		// File params are deliberately excluded: their value is base64 bytes
+		// the user attached, not something a model can author.
+		for _, p := range t.CustomParams {
+			if p.Name == "" || p.Kind == "file" {
+				continue
+			}
+			prop := map[string]any{
+				"type":        "string",
+				"description": "Caller-defined parameter for " + t.Name,
+			}
+			if p.Value != "" {
+				prop["default"] = p.Value
+			}
+			properties[p.Name] = prop
+		}
+
 		params := map[string]any{"type": "OBJECT", "properties": properties}
 		if len(required) > 0 {
 			params["required"] = required
@@ -266,12 +286,22 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			if paymentResult.SettledUSDMicros > 0 {
 				payment = &ToolPaymentInfo{
 					NodeID: toolNode.ID, NodeName: toolNode.Name,
-					SettledUSDMicros: paymentResult.SettledUSDMicros,
-					DebitKind:        paymentResult.DebitKind,
+					SettledUSDMicros:    paymentResult.SettledUSDMicros,
+					DebitKind:           paymentResult.DebitKind,
+					TxID:                paymentResult.TxID,
+					ExplorerURL:         paymentResult.ExplorerURL,
+					OutboundTxID:        paymentResult.OutboundTxID,
+					OutboundExplorerURL: paymentResult.OutboundExplorerURL,
 				}
-				if m, ok := paymentResult.Response.(map[string]any); ok {
-					payment.TxID, _ = m["txId"].(string)
-					payment.ExplorerURL, _ = m["explorerURL"].(string)
+				// The legacy direct-pay dialect never populates the result's
+				// own settlement fields (ExecuteTool402 predates them and
+				// only ever returns its map), so fall back to the response
+				// map for that path alone.
+				if payment.TxID == "" {
+					if m, ok := paymentResult.Response.(map[string]any); ok {
+						payment.TxID, _ = m["txId"].(string)
+						payment.ExplorerURL, _ = m["explorerURL"].(string)
+					}
 				}
 			}
 			return paymentResult.Response, toolNode, payment, nil
@@ -324,12 +354,17 @@ type ToolPaymentInfo struct {
 	NodeName         string
 	SettledUSDMicros int64
 	DebitKind        string
-	// TxID/ExplorerURL are populated only for the legacy direct-pay dialect
-	// (its result map already carries them); relay-dialect payments settle
-	// through the facilitator with no single client-visible txid to surface
-	// here, so these stay empty for that path.
-	TxID        string
-	ExplorerURL string
+	// TxID/ExplorerURL are the payment's INBOUND settlement leg — the
+	// legacy direct-pay dialect's own transaction, the relay dialect's
+	// per-call facilitator settlement, or (for a run-funded tool) the run's
+	// single up-front funding settlement, which is the only inbound leg
+	// that path has. OutboundTxID/OutboundExplorerURL are the Wallet 2 ->
+	// target leg, when the target returned one. All four can be empty; a
+	// payment is real and billed regardless of whether its ids reached us.
+	TxID                string
+	ExplorerURL         string
+	OutboundTxID        string
+	OutboundExplorerURL string
 }
 
 // paymentReceipt turns a ToolPaymentInfo into the map shape surfaced in an
@@ -349,6 +384,18 @@ func paymentReceipt(p *ToolPaymentInfo) map[string]any {
 	}
 	if p.ExplorerURL != "" {
 		receipt["explorerURL"] = p.ExplorerURL
+	}
+	if p.OutboundTxID != "" {
+		receipt["outboundTxId"] = p.OutboundTxID
+	}
+	if p.OutboundExplorerURL != "" {
+		receipt["outboundExplorerURL"] = p.OutboundExplorerURL
+	}
+	if p.SettledUSDMicros > 0 {
+		// Same decimal shape the non-agent-attached paths put in their
+		// response map, so LogDrawer's OutputCell shows the real amount
+		// paid instead of a bare "paid" with no number.
+		receipt["amount"] = formatUSDCAmount(p.SettledUSDMicros)
 	}
 	return receipt
 }

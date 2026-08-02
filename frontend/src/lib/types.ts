@@ -3,6 +3,17 @@ export type NodeType =
 export type EdgeKind = "flow" | "attach";
 export type PortName = "in" | "out" | "model" | "tools" | "top";
 
+// CustomParam is one hand-defined input field on an x402 node. A "file" kind
+// carries its bytes base64-encoded in `value` and switches the whole outbound
+// request to multipart/form-data.
+export interface CustomParam {
+  name: string;
+  kind: "text" | "file";
+  value?: string;
+  fileName?: string;
+  mimeType?: string;
+}
+
 export interface WorkflowNode {
   id: string;
   type: NodeType;
@@ -32,6 +43,7 @@ export interface WorkflowNode {
   description?: string;
   price?: string;
   unit?: string;
+  asset?: string;
   provider?: string;
   priceLive?: boolean;
   discoveredParams?: Array<{
@@ -42,6 +54,9 @@ export interface WorkflowNode {
     default?: string;
   }>;
   paramDefaults?: Record<string, string>;
+  // User-defined input fields, for endpoints that publish no input schema of
+  // their own (nothing can discover what those need, so the user states it).
+  customParams?: CustomParam[];
   // trigger-specific
   source?: string;
   // email action-specific
@@ -70,7 +85,9 @@ export interface Workflow {
   name: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
-  status?: "active" | "paused" | "draft";
+  // "deployed" is what the backend actually stores (models.WorkflowStatusDeployed);
+  // it was missing here, so deployment state had to be inferred indirectly.
+  status?: "active" | "paused" | "draft" | "deployed";
   updated?: string;
   updatedAt?: string;
   agents?: number;
