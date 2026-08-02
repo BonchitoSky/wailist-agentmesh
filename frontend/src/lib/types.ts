@@ -57,6 +57,12 @@ export interface WorkflowNode {
   // User-defined input fields, for endpoints that publish no input schema of
   // their own (nothing can discover what those need, so the user states it).
   customParams?: CustomParam[];
+  // How those fields reach the endpoint: "params" (default) builds the
+  // request from the fields themselves, "json" sends bodyTemplate as the
+  // body with {{...}} references to them. Fields alone cannot express a
+  // nested body, and real endpoints want one.
+  bodyMode?: "params" | "json";
+  bodyTemplate?: string;
   // trigger-specific
   source?: string;
   // email action-specific

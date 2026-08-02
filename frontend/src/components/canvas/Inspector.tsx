@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { WorkflowNode, CustomParam } from "@/lib/types";
 import {
   PROVIDER_TEMPLATES,
@@ -788,6 +788,69 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 // Base64 inflates by 4/3, so the decoded size is what the user actually
 // picked — showing the encoded length would overstate every file by a third.
+// A tool402 node's JSON body references its own fields with {{kind:name}}.
+// Kept in sync with nodes.bodyPlaceholder on the backend, which does the
+// real substitution at call time — this copy only powers the editor's live
+// feedback, so a bad body is caught while typing rather than by an endpoint
+// that charges for the attempt.
+const BODY_PLACEHOLDER = /\{\{(param|file|fileName|fileType):([^}]+)\}\}/g;
+
+// referenceTokens lists what a field can be referenced as. A file offers its
+// bytes, its name, and its type; a text field just its value.
+function referenceTokens(p: CustomParam): string[] {
+  if (!p.name) return [];
+  return p.kind === "file"
+    ? [`{{file:${p.name}}}`, `{{fileName:${p.name}}}`, `{{fileType:${p.name}}}`]
+    : [`{{param:${p.name}}}`];
+}
+
+// validateBodyTemplate reports the first problem with a JSON body, or null.
+// Two failure modes matter, and both are silent until money has moved: a
+// reference to a field that does not exist, and a body that is not valid
+// JSON once filled in.
+function validateBodyTemplate(
+  template: string,
+  fields: CustomParam[],
+  paramDefaults?: Record<string, string>,
+): string | null {
+  if (!template.trim()) return null;
+  const known = new Set(fields.map((f) => f.name).filter(Boolean));
+  const missing = new Set<string>();
+  for (const m of template.matchAll(BODY_PLACEHOLDER)) {
+    const name = m[2].trim();
+    const isDiscoveredValue = m[1] === "param" && paramDefaults?.[name] !== undefined;
+    if (!known.has(name) && !isDiscoveredValue) missing.add(m[0]);
+  }
+  if (missing.size > 0) {
+    return `No field named ${[...missing].join(", ")} — add it below, or fix the name.`;
+  }
+  // Placeholders always sit inside string literals, so a stand-in value is
+  // enough to check the surrounding document's shape.
+  try {
+    JSON.parse(template.replace(BODY_PLACEHOLDER, "x"));
+  } catch (e) {
+    return `Not valid JSON — ${e instanceof Error ? e.message : "check the syntax"}.`;
+  }
+  return null;
+}
+
+// bodySkeleton builds a starting body from whatever fields THIS node has,
+// so the editor teaches the reference syntax without asserting anything
+// about the endpoint. Nothing here knows a vendor's field names: an
+// endpoint's real shape lives in its own docs (and almost none publish a
+// machine-readable schema, so it cannot be generated), while the keys below
+// are only a scaffold the caller edits.
+function bodySkeleton(fields: CustomParam[]): string {
+  const named = fields.filter((f) => f.name);
+  if (named.length === 0) return "{\n  \n}";
+  const lines = named.map(
+    (f) =>
+      `  "${f.name}": "${f.kind === "file" ? `{{file:${f.name}}}` : `{{param:${f.name}}}`}"`,
+  );
+  return `{\n${lines.join(",\n")}\n}`;
+}
+
+
 function formatFileSize(base64: string): string {
   const bytes = Math.floor((base64.length * 3) / 4);
   return bytes < 1024
@@ -861,14 +924,41 @@ function Tool402Inspector({
   const custom = node.customParams ?? [];
   const hasDiscovered = !!node.discoveredParams?.length;
   const hasFile = custom.some((p) => p.kind === "file" && p.value);
+  const bodyMode = node.bodyMode === "json" ? "json" : "params";
+  const bodyTemplate = node.bodyTemplate ?? "";
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const bodyError = validateBodyTemplate(bodyTemplate, custom, node.paramDefaults);
   // How the configured values will actually reach the endpoint — worth
-  // stating outright, since it changes with both the method and whether a
-  // file is attached (a file forces multipart, and multipart forces POST).
-  const paramTransport = hasFile
-    ? "as multipart/form-data (POST)"
-    : node.method && node.method !== "GET"
-      ? "in the JSON request body"
-      : "as query params";
+  // stating outright, since it changes with the mode, the method, and
+  // whether a file is attached (a file forces multipart, a body forces POST).
+  const paramTransport =
+    bodyMode === "json"
+      ? "as the JSON body below (POST)"
+      : hasFile
+        ? "as multipart/form-data (POST)"
+        : node.method && node.method !== "GET"
+          ? "in the JSON request body"
+          : "as query params";
+
+  // Inserts a reference at the cursor, so a file can be dropped into the
+  // body without hand-typing a token whose spelling has to match exactly.
+  const insertReference = (token: string) => {
+    const el = bodyRef.current;
+    const base = bodyTemplate || bodySkeleton(custom);
+    if (!el) {
+      onUpdate({ ...node, bodyTemplate: base + token });
+      return;
+    }
+    const start = el.selectionStart ?? base.length;
+    const end = el.selectionEnd ?? start;
+    const next = base.slice(0, start) + token + base.slice(end);
+    onUpdate({ ...node, bodyTemplate: next });
+    requestAnimationFrame(() => {
+      el.focus();
+      const caret = start + token.length;
+      el.setSelectionRange(caret, caret);
+    });
+  };
 
   const writeFields = (next: CustomParam[]) =>
     onUpdate({ ...node, customParams: next });
@@ -1100,6 +1190,62 @@ function Tool402Inspector({
           {hasDiscovered && " An attached agent can override them per call."}
         </div>
 
+        {/* Fields alone can only produce a flat request. An endpoint wanting a
+            nested body — an array of file objects, say — needs the caller to
+            write that shape, so the two ways of building a request are a
+            deliberate, visible choice rather than something inferred. */}
+        <div
+          style={{
+            display: "flex",
+            gap: 2,
+            padding: 2,
+            marginBottom: 10,
+            border: "1px solid var(--border)",
+            borderRadius: "var(--r-2)",
+            background: "var(--bg)",
+          }}
+        >
+          {(
+            [
+              ["params", "Fields"],
+              ["json", "JSON body"],
+            ] as const
+          ).map(([mode, label]) => {
+            const active = bodyMode === mode;
+            return (
+              <button
+                key={mode}
+                onClick={() =>
+                  onUpdate({
+                    ...node,
+                    bodyMode: mode,
+                    // Seed the editor the first time, so the shape and the
+                    // reference syntax are visible instead of a blank box.
+                    bodyTemplate:
+                      mode === "json" && !node.bodyTemplate
+                        ? bodySkeleton(custom)
+                        : node.bodyTemplate,
+                  })
+                }
+                style={{
+                  flex: 1,
+                  height: 26,
+                  border: "none",
+                  borderRadius: "var(--r-1)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10.5,
+                  letterSpacing: 0.3,
+                  background: active ? "rgba(232,121,249,0.12)" : "transparent",
+                  color: active ? magenta : "var(--fg-dim)",
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
         {hasDiscovered && (
           <div
             style={{
@@ -1293,6 +1439,38 @@ function Tool402Inspector({
                   onChange={(e) => patchField(i, { value: e.target.value })}
                 />
               )}
+
+              {/* In JSON mode a field is not sent on its own — it is a value
+                  the body can pull in. Clicking drops the exact token at the
+                  cursor, since it has to match the field name character for
+                  character to resolve. */}
+              {bodyMode === "json" && referenceTokens(p).length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {referenceTokens(p).map((token) => (
+                    <button
+                      key={token}
+                      onClick={() => insertReference(token)}
+                      title="insert into the JSON body"
+                      style={{
+                        padding: "2px 6px",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--r-1)",
+                        background: bodyTemplate.includes(token)
+                          ? "rgba(232,121,249,0.10)"
+                          : "transparent",
+                        color: bodyTemplate.includes(token)
+                          ? magenta
+                          : "var(--fg-dim)",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 9.5,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {token}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1331,6 +1509,91 @@ function Tool402Inspector({
         >
           + add field
         </button>
+
+        {bodyMode === "json" && (
+          <div style={{ marginTop: 14 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                justifyContent: "space-between",
+                marginBottom: 6,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10,
+                  letterSpacing: 0.4,
+                  color: "var(--fg-muted)",
+                  textTransform: "uppercase",
+                }}
+              >
+                Request body
+              </span>
+              <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>
+                paste the shape this endpoint documents
+              </span>
+            </div>
+            <textarea
+              ref={bodyRef}
+              spellCheck={false}
+              value={bodyTemplate}
+              onChange={(e) =>
+                onUpdate({ ...node, bodyTemplate: e.target.value })
+              }
+              placeholder={bodySkeleton(custom)}
+              style={{
+                ...monoInputStyle,
+                height: 190,
+                width: "100%",
+                padding: 10,
+                lineHeight: 1.55,
+                resize: "vertical",
+                whiteSpace: "pre",
+                overflowWrap: "normal",
+                overflowX: "auto",
+                borderColor: bodyError ? "rgba(248,113,113,0.5)" : undefined,
+              }}
+            />
+            {bodyError ? (
+              <div
+                style={{
+                  marginTop: 6,
+                  padding: "6px 8px",
+                  background: "rgba(248,113,113,0.08)",
+                  border: "1px solid rgba(248,113,113,0.3)",
+                  borderRadius: "var(--r-2)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10,
+                  color: "#F87171",
+                }}
+              >
+                {bodyError}
+              </div>
+            ) : (
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: 10,
+                  lineHeight: 1.5,
+                  color: "var(--fg-dim)",
+                }}
+              >
+                {bodyTemplate.trim() ? (
+                  <>
+                    <span style={{ color: "var(--accent)" }}>✓ valid JSON</span>
+                    {" — keys must match what the endpoint documents; field"}
+                    {" names are yours, they only appear inside {{…}}. A file's"}
+                    {" bytes are filled in at call time, never pasted here."}
+                  </>
+                ) : (
+                  "Paste the body this endpoint documents, then click a field's chip above to reference it."
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </Section>
       <Section label="Tool description">
         <Field label="What this tool does" hint="shown to agent">

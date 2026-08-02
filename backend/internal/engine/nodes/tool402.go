@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -286,7 +287,95 @@ const maxParamFileBytes = 2 << 20 // 2 MiB
 // runs) are a deliberate per-call choice, while these are static config.
 // Custom params take precedence over discovered ones of the same name, since
 // the user typing a field by hand is the more specific intent.
-func buildTargetRequest(node models.WorkflowNode, method string) (models.WorkflowNode, []byte, string) {
+// bodyPlaceholder matches a single {{kind:name}} reference in a JSON body
+// template. Name runs to the closing brace, so it may contain anything but
+// "}" -- endpoint field names are not restricted to identifiers.
+var bodyPlaceholder = regexp.MustCompile(`\{\{(param|file|fileName|fileType):([^}]+)\}\}`)
+
+// expandBodyTemplate fills a node's JSON body template from its configured
+// params. Four forms, each naming a param:
+//
+//	{{param:x}}     the text param's value (or its ParamDefaults entry)
+//	{{file:x}}      the file param's bytes, base64 -- what an endpoint that
+//	                takes uploads inside JSON actually wants
+//	{{fileName:x}}  the uploaded file's original name
+//	{{fileType:x}}  its MIME type
+//
+// Values are JSON-escaped, so a placeholder belongs inside a string literal
+// ("{{file:resume}}") and a filename containing a quote cannot break the
+// document. A reference to a param that does not exist is an error rather
+// than an empty string: this body is about to be sent with a real payment
+// attached, and an endpoint that silently receives null where a resume
+// should be still charges for the call.
+func expandBodyTemplate(node models.WorkflowNode, template string) ([]byte, error) {
+	byName := make(map[string]models.CustomParam, len(node.CustomParams))
+	for _, p := range node.CustomParams {
+		byName[p.Name] = p
+	}
+
+	var missing []string
+	expanded := bodyPlaceholder.ReplaceAllStringFunc(template, func(match string) string {
+		parts := bodyPlaceholder.FindStringSubmatch(match)
+		kind, name := parts[1], strings.TrimSpace(parts[2])
+		p, defined := byName[name]
+		if !defined {
+			// A text param may live in ParamDefaults instead (a value typed
+			// against a schema the endpoint declared), which has no file
+			// counterpart -- the other three forms genuinely need a param.
+			if v, ok := node.ParamDefaults[name]; ok && kind == "param" {
+				return jsonStringEscape(v)
+			}
+			missing = append(missing, match)
+			return match
+		}
+		switch kind {
+		case "param":
+			return jsonStringEscape(p.Value)
+		case "file":
+			return jsonStringEscape(p.Value) // already base64 in Value
+		case "fileName":
+			return jsonStringEscape(p.FileName)
+		case "fileType":
+			return jsonStringEscape(p.MIMEType)
+		}
+		return match
+	})
+
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("request body references %s, which this node has no field for", strings.Join(missing, ", "))
+	}
+	if !json.Valid([]byte(expanded)) {
+		return nil, fmt.Errorf("request body is not valid JSON once its fields are filled in")
+	}
+	return []byte(expanded), nil
+}
+
+// jsonStringEscape renders s as it must appear INSIDE a JSON string literal
+// (no surrounding quotes), so substituting it into a template cannot produce
+// a malformed document.
+func jsonStringEscape(s string) string {
+	quoted, err := json.Marshal(s)
+	if err != nil || len(quoted) < 2 {
+		return ""
+	}
+	return string(quoted[1 : len(quoted)-1])
+}
+
+func buildTargetRequest(node models.WorkflowNode, method string) (models.WorkflowNode, []byte, string, error) {
+	// A hand-written JSON body replaces the field-derived request entirely:
+	// the fields are still configured (and a file param still uploaded), but
+	// they reach the endpoint only where the template references them.
+	if node.BodyMode == models.BodyModeJSON {
+		if strings.TrimSpace(node.BodyTemplate) == "" {
+			return node, nil, "", nil
+		}
+		body, err := expandBodyTemplate(node, node.BodyTemplate)
+		if err != nil {
+			return node, nil, "", err
+		}
+		return node, body, "application/json", nil
+	}
+
 	text := map[string]string{}
 	for k, v := range node.ParamDefaults {
 		if v != "" {
@@ -321,19 +410,19 @@ func buildTargetRequest(node models.WorkflowNode, method string) (models.Workflo
 			// missing fields is diagnosable, one parsing a truncated body is
 			// not.
 			log.Printf("x402: building multipart body for node %s failed: %v", node.ID, err)
-			return node, nil, ""
+			return node, nil, "", nil
 		}
-		return node, body, contentType
+		return node, body, contentType, nil
 	}
 
 	if len(text) == 0 {
-		return node, nil, ""
+		return node, nil, "", nil
 	}
 
 	if method == "" || method == http.MethodGet {
 		u, err := url.Parse(node.Endpoint)
 		if err != nil {
-			return node, nil, ""
+			return node, nil, "", nil
 		}
 		q := u.Query()
 		for k, v := range text {
@@ -344,14 +433,14 @@ func buildTargetRequest(node models.WorkflowNode, method string) (models.Workflo
 		}
 		u.RawQuery = q.Encode()
 		node.Endpoint = u.String()
-		return node, nil, ""
+		return node, nil, "", nil
 	}
 
 	encoded, err := json.Marshal(text)
 	if err != nil {
-		return node, nil, ""
+		return node, nil, "", nil
 	}
-	return node, encoded, "application/json"
+	return node, encoded, "application/json", nil
 }
 
 // multipartBody encodes text fields and files as a single multipart/form-data
@@ -879,11 +968,18 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	// before the endpoint is probed or paid: a target that requires a param
 	// rejects the PAID retry with a validation error otherwise, having
 	// already taken the money.
-	node, paramBody, paramContentType := buildTargetRequest(node, method)
-	// A file can only be sent on a request that has a body at all, so an
-	// endpoint configured with one is called with POST regardless of the
-	// dropdown — GET with a multipart body is not a valid request.
-	if paramContentType != "" && strings.HasPrefix(paramContentType, "multipart/") && method == http.MethodGet {
+	node, paramBody, paramContentType, err := buildTargetRequest(node, method)
+	if err != nil {
+		// Before any probe or payment: a body we cannot build is a
+		// configuration error, and this node is one HTTP call away from
+		// spending real money on a request the endpoint would reject.
+		return Tool402PaymentResult{}, fmt.Errorf("x402: %w", err)
+	}
+	// A body can only be sent on a request that has one, so an endpoint
+	// configured with a file (multipart) or a hand-written JSON body is
+	// called with POST regardless of the dropdown — GET with a body is not a
+	// valid request, and the body is the whole point of both modes.
+	if len(paramBody) > 0 && method == http.MethodGet {
 		method = http.MethodPost
 	}
 	// The body this node's real call carries when method isn't GET: the run's
