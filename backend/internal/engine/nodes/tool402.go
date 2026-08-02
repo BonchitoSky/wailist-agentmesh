@@ -75,14 +75,14 @@ func QuoteX402(ctx context.Context, rawURL string) (map[string]any, error) {
 	// accepts[0].amount/maxAmountRequired, sometimes only inside a base64
 	// Payment-Required header with an empty body, which the legacy path
 	// can't see at all and silently fell back to a hardcoded "0" for.
-	isV2, notPaymentRequired, _, quote, err := probeTool402Endpoint(ctx, rawURL, http.MethodGet, nil)
+	isV2, notPaymentRequired, _, quote, err := probeTool402Endpoint(ctx, rawURL, http.MethodGet, nil, "")
 	// A POST-only resource answers a bare GET with 404/405 before it ever
 	// reaches its own 402 gate, so a GET-only probe would report a real,
 	// payable endpoint as unpriceable. Only retried when GET produced no
 	// challenge at all — never when it did, so a working GET is never
 	// second-guessed.
 	if notPaymentRequired || (err != nil && !isV2) {
-		if v2, npr, _, q, perr := probeTool402Endpoint(ctx, rawURL, http.MethodPost, nil); perr == nil && v2 && !npr {
+		if v2, npr, _, q, perr := probeTool402Endpoint(ctx, rawURL, http.MethodPost, nil, ""); perr == nil && v2 && !npr {
 			isV2, quote, err = true, q, nil
 		}
 	}
@@ -686,7 +686,12 @@ type x402Quote struct {
 // every caller's behavior before this parameter existed. body is only ever
 // sent when method is not GET, mirroring nodes.go's callHTTP convention for
 // the plain "tool" node type.
-func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []byte) (isV2 bool, notPaymentRequired bool, rawResponse any, quote x402Quote, err error) {
+//
+// contentType describes body's encoding; empty defaults to application/json,
+// which is what this always assumed. It has to be explicit for a multipart
+// body, whose generated boundary lives in the content type and without which
+// the receiver cannot parse a single field.
+func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []byte, contentType string) (isV2 bool, notPaymentRequired bool, rawResponse any, quote x402Quote, err error) {
 	if err := urlValidator(endpoint); err != nil {
 		return false, false, nil, x402Quote{}, err
 	}
@@ -699,7 +704,10 @@ func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []b
 	}
 	req, _ := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
 	if bodyReader != nil {
-		req.Header.Set("Content-Type", "application/json")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
@@ -807,7 +815,7 @@ func ParseMaxAmountRequiredAsMicros(v any) (int64, bool) {
 // validation, so a pure price probe never needs the real call's payload —
 // only its method.
 func ProbeX402Price(ctx context.Context, endpoint, method string) (isV2 bool, amountUSDMicros int64, err error) {
-	isV2, _, _, quote, err := probeTool402Endpoint(ctx, endpoint, method, nil)
+	isV2, _, _, quote, err := probeTool402Endpoint(ctx, endpoint, method, nil, "")
 	return isV2, quote.MaxAmountRequired, err
 }
 
@@ -840,7 +848,7 @@ type TargetQuote struct {
 // pay it via PayTargetFromWallet2 (Task 3). Same empty-body reasoning as
 // ProbeX402Price.
 func ProbeX402Quote(ctx context.Context, endpoint, method string) (isV2 bool, quote TargetQuote, err error) {
-	isV2, _, _, q, err := probeTool402Endpoint(ctx, endpoint, method, nil)
+	isV2, _, _, q, err := probeTool402Endpoint(ctx, endpoint, method, nil, "")
 	return isV2, TargetQuote{
 		PayTo:             q.PayTo,
 		Asset:             q.Asset,
@@ -878,7 +886,31 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	if paramContentType != "" && strings.HasPrefix(paramContentType, "multipart/") && method == http.MethodGet {
 		method = http.MethodPost
 	}
-	isV2, notPaymentRequired, rawResponse, quote, err := probeTool402Endpoint(ctx, node.Endpoint, method, nil)
+	// The body this node's real call carries when method isn't GET: the run's
+	// input, or the configured params when there are any — those describe the
+	// endpoint's own required input shape, which the run's free-form trigger
+	// message does not. Same convention nodes.go's callHTTP uses for the plain
+	// "tool" node type's http template; GET requests never carry a body (their
+	// params went onto the query string in buildTargetRequest above).
+	var payBody []byte
+	if method != http.MethodGet {
+		payBody = []byte(rc.Message())
+		if paramBody != nil {
+			payBody = paramBody
+		}
+	}
+	// The probe carries that same body rather than nothing. It used to send
+	// nil unconditionally, being "just" a check for a 402 challenge -- but
+	// when the endpoint answers with anything other than 402, the probe IS
+	// the node's only request and its response IS the node's result. A
+	// body-reading endpoint then received an empty request and its complaint
+	// about that was surfaced as the node's output, with every configured
+	// param silently dropped (confirmed live 2026-08-02: a POST tool402 node
+	// returned the target's own {"error":"Unexpected end of JSON input"} as a
+	// successful step). Sending it costs nothing on a real 402 target, which
+	// answers 402 before reading a body, and is exactly what the paid retry
+	// below sends anyway.
+	isV2, notPaymentRequired, rawResponse, quote, err := probeTool402Endpoint(ctx, node.Endpoint, method, payBody, paramContentType)
 	if err != nil {
 		return Tool402PaymentResult{}, err
 	}
@@ -886,22 +918,6 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		return Tool402PaymentResult{Response: rawResponse}, nil
 	}
 	if isV2 {
-		// The real, final call (as opposed to the probe above) carries the
-		// run's actual input as its body when method isn't GET — same
-		// convention nodes.go's callHTTP already uses for the plain "tool"
-		// node type's http template. GET requests never carry a body,
-		// unchanged from before this parameter existed.
-		var payBody []byte
-		if method != http.MethodGet {
-			payBody = []byte(rc.Message())
-			// Configured params describe this endpoint's own required input
-			// shape, which the run's free-form trigger message does not —
-			// so when both exist the declared params are what the target
-			// actually asked for.
-			if paramBody != nil {
-				payBody = paramBody
-			}
-		}
 		// toolIsRunFunded (not a blanket RunFundingID != "" check) decides
 		// this: a run can be funded while a SPECIFIC tool's probe failed
 		// during estimation and was never folded into that estimate, and
@@ -999,7 +1015,10 @@ func setRelayTargetHeaders(req *http.Request, method string, body []byte, conten
 	if method != "" && method != http.MethodGet {
 		req.Header.Set("X-Relay-Method", method)
 	}
-	if len(body) > 0 {
+	// Only small bodies still ride in the header, and only for compatibility
+	// with a relay that predates newRelayRequest sending them as a real
+	// request body -- see relayHeaderBodyLimit.
+	if len(body) > 0 && len(body) <= relayHeaderBodyLimit {
 		req.Header.Set("X-Relay-Body", base64.StdEncoding.EncodeToString(body))
 	}
 	// Without this the relay would send the body as application/json — fine
@@ -1008,6 +1027,53 @@ func setRelayTargetHeaders(req *http.Request, method string, body []byte, conten
 	if contentType != "" {
 		req.Header.Set("X-Relay-Content-Type", contentType)
 	}
+}
+
+// relayHeaderBodyLimit bounds what may travel in the X-Relay-Body header.
+// That header was originally the ONLY way to give the relay a target body,
+// justified by net/http's 1MB default MaxHeaderBytes -- but our own server's
+// limit is not the binding one. Every proxy in front of it caps headers far
+// lower (Cloudflare ~16KB, and the tunnel/edge in between drops the
+// connection outright rather than answering), so a file param turned into a
+// multipart body never arrived: a 138KB PDF became a ~184KB header, and the
+// request died before the relay's handler ran at all (confirmed live
+// 2026-08-03 against prism-99h2.onrender.com/resume-screen-accurate, which
+// failed at ~2.5s with no payment attempted; bisected between 60KB working
+// and 100KB failing).
+//
+// 8KB stays clear of the smallest proxy limit worth worrying about. Anything
+// larger goes in the request body, where it belongs.
+const relayHeaderBodyLimit = 8 << 10
+
+// newRelayRequest builds the call to our own /x402/relay. A target body is
+// sent as this request's own body (a plain POST) rather than smuggled
+// through a header, because that is what bodies are for and what every
+// intermediary is sized for. The relay reads its request body first and
+// falls back to X-Relay-Body, so a small body still works against a relay
+// that has not been redeployed yet.
+//
+// The relay route accepts any method (router.go registers it with Handle,
+// not Get), and neither side treats the method used to reach the relay as
+// the method for the target -- that has always been X-Relay-Method's job.
+func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetBody []byte, targetContentType string) (*http.Request, error) {
+	if len(targetBody) == 0 {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		setRelayTargetHeaders(req, targetMethod, nil, targetContentType)
+		return req, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, relayURL, bytes.NewReader(targetBody))
+	if err != nil {
+		return nil, err
+	}
+	// Deliberately opaque: this body is bytes destined for the target as-is,
+	// not something the relay should parse. The encoding the TARGET needs
+	// travels separately in X-Relay-Content-Type.
+	req.Header.Set("Content-Type", "application/octet-stream")
+	setRelayTargetHeaders(req, targetMethod, targetBody, targetContentType)
+	return req, nil
 }
 
 // targetMethod/targetBody describe the call the RELAY should make to
@@ -1023,8 +1089,10 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 
 	relayURL := relayBaseURL + "/x402/relay?target=" + url.QueryEscape(node.Endpoint)
 
-	quoteReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
-	setRelayTargetHeaders(quoteReq, targetMethod, targetBody, targetContentType)
+	quoteReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType)
+	if err != nil {
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: building the quote request failed: %w", err)
+	}
 	quoteResp, err := relayHTTPClient.Do(quoteReq)
 	if err != nil {
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay quote failed: %w", err)
@@ -1129,9 +1197,12 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	}
 	xPayment, _ := json.Marshal(xPaymentFields)
 
-	payReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
+	payReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType)
+	if err != nil {
+		releaseReservation()
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: building the payment request failed: %w", err)
+	}
 	payReq.Header.Set("X-Payment", string(xPayment))
-	setRelayTargetHeaders(payReq, targetMethod, targetBody, targetContentType)
 	payResp, err := relayHTTPClient.Do(payReq)
 	if err != nil {
 		releaseReservation()

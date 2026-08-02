@@ -2,8 +2,10 @@ package nodes_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -1209,5 +1211,90 @@ func TestX402RunLevelReportsTxIDForNonObjectResponse(t *testing.T) {
 	}
 	if res.ExplorerURL != "https://lora.algokit.io/mainnet/transaction/FUNDINGTXID456" {
 		t.Fatalf("want a mainnet explorer URL for the mainnet USDC asset id, got %q", res.ExplorerURL)
+	}
+}
+
+// TestTool402NonPaymentEndpointReceivesConfiguredParams pins the fix for a
+// tool402 node pointed at an endpoint that turns out NOT to require payment.
+// The probe used to send no body at all, and since a non-402 answer makes
+// that probe the node's only request (its response becomes the node's
+// result), every configured param was silently dropped and the target's
+// complaint about the empty request was reported as a successful step.
+// Confirmed live 2026-08-02 against api.scrape402.site/faucet/algo, which
+// answered {"error":"Unexpected end of JSON input"} — its reaction to a
+// bodyless POST, not to anything the node was configured with.
+func TestTool402NonPaymentEndpointReceivesConfiguredParams(t *testing.T) {
+	var gotBody, gotContentType string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody, gotContentType = string(b), r.Header.Get("Content-Type")
+		if len(b) == 0 {
+			// Exactly how the real endpoint behaved: parse an empty body,
+			// fail, and report that instead of doing the work.
+			w.Write([]byte(`{"error":"Unexpected end of JSON input"}`))
+			return
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{
+		ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL, Method: http.MethodPost,
+		CustomParams: []models.CustomParam{{Kind: "text", Name: "url", Value: "https://www.agent-mesh.app/"}},
+	}
+
+	res, err := nodes.ExecuteTool402V2(context.Background(), node, engine.NewRunContext("r1", nil), models.AgentWallet{}, nil, nodes.X402RelayConfig{})
+	if err != nil {
+		t.Fatalf("want the unpaid call to succeed, got %v", err)
+	}
+	if gotBody != `{"url":"https://www.agent-mesh.app/"}` {
+		t.Fatalf("want the configured params sent as the request body, got %q", gotBody)
+	}
+	if gotContentType != "application/json" {
+		t.Fatalf("want a JSON content type alongside the body, got %q", gotContentType)
+	}
+	m, ok := res.Response.(map[string]any)
+	if !ok || m["ok"] != true {
+		t.Fatalf("want the endpoint's real response, not its empty-request complaint, got %#v", res.Response)
+	}
+}
+
+// TestTool402NonPaymentEndpointSendsMultipartContentType covers the same
+// path for a file param: a multipart body carries its boundary in the
+// content type, so the probe hardcoding application/json left the receiver
+// unable to parse a single field.
+func TestTool402NonPaymentEndpointSendsMultipartContentType(t *testing.T) {
+	var gotFile, gotField string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			http.Error(w, "unparseable multipart: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		gotField = r.FormValue("caption")
+		if f, hdr, err := r.FormFile("doc"); err == nil {
+			defer f.Close()
+			gotFile = hdr.Filename
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{
+		ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL, Method: http.MethodPost,
+		CustomParams: []models.CustomParam{
+			{Kind: "text", Name: "caption", Value: "hello"},
+			{Kind: "file", Name: "doc", FileName: "report.txt", Value: base64.StdEncoding.EncodeToString([]byte("file contents"))},
+		},
+	}
+
+	res, err := nodes.ExecuteTool402V2(context.Background(), node, engine.NewRunContext("r1", nil), models.AgentWallet{}, nil, nodes.X402RelayConfig{})
+	if err != nil {
+		t.Fatalf("want the unpaid call to succeed, got %v", err)
+	}
+	if gotField != "hello" || gotFile != "report.txt" {
+		t.Fatalf("want the multipart body parseable by the receiver, got field=%q file=%q", gotField, gotFile)
+	}
+	if m, ok := res.Response.(map[string]any); !ok || m["ok"] != true {
+		t.Fatalf("want the endpoint's real response, got %#v", res.Response)
 	}
 }

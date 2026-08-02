@@ -18,6 +18,13 @@ import (
 	"github.com/agentmesh/backend/internal/x402"
 )
 
+// maxRelayTargetBodyBytes bounds the body a caller may ask the relay to
+// forward. Sized above what this platform's own nodes can produce -- a
+// workflow's file params are capped at 2 MiB each (nodes.maxParamFileBytes)
+// and several can share one multipart body -- while still refusing to buffer
+// an unbounded upload on a public, unauthenticated route.
+const maxRelayTargetBodyBytes int64 = 16 << 20 // 16 MiB
+
 // X402Relay is the orchestrator's own paid endpoint. It has no fixed price:
 // the price it charges the caller is whatever the target endpoint (given via
 // ?target=) actually charges. This is what makes the relay generic across
@@ -62,15 +69,11 @@ func (d *Deps) X402Relay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// X-Relay-Method/X-Relay-Body tell the relay what to send to TARGET (not
-	// how the caller reaches the relay itself -- that's always this same GET
-	// with ?target=, unchanged). Real x402 endpoints are not guaranteed to
-	// be GET-compatible (a POST-only resource can 404 a bare GET before it
-	// ever considers payment state), so the relay needs to know. Body goes
-	// in a header, base64-encoded, rather than the query string: request
-	// bodies can exceed URLs' practical length limits, while headers hold
-	// far more (net/http's default MaxHeaderBytes is 1MB) — same pattern
-	// X-Payment and Payment-Required already use in this file.
+	// X-Relay-Method tells the relay what to send to TARGET (not how the
+	// caller reaches the relay itself -- that is this route's own method and
+	// carries no meaning for the target). Real x402 endpoints are not
+	// guaranteed to be GET-compatible (a POST-only resource can 404 a bare
+	// GET before it ever considers payment state), so the relay needs to know.
 	targetMethod := r.Header.Get("X-Relay-Method")
 	if targetMethod == "" {
 		targetMethod = http.MethodGet
@@ -81,14 +84,37 @@ func (d *Deps) X402Relay(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusBadRequest, "unsupported X-Relay-Method: "+targetMethod)
 		return
 	}
+	// The body destined for the target arrives as this request's own body.
+	// It used to arrive base64-encoded in X-Relay-Body, on the reasoning that
+	// net/http allows 1MB of headers -- but our own server's limit is not the
+	// binding one. Every proxy in front of it caps headers far lower, so a
+	// file param (multipart, easily >100KB) never made it here at all: the
+	// connection was dropped upstream before this handler ran (confirmed live
+	// 2026-08-03, a 138KB PDF to prism-99h2.onrender.com). The header is
+	// still read as a fallback so a caller that predates this change keeps
+	// working for the small bodies it could actually deliver.
 	var targetBody []byte
-	if b64 := r.Header.Get("X-Relay-Body"); b64 != "" {
-		decoded, err := base64.StdEncoding.DecodeString(b64)
+	if r.Body != nil {
+		decoded, err := io.ReadAll(io.LimitReader(r.Body, maxRelayTargetBodyBytes+1))
 		if err != nil {
-			respond.Error(w, http.StatusBadRequest, "invalid X-Relay-Body: "+err.Error())
+			respond.Error(w, http.StatusBadRequest, "could not read the target request body: "+err.Error())
+			return
+		}
+		if int64(len(decoded)) > maxRelayTargetBodyBytes {
+			respond.Error(w, http.StatusRequestEntityTooLarge, "target request body exceeds the relay's limit")
 			return
 		}
 		targetBody = decoded
+	}
+	if len(targetBody) == 0 {
+		if b64 := r.Header.Get("X-Relay-Body"); b64 != "" {
+			decoded, err := base64.StdEncoding.DecodeString(b64)
+			if err != nil {
+				respond.Error(w, http.StatusBadRequest, "invalid X-Relay-Body: "+err.Error())
+				return
+			}
+			targetBody = decoded
+		}
 	}
 	// How targetBody is encoded. Only the caller knows — a multipart body's
 	// content type carries the boundary token generated when it was built,
