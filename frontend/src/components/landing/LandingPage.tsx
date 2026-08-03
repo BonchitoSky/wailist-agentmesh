@@ -1,21 +1,15 @@
 "use client";
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Logo, Tag, IconArrow } from "@/components/ui";
 import { WAITLIST_COUNT } from "@/lib/data";
 import { waitlist } from "@/lib/api";
+import { AppNav } from "@/components/nav/AppNav";
+import { LANDING_NAV_ITEMS } from "@/lib/nav";
 
 interface LandingPageProps {
   signedIn: boolean;
 }
-
-// Section links, shared by the desktop bar and the phone sheet so the two can't
-// drift. `id` matches the target section's DOM id.
-const NAV_SECTIONS = [
-  { label: "Overview", id: "pillars" },
-  { label: "How it works", id: "flow" },
-  { label: "Waitlist", id: "waitlist" },
-] as const;
 
 export function LandingPage({ signedIn }: LandingPageProps) {
   const router = useRouter();
@@ -146,6 +140,7 @@ export function LandingPage({ signedIn }: LandingPageProps) {
           openStudio={openStudio}
           signedIn={signedIn}
           scrollToId={scrollToId}
+          scrollRef={scrollRef}
         />
         <LandingPillars />
         <LandingFlow />
@@ -161,29 +156,14 @@ function HeroSection({
   openStudio,
   signedIn,
   scrollToId,
+  scrollRef,
 }: {
   openStudio: () => void;
   signedIn: boolean;
   scrollToId: (id: string) => void;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const router = useRouter();
-  // Phone-width overflow menu. The links are hidden from the bar below `sm`
-  // (see .lp-nav in globals.css) and reappear here.
-  const [menuOpen, setMenuOpen] = useState(false);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenuOpen(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [menuOpen]);
-
-  const goSection = (id: string) => {
-    setMenuOpen(false);
-    scrollToId(id);
-  };
 
   return (
     <section
@@ -222,132 +202,105 @@ function HeroSection({
           minHeight: "100dvh",
         }}
       >
-        {/* Nav */}
-        <div style={{ position: "relative", zIndex: 11 }}>
-          <div className="lp-bar">
-            <Logo size={20} />
-            {/* Positioning lives in .lp-nav: the absolute centering that keeps
-                the links optically centred on desktop is exactly what made them
-                overprint the logo and the buttons on a phone, so the breakpoint
-                has to be able to drop it. */}
-            <nav className="lp-nav" aria-label="Primary">
-              {NAV_SECTIONS.map(({ label, id }) => (
+        {/* Nav — above the hero content's z-index 12, because the open sheet is
+            fixed over the whole viewport and this wrapper's z-index is the one
+            that orders it against the headline. */}
+        <div style={{ position: "relative", zIndex: 20 }}>
+          <AppNav
+            variant="landing"
+            items={LANDING_NAV_ITEMS}
+            pathname=""
+            scrollContainer={scrollRef}
+            onSelect={(item) => {
+              if (item.sectionId) scrollToId(item.sectionId);
+            }}
+            brand={<Logo size={20} />}
+            renderInlineLink={({ item, onClick }) => (
+              <button
+                onClick={onClick}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "rgba(242, 240, 247, 0.9)",
+                  fontSize: 14,
+                  fontWeight: 400,
+                  fontFamily: "var(--font-sans)",
+                  padding: "8px 14px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  whiteSpace: "nowrap",
+                  transition: "color .15s",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = "#fff")}
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.color = "rgba(242, 240, 247, 0.9)")
+                }
+              >
+                {item.label}
+              </button>
+            )}
+            actions={
+              <>
+                {/* Sign Up drops at the same width as the links and reappears
+                    in the sheet with them; Open Studio is the one action that
+                    stays in the bar at every width. */}
+                {!signedIn && (
+                  <button
+                    onClick={() => router.push("/signup")}
+                    className="liquid-glass hide-md"
+                    style={{
+                      padding: "8px 18px",
+                      borderRadius: 999,
+                      background: "rgba(255,255,255,0.04)",
+                      color: "rgba(242, 240, 247, 0.92)",
+                      fontSize: 13,
+                      fontWeight: 500,
+                      border: "none",
+                      cursor: "pointer",
+                      fontFamily: "var(--font-sans)",
+                      whiteSpace: "nowrap",
+                      flexShrink: 0,
+                    }}
+                  >
+                    Sign Up
+                  </button>
+                )}
                 <button
-                  key={label}
-                  onClick={() => goSection(id)}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    color: "rgba(242, 240, 247, 0.9)",
-                    fontSize: 14,
-                    fontWeight: 400,
-                    fontFamily: "var(--font-sans)",
-                    padding: "8px 14px",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 6,
-                    whiteSpace: "nowrap",
-                    transition: "color .15s",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.color = "#fff")}
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.color = "rgba(242, 240, 247, 0.9)")
-                  }
-                >
-                  {label}
-                </button>
-              ))}
-            </nav>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {!signedIn && (
-                <button
-                  onClick={() => router.push("/signup")}
-                  className="liquid-glass lp-signup"
+                  onClick={openStudio}
                   style={{
                     padding: "8px 18px",
                     borderRadius: 999,
-                    background: "rgba(255,255,255,0.04)",
-                    color: "rgba(242, 240, 247, 0.92)",
+                    background: "var(--accent)",
+                    color: "var(--accent-fg)",
                     fontSize: 13,
-                    fontWeight: 500,
+                    fontWeight: 600,
                     border: "none",
                     cursor: "pointer",
                     fontFamily: "var(--font-sans)",
                     whiteSpace: "nowrap",
                     flexShrink: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
                   }}
                 >
-                  Sign Up
+                  Open Studio <IconArrow size={11} />
                 </button>
-              )}
-              <button
-                onClick={openStudio}
-                style={{
-                  padding: "8px 18px",
-                  borderRadius: 999,
-                  background: "var(--accent)",
-                  color: "var(--accent-fg)",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  border: "none",
-                  cursor: "pointer",
-                  fontFamily: "var(--font-sans)",
-                  whiteSpace: "nowrap",
-                  flexShrink: 0,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                Open Studio <IconArrow size={11} />
-              </button>
-              <button
-                className="lp-burger"
-                aria-label="Menu"
-                aria-expanded={menuOpen}
-                onClick={() => setMenuOpen((o) => !o)}
-              >
-                <svg
-                  width="18"
-                  height="18"
-                  viewBox="0 0 18 18"
-                  aria-hidden="true"
-                >
-                  <path
-                    d={
-                      menuOpen
-                        ? "M4 4l10 10M14 4L4 14"
-                        : "M2 5h14M2 9h14M2 13h14"
-                    }
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    fill="none"
-                  />
-                </svg>
-              </button>
-            </div>
-          </div>
-          {menuOpen && (
-            <div className="lp-sheet">
-              {NAV_SECTIONS.map(({ label, id }) => (
-                <button key={label} onClick={() => goSection(id)}>
-                  {label}
-                </button>
-              ))}
-              {!signedIn && (
+              </>
+            }
+            sheetFooter={
+              !signedIn ? (
                 <button
-                  onClick={() => {
-                    setMenuOpen(false);
-                    router.push("/signup");
-                  }}
+                  className="appnav__link"
+                  onClick={() => router.push("/signup")}
                 >
                   Sign Up
                 </button>
-              )}
-            </div>
-          )}
+              ) : null
+            }
+          />
           <div
             style={{
               height: 1,
