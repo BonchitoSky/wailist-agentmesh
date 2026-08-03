@@ -739,3 +739,48 @@ body {
     --us-settle-cols: minmax(0, 1fr) minmax(0, 1fr);
   }
 }
+
+/* ── Canvas: narrow-screen notice ─────────────────────────────────────────
+   Visibility comes from `show-md`; this rule only supplies the surface. It
+   covers the editor rather than replacing it in the tree, so the change stays
+   a pure addition to CanvasPage's render. */
+.canvas-narrow {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px 24px;
+  background: var(--bg);
+}
+.canvas-narrow__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+.canvas-narrow__body {
+  margin: 0;
+  max-width: 34ch;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--fg-muted);
+}
+.canvas-narrow button {
+  margin-top: 6px;
+  height: 36px;
+  padding: 0 16px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-2);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
