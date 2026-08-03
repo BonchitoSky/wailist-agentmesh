@@ -403,59 +403,64 @@ harness), `NAVBAR_UI_POLISH_PLAN.md` (visual polish of the current bar; its
 
 ---
 
-## 8. Implementation status — BLOCKED
+## 8. Implementation status — VERIFIED
 
 Branch `feature/appnav-hamburger`, stacked on `fix/mobile-responsive-ui` (it
 depends on that branch's `hide-md`/`show-md` utilities and 768px token).
 
-### Working and verified
+### Verified working
 
 - Route manifest (`lib/nav.ts`) with grouping support; `Topbar` and the sheet
   read from it, so the two surfaces cannot drift.
 - `useScrollLock` — locks `<html>` and `<body>`, restores the previous inline
-  values, and pins/restores scroll position. **Verified:** `htmlOvf` flips
-  `visible → hidden → visible`, `scrollY` identical before open and after close.
-- Disclosure semantics. **Verified:** trigger is a `<button>`, `aria-expanded`
-  flips `false ↔ true`, `aria-label` swaps Menu/Close menu, `aria-controls`
-  resolves to the sheet element.
-- **`role="menu"` / `role="menuitem"` count is now 0** across the authed shell —
-  the ARIA defect in §2 is fixed.
-- Sheet geometry: `position: fixed` under the bar, correctly measured at
-  `top: 56px, height: 756px` in a 812px viewport.
+  values, pins and restores scroll position. `scrollY` is identical before open
+  and after close.
+- Disclosure semantics: trigger is a `<button>`, `aria-expanded` flips
+  `false ↔ true`, `aria-label` swaps Menu/Close menu, `aria-controls` resolves to
+  the sheet.
+- **`role="menu"` / `role="menuitem"` count is 0** across the authed shell — the
+  ARIA defect in §2 is fixed.
+- Open/close motion, measured in Chrome against the real DOM structure (sheet
+  nested inside `.appnav__shell`, exactly as `AppNav.tsx` renders it):
 
-### Blocked
+  | State  | opacity | visibility | rect          | scrim |
+  | ------ | ------- | ---------- | ------------- | ----- |
+  | closed | 0       | hidden     | top 56, h 756 | 0     |
+  | open   | 1       | visible    | top 56, h 756 | 1     |
 
-**The sheet never becomes visible.** `.appnav--open .appnav__sheet` (and
-`.appnav--open ~ .appnav__scrim`) do not take effect, so opacity stays 0 and
-visibility stays hidden while open.
+  Sheet links are hit-testable when open and not when closed — the stepped
+  `visibility` is doing its job.
 
-What was ruled out, in order:
+### A false alarm worth recording
 
-| Hypothesis                 | Test                                                     | Result                                                |
-| -------------------------- | -------------------------------------------------------- | ----------------------------------------------------- |
-| Stale HMR CSS              | hard reload                                              | unchanged                                             |
-| Invalid `calc`/`dvh` value | same value on a probe element                            | resolves to 812px correctly                           |
-| Selector does not match    | `el.matches()` for both class and attribute forms        | `true`                                                |
-| A competing rule wins      | enumerated every matching rule in the CSSOM              | only 2, the open rule wins on specificity _and_ order |
-| Author-origin override     | runtime-injected `!important` rule that provably matches | **still ignored**                                     |
+An earlier pass reported this as blocked, on evidence gathered in the Claude
+Code in-app browser pane. In that environment the `.appnav--open` descendant
+rules never took effect: opacity stayed 0 and visibility stayed hidden while
+open, and even a runtime-injected `!important` rule that provably matched
+(`el.matches() === true`) was ignored.
 
-The last row is the anomaly: an injected `opacity: 1 !important; visibility:
-visible !important` rule, confirmed matching via `matches()`, leaves the
-computed values at `0` / `hidden`. In an earlier variant that grew the bar's own
-absolutely-positioned container, the same shape of failure appeared on `height` —
-ignored at `!important` and inline — while `outline` in the _same rule_ applied.
+**That was the environment, not the code.** The identical synthetic markup, with
+the identical stylesheet, was run in both browsers:
 
-That combination is not explainable by ordinary cascade rules, which is why the
-investigation was stopped rather than continued by guesswork.
+| Browser                    | closed            | open                   |
+| -------------------------- | ----------------- | ---------------------- |
+| Chrome (DevTools MCP)      | opacity 0, hidden | **opacity 1, visible** |
+| Claude in-app browser pane | opacity 0, hidden | opacity 0, hidden      |
 
-### Next step
+Same DOM, same CSS, different result. No code change was required to fix it.
 
-Inspect the element's actual matched-rules list in real DevTools (or via the
-Chrome DevTools MCP) instead of inferring from `getComputedStyle`. That shows
-directly which declarations are struck through and why — the one thing the
-computed-style probes could not reveal. Verify in a real browser too, in case
-this is specific to the automation context.
+Lesson for the next person: when a rule demonstrably matches, has winning
+specificity, and is still ignored at `!important`, suspect the rendering
+environment before rewriting the CSS. A second browser is a two-minute control
+and would have saved a long detour into `calc`, `dvh`, containing blocks, and
+cascade-order theories — none of which were the cause.
 
-Until then this branch must not merge: the trigger renders and toggles state but
-opens nothing, which is worse than the shipped behaviour on
-`fix/mobile-responsive-ui`.
+### Not yet done
+
+- Landing page still uses its own `.lp-sheet`; commit 8 in §4 (adopt `AppNav`
+  there and delete the bespoke surface) is outstanding.
+- The full React component has not been driven end-to-end in a signed-in real
+  browser — Chrome was unauthenticated, so the component-level checks above came
+  from the in-app pane (DOM, ARIA, scroll lock, geometry, all of which it
+  computes correctly) plus the CSS behaviour confirmed in Chrome.
+- Frame-rate check on a mid-tier profile (§5 item 7).
