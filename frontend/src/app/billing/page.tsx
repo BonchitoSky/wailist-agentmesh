@@ -1,15 +1,7 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import {
-  Logo,
-  Pill,
-  Hairline,
-  IconArrow,
-  IconWallet,
-  ghostBtnSm,
-} from "@/components/ui";
-import { useAuth } from "@/hooks/useAuth";
+import { IconArrow, IconWallet } from "@/components/ui";
+import { Topbar } from "@/components/Topbar";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { CheckoutModal } from "@/components/checkout/CheckoutModal";
 import { useCredits } from "@/lib/credits/store";
@@ -49,8 +41,6 @@ const panelStyle: React.CSSProperties = {
 const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
 
 export default function BillingPage() {
-  const router = useRouter();
-  const { signOut } = useAuth();
   const { balanceUSD, lastPurchase } = useCredits();
   const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
@@ -59,11 +49,6 @@ export default function BillingPage() {
   const openCheckoutFor = (inr: number) => {
     setCustomINR(String(inr));
     setCheckoutOpen(true);
-  };
-
-  const handleSignOut = async () => {
-    await signOut();
-    router.push("/");
   };
 
   const parsedCustom = customINR ? parseFloat(customINR) : NaN;
@@ -89,71 +74,7 @@ export default function BillingPage() {
     >
       <style>{BILLING_CSS}</style>
 
-      {/* Topbar — matches the workflows / usage pages */}
-      <div
-        style={{
-          height: 56,
-          flexShrink: 0,
-          background: "var(--bg-elev-1)",
-          borderBottom: "1px solid var(--border)",
-          padding: "0 24px",
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
-        }}
-      >
-        <button
-          onClick={() => router.push("/")}
-          style={{
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-            padding: 0,
-          }}
-        >
-          <Logo size={18} />
-        </button>
-        <Hairline vertical length={22} />
-        <Pill mono dot tone="ok">
-          testnet
-        </Pill>
-        <div style={{ flex: 1 }} />
-        <button style={ghostBtnSm} onClick={() => router.push("/workflows")}>
-          Workflows
-        </button>
-        <button style={ghostBtnSm} onClick={() => router.push("/usage")}>
-          Usage
-        </button>
-        <button
-          style={{
-            ...ghostBtnSm,
-            borderColor: "var(--accent-line)",
-            color: "var(--accent)",
-          }}
-        >
-          Credits
-        </button>
-        <Hairline vertical length={22} />
-        <button style={ghostBtnSm} onClick={handleSignOut}>
-          Sign out
-        </button>
-        <div
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 999,
-            background: "var(--accent)",
-            color: "var(--accent-fg)",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 11,
-            fontWeight: 700,
-          }}
-        >
-          AC
-        </div>
-      </div>
+      <Topbar />
 
       {/* Main scroll area */}
       <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>

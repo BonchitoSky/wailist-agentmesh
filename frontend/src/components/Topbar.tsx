@@ -4,6 +4,11 @@ import { useRouter, usePathname } from "next/navigation";
 import { Logo, Pill, Hairline, ghostBtnSm } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 
+// Which chain settlements actually run on. Mainnet is the default because
+// that is what the platform runs; overridable so a genuine testnet
+// deployment doesn't have to lie in the other direction.
+const ALGORAND_NETWORK = process.env.NEXT_PUBLIC_ALGORAND_NETWORK ?? "mainnet";
+
 // Shared application top bar. Rendered identically on every authed page so the
 // brand cluster, primary navigation, and account menu never drift between routes.
 export function Topbar() {
@@ -106,7 +111,7 @@ export function Topbar() {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button style={ghostBtnSm}>Acme Capital ▾</button>
           <Pill mono dot tone="warm">
-            testnet
+            {ALGORAND_NETWORK}
           </Pill>
         </div>
       </div>
