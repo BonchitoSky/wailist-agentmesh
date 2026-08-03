@@ -339,7 +339,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     return (
       <div
         style={{
-          height: "100vh",
+          height: "100dvh",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -357,7 +357,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   return (
     <div
       style={{
-        height: "100vh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",

@@ -41,7 +41,7 @@ export default function RootLayout({
           margin: 0,
           background: "var(--bg)",
           color: "var(--fg)",
-          minHeight: "100vh",
+          minHeight: "100dvh",
         }}
       >
         {children}

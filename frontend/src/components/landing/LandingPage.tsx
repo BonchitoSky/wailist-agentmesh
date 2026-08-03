@@ -103,7 +103,7 @@ export function LandingPage({ signedIn }: LandingPageProps) {
   return (
     <div
       style={{
-        height: "100vh",
+        height: "100dvh",
         position: "relative",
         background: "hsl(260 90% 2%)",
         overflow: "hidden",
@@ -136,7 +136,7 @@ export function LandingPage({ signedIn }: LandingPageProps) {
         style={{
           position: "relative",
           zIndex: 1,
-          height: "100vh",
+          height: "100dvh",
           overflowY: "auto",
           overflowX: "hidden",
           scrollBehavior: "smooth",
@@ -189,7 +189,7 @@ function HeroSection({
     <section
       style={{
         position: "relative",
-        minHeight: "100vh",
+        minHeight: "100dvh",
         display: "flex",
         flexDirection: "column",
         background: "transparent",
@@ -219,7 +219,7 @@ function HeroSection({
           display: "flex",
           flexDirection: "column",
           flex: 1,
-          minHeight: "100vh",
+          minHeight: "100dvh",
         }}
       >
         {/* Nav */}

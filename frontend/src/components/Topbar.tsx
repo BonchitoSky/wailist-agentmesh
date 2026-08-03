@@ -68,12 +68,6 @@ export function Topbar() {
 
   useEffect(() => cancelHoverClose, [cancelHoverClose]);
 
-  // Below the nav breakpoint the menu is also the navigation, so a route change
-  // has to dismiss it — otherwise the panel hangs over the page you just opened.
-  useEffect(() => {
-    setMenuState("closed");
-  }, [pathname]);
-
   useEffect(() => {
     if (!menuOpen) return;
     const onKey = (e: KeyboardEvent) => {

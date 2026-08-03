@@ -50,7 +50,7 @@ body {
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
   text-rendering: geometricPrecision;
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 ::selection {
