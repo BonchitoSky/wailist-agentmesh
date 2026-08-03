@@ -437,9 +437,9 @@ into the sheet) was deliberately not built — see the AppNav block in
 
 ### Both surfaces, re-measured after the landing adoption
 
-`AppNav` is now the only navigation surface in the app. Numbers below are from
-the running dev server; motion was read with transitions disabled, per the
-section that follows.
+`AppNav` is now the only navigation surface in the app. Geometry below was read
+from the running dev server in the in-app pane; motion and focus were re-run in
+a real, focused Chrome, for the reason in the section that follows.
 
 | Width  | Landing                                     | Authed shell                          |
 | ------ | ------------------------------------------- | ------------------------------------- |
@@ -453,10 +453,14 @@ section that follows.
 - Scroll lock works on each page's real scroller — `<html>`/`<body>` on the
   authed shell, the inner `overflow-y: auto` div on the landing page — and the
   bar does not shift when the scrollbar goes.
-- Escape closes and returns focus to the trigger; `aria-controls` resolves;
-  exactly one `<nav>` landmark is exposed at a time; `role="menu"` count is 0
-  across both surfaces.
+- `aria-controls` resolves; exactly one `<nav>` landmark is exposed at a time;
+  `role="menu"` count is 0 across both surfaces.
 - Sheet rows are 52px, clear of the 44px touch minimum.
+- In real Chrome, with transitions running: the sheet reaches opacity 1 /
+  visibility visible and the scrim opacity 1 on open; Escape closes it and
+  returns focus to the trigger; moving focus to a control outside the region
+  closes it; selecting a route closes the sheet, navigates, restores the
+  document overflow and moves `aria-current` to the new page.
 - `npm run build` is clean, as are `tsc --noEmit` and `eslint src`.
 
 ### The false alarm, and its actual cause
@@ -492,9 +496,18 @@ the pane — opacity 1, visibility visible, transform 0, scrim 1, sheet links
 hit-testable. That is the control to run there, and it is cheaper than a second
 browser.
 
+The same environment silently invalidates focus tests, which is the more
+dangerous half. `document.hasFocus()` is `false` there, and **no `focusin` or
+`focusout` event fires at all** — `.focus()` still moves `document.activeElement`,
+so a check written against `activeElement` passes while a handler listening for
+focus events never runs. "Focus leaving the region closes the sheet" (§5 item 2)
+therefore cannot be verified from the pane in either direction. It was confirmed
+in real Chrome instead.
+
 Lesson: when a rule demonstrably matches, has winning specificity and is still
 ignored at `!important`, check whether the properties that failed are the
-animated ones, and whether the page is compositing at all.
+animated ones, and whether the page is compositing at all. And do not verify
+focus behaviour from a window that does not have focus.
 
 ### Not yet done
 
