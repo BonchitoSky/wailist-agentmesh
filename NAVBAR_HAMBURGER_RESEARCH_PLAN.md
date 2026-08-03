@@ -408,10 +408,14 @@ harness), `NAVBAR_UI_POLISH_PLAN.md` (visual polish of the current bar; its
 Branch `feature/appnav-hamburger`, stacked on `fix/mobile-responsive-ui` (it
 depends on that branch's `hide-md`/`show-md` utilities and 768px token).
 
+Commit status against §4: 1–4 and 6–10 shipped. Commit 5 (grow the bar's height
+into the sheet) was deliberately not built — see the AppNav block in
+`globals.css`. Commit 8 landed last and is what makes the manifest true.
+
 ### Verified working
 
-- Route manifest (`lib/nav.ts`) with grouping support; `Topbar` and the sheet
-  read from it, so the two surfaces cannot drift.
+- Route manifest (`lib/nav.ts`) with grouping support; `Topbar`, `LandingPage`
+  and the sheet all read from it, so the surfaces cannot drift.
 - `useScrollLock` — locks `<html>` and `<body>`, restores the previous inline
   values, pins and restores scroll position. `scrollY` is identical before open
   and after close.
@@ -431,36 +435,74 @@ depends on that branch's `hide-md`/`show-md` utilities and 768px token).
   Sheet links are hit-testable when open and not when closed — the stepped
   `visibility` is doing its job.
 
-### A false alarm worth recording
+### Both surfaces, re-measured after the landing adoption
+
+`AppNav` is now the only navigation surface in the app. Numbers below are from
+the running dev server; motion was read with transitions disabled, per the
+section that follows.
+
+| Width  | Landing                                     | Authed shell                          |
+| ------ | ------------------------------------------- | ------------------------------------- |
+| 1440px | 74px bar, links centred at 716 = bar centre | 56px bar, nav → rule → avatar at 12px |
+| 769px  | inline links, sheet + scrim `display: none` | same                                  |
+| 768px  | trigger, sheet available, Sign Up in sheet  | trigger, sheet available              |
+| 375px  | 66px bar, sheet top 66, links 52px tall     | 56px bar, sheet top 56, links 52px    |
+
+- One breakpoint, both surfaces: 768/769 flips together, and no horizontal
+  overflow at any width tested.
+- Scroll lock works on each page's real scroller — `<html>`/`<body>` on the
+  authed shell, the inner `overflow-y: auto` div on the landing page — and the
+  bar does not shift when the scrollbar goes.
+- Escape closes and returns focus to the trigger; `aria-controls` resolves;
+  exactly one `<nav>` landmark is exposed at a time; `role="menu"` count is 0
+  across both surfaces.
+- Sheet rows are 52px, clear of the 44px touch minimum.
+- `npm run build` is clean, as are `tsc --noEmit` and `eslint src`.
+
+### The false alarm, and its actual cause
 
 An earlier pass reported this as blocked, on evidence gathered in the Claude
 Code in-app browser pane. In that environment the `.appnav--open` descendant
-rules never took effect: opacity stayed 0 and visibility stayed hidden while
-open, and even a runtime-injected `!important` rule that provably matched
-(`el.matches() === true`) was ignored.
+rules appeared never to take effect: opacity stayed 0 and visibility stayed
+hidden while open, and even a runtime-injected `!important` rule that provably
+matched (`el.matches() === true`) was ignored. It was called environmental, and
+that was right, but the mechanism was left unnamed. Worth naming, because it
+will catch the next person verifying CSS motion from that pane.
 
-**That was the environment, not the code.** The identical synthetic markup, with
-the identical stylesheet, was run in both browsers:
+**The pane is not displayed, so the document is hidden**
+(`document.visibilityState === "hidden"`), and a hidden document does not
+composite. Transitions therefore never advance: `getComputedStyle` keeps
+returning the from-value for every transitioned property, indefinitely. That is
+correct behaviour, not a broken cascade.
 
-| Browser                    | closed            | open                   |
-| -------------------------- | ----------------- | ---------------------- |
-| Chrome (DevTools MCP)      | opacity 0, hidden | **opacity 1, visible** |
-| Claude in-app browser pane | opacity 0, hidden | opacity 0, hidden      |
+The tell is in which declarations appeared to apply and which did not, with
+`.appnav--open` on the root:
 
-Same DOM, same CSS, different result. No code change was required to fix it.
+| Property                     | closed     | open                         |
+| ---------------------------- | ---------- | ---------------------------- |
+| `transition-delay`           | `0s`       | `0.08s` ← the rule applied   |
+| `transition-timing-function` | `steps(1)` | `steps(1, start)` ← likewise |
+| `opacity`                    | `0`        | `0` ← frozen mid-transition  |
+| `visibility`                 | `hidden`   | `hidden` ← frozen            |
 
-Lesson for the next person: when a rule demonstrably matches, has winning
-specificity, and is still ignored at `!important`, suspect the rendering
-environment before rewriting the CSS. A second browser is a two-minute control
-and would have saved a long detour into `calc`, `dvh`, containing blocks, and
-cascade-order theories — none of which were the cause.
+The rule was winning all along. Only the three transitioned properties looked
+stuck, and those are exactly the ones a frozen transition would hold. Injecting
+`transition: none !important` before opening resolves the whole open state in
+the pane — opacity 1, visibility visible, transform 0, scrim 1, sheet links
+hit-testable. That is the control to run there, and it is cheaper than a second
+browser.
+
+Lesson: when a rule demonstrably matches, has winning specificity and is still
+ignored at `!important`, check whether the properties that failed are the
+animated ones, and whether the page is compositing at all.
 
 ### Not yet done
 
-- Landing page still uses its own `.lp-sheet`; commit 8 in §4 (adopt `AppNav`
-  there and delete the bespoke surface) is outstanding.
-- The full React component has not been driven end-to-end in a signed-in real
-  browser — Chrome was unauthenticated, so the component-level checks above came
-  from the in-app pane (DOM, ARIA, scroll lock, geometry, all of which it
-  computes correctly) plus the CSS behaviour confirmed in Chrome.
-- Frame-rate check on a mid-tier profile (§5 item 7).
+- Frame-rate check on a mid-tier profile (§5 item 7). Note that the
+  height-growth animation of commit 5 was never built — the sheet is
+  `position: fixed` and cross-fades instead (see the AppNav block in
+  `globals.css` for why), so the layout-per-frame cost that item was written to
+  catch does not exist. Still worth measuring before the plan is called done.
+- Reduced motion is verified from the CSSOM — the `prefers-reduced-motion` block
+  is present and matches the sheet, scrim, trigger and links — not by emulating
+  the setting at runtime.
