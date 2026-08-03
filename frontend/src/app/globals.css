@@ -455,3 +455,145 @@ body {
   background: var(--bg-elev-3);
   color: var(--fg);
 }
+
+/* ── Landing nav ──────────────────────────────────────────────────────────
+   The bar is a space-between flex row; the links are absolutely centred on top
+   of it so they sit on the optical centre rather than between the logo and the
+   buttons. Being out of flow, they reserve no width — which is why they
+   overprinted their neighbours on narrow screens. Below `md` they rejoin the
+   flow; below `sm` they move into .lp-sheet. */
+.lp-bar {
+  padding: 20px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.lp-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.lp-burger {
+  display: none;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: rgba(242, 240, 247, 0.9);
+  padding: 6px;
+  align-items: center;
+  justify-content: center;
+}
+.lp-sheet {
+  display: flex;
+  flex-direction: column;
+  margin: 0 20px;
+  padding: 6px;
+  border-radius: var(--r-3);
+  background: rgba(12, 10, 24, 0.92);
+  border: 1px solid rgba(242, 240, 247, 0.12);
+  backdrop-filter: blur(12px);
+  animation: fade-up 0.16s var(--ease);
+}
+.lp-sheet button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 11px 12px;
+  border-radius: var(--r-2);
+  color: rgba(242, 240, 247, 0.9);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 400;
+}
+.lp-sheet button:active {
+  background: rgba(242, 240, 247, 0.08);
+}
+
+@media (max-width: 768px) {
+  .lp-nav {
+    position: static;
+    transform: none;
+  }
+}
+@media (max-width: 520px) {
+  .lp-bar {
+    padding: 16px 20px;
+  }
+  .lp-nav,
+  .lp-signup {
+    display: none;
+  }
+  .lp-burger {
+    display: inline-flex;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-sheet {
+    animation: none;
+  }
+}
+
+/* ── Landing hero + marquee ───────────────────────────────────────────────── */
+.lp-hero {
+  padding: 0 32px;
+}
+.lp-marquee-row {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 48px;
+}
+@media (max-width: 640px) {
+  .lp-marquee-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+  .lp-marquee-row > * {
+    width: 100%;
+  }
+}
+@media (max-width: 520px) {
+  .lp-hero {
+    padding: 0 20px;
+  }
+  .hide-sm {
+    display: none !important;
+  }
+}
+
+/* Landing section rhythm. Driven by custom properties rather than classes
+   because the values sit inside inline styles on the section elements. */
+:root {
+  --lp-section-pad: 128px 32px;
+  --lp-pillars-cols: repeat(2, 1fr);
+  --lp-steps-cols: repeat(4, 1fr);
+}
+.lp-marquee {
+  padding: 0 32px 40px;
+}
+@media (max-width: 768px) {
+  :root {
+    --lp-steps-cols: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  :root {
+    --lp-pillars-cols: minmax(0, 1fr);
+  }
+}
+@media (max-width: 520px) {
+  :root {
+    --lp-section-pad: 72px 20px;
+    --lp-steps-cols: minmax(0, 1fr);
+  }
+  .lp-marquee {
+    padding: 0 20px 32px;
+  }
+}
