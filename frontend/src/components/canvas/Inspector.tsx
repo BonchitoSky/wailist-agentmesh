@@ -1,6 +1,6 @@
 "use client";
-import { useState, useCallback } from "react";
-import { WorkflowNode } from "@/lib/types";
+import { useRef, useState } from "react";
+import { WorkflowNode, CustomParam } from "@/lib/types";
 import {
   PROVIDER_TEMPLATES,
   TOOL_TEMPLATES,
@@ -12,14 +12,12 @@ import {
   modelTier,
   TIER_FEES,
 } from "@/lib/data";
-import { Pill, IconClose, StatusDot } from "@/components/ui";
+import { IconClose, StatusDot } from "@/components/ui";
 import { BrandLogo } from "./nodes/brandLogos";
-import { agents as agentsApi, tools as toolsApi } from "@/lib/api";
+import { tools as toolsApi } from "@/lib/api";
 
 interface InspectorProps {
   selected: WorkflowNode | null;
-  deployed: boolean;
-  workflowId: string;
   onUpdate: (n: WorkflowNode) => void;
   onDelete: () => void;
   onClose: () => void;
@@ -28,8 +26,6 @@ interface InspectorProps {
 
 export function Inspector({
   selected,
-  deployed,
-  workflowId,
   onUpdate,
   onDelete,
   onClose,
@@ -120,12 +116,7 @@ export function Inspector({
         }}
       >
         {selected.type === "agent" && (
-          <AgentInspector
-            node={selected}
-            deployed={deployed}
-            workflowId={workflowId}
-            onUpdate={onUpdate}
-          />
+          <AgentInspector node={selected} onUpdate={onUpdate} />
         )}
         {selected.type === "provider" && (
           <ProviderInspector node={selected} onUpdate={onUpdate} />
@@ -474,44 +465,11 @@ const monoInputStyle: React.CSSProperties = {
 // ── Agent Inspector ────────────────────────────────────────────────────────
 function AgentInspector({
   node,
-  deployed,
-  workflowId,
   onUpdate,
 }: {
   node: WorkflowNode;
-  deployed: boolean;
-  workflowId: string;
   onUpdate: (n: WorkflowNode) => void;
 }) {
-  const [copied, setCopied] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const copyAddress = useCallback(() => {
-    if (!node.wallet) return;
-    navigator.clipboard
-      .writeText(node.wallet)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1800);
-      })
-      // writeText rejects when the page lacks clipboard permission or is served
-      // over a non-secure origin; stay silent rather than throwing unhandled.
-      .catch(() => {});
-  }, [node.wallet]);
-
-  const refreshBalance = useCallback(async () => {
-    if (!node.wallet || !workflowId) return;
-    setRefreshing(true);
-    try {
-      const res = await agentsApi.balance(workflowId, node.id);
-      onUpdate({ ...node, balance: res.balance });
-    } catch {
-      // balance fetch failed silently — keep existing value
-    } finally {
-      setRefreshing(false);
-    }
-  }, [node, workflowId, onUpdate]);
-
   return (
     <>
       <Section label="Identity">
@@ -524,168 +482,22 @@ function AgentInspector({
         </Field>
       </Section>
 
-      <Section label="Wallet">
-        {deployed && node.wallet ? (
-          <div
-            style={{
-              padding: 14,
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--r-2)",
-            }}
-          >
-            {/* Network badge + address header */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 8,
-              }}
-            >
-              <Pill mono dot tone="ok">
-                algorand testnet
-              </Pill>
-              <button
-                onClick={copyAddress}
-                title="Copy full address"
-                style={iconBtnStyle}
-              >
-                {copied ? "✓" : "⎘"}
-              </button>
-            </div>
-
-            {/* Full address — monospace, selectable, wrapped cleanly */}
-            <div
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 10,
-                color: "var(--fg-muted)",
-                background: "var(--bg-elev-2)",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                padding: "8px 10px",
-                wordBreak: "break-all",
-                lineHeight: 1.7,
-                userSelect: "text",
-                cursor: "text",
-              }}
-            >
-              {node.wallet}
-            </div>
-
-            {/* Balance row */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginTop: 14,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                <span
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 28,
-                    fontWeight: 600,
-                    color: "var(--accent)",
-                    letterSpacing: "-0.02em",
-                  }}
-                >
-                  {node.balance ?? "0.000000"}
-                </span>
-                <span
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                    color: "var(--fg-muted)",
-                  }}
-                >
-                  ALGO
-                </span>
-              </div>
-              <button
-                onClick={refreshBalance}
-                disabled={refreshing}
-                title="Refresh balance from chain"
-                style={{ ...iconBtnStyle, fontSize: 16, width: 32, height: 32 }}
-              >
-                <span
-                  style={{
-                    display: "inline-block",
-                    transition: "transform 0.4s",
-                    transform: refreshing ? "rotate(360deg)" : "none",
-                  }}
-                >
-                  ↻
-                </span>
-              </button>
-            </div>
-            <div
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 10,
-                color: "var(--fg-dim)",
-                marginTop: 2,
-              }}
-            >
-              spent {node.spent ?? "0.000000"} ALGO · last 24h
-            </div>
-
-            {/* Fund hint */}
-            <div
-              style={{
-                marginTop: 12,
-                padding: "8px 10px",
-                background: "var(--bg-elev-2)",
-                border: "1px solid var(--border)",
-                borderRadius: 6,
-                fontSize: 11,
-                color: "var(--fg-dim)",
-                lineHeight: 1.55,
-              }}
-            >
-              Copy the address above and fund it via the{" "}
-              <a
-                href="https://bank.testnet.algorand.network/"
-                target="_blank"
-                rel="noreferrer"
-                style={{ color: "var(--accent)", textDecoration: "none" }}
-              >
-                Algorand faucet
-              </a>{" "}
-              or Lora testnet. Hit ↻ to see the updated balance.
-            </div>
-          </div>
-        ) : (
-          <div
-            style={{
-              padding: 14,
-              background: "var(--bg)",
-              border: "1px dashed var(--border-strong)",
-              borderRadius: "var(--r-2)",
-              fontSize: 12,
-              color: "var(--fg-muted)",
-              lineHeight: 1.55,
-            }}
-          >
-            <div
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 10,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                color: "var(--fg-dim)",
-                marginBottom: 8,
-              }}
-            >
-              not yet deployed
-            </div>
-            This agent will receive an Algorand keypair on testnet when you
-            click <strong style={{ color: "var(--fg)" }}>Deploy</strong>.
-          </div>
-        )}
+      <Section label="Funding">
+        <div
+          style={{
+            padding: 12,
+            background: "var(--bg)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--r-2)",
+            fontSize: 11,
+            color: "var(--fg-muted)",
+            lineHeight: 1.5,
+          }}
+        >
+          Agents don&apos;t hold a wallet. Paid x402 tool calls are settled by
+          the platform wallets and billed to your credit balance, so there is
+          nothing to fund or top up per agent.
+        </div>
       </Section>
 
       <Section label="System prompt">
@@ -708,7 +520,7 @@ function AgentInspector({
           style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}
         >
           <Field label="Max spend / run">
-            <input style={monoInputStyle} defaultValue="0.50 ALGO" />
+            <input style={monoInputStyle} defaultValue="0.50 USDC" />
           </Field>
           <Field label="Timeout">
             <input style={monoInputStyle} defaultValue="30s" />
@@ -959,6 +771,95 @@ function ToolInspector({
   );
 }
 
+// Backend enforces the same ceiling (nodes.maxParamFileBytes) — this copy
+// exists to fail fast with a clear message instead of after an upload.
+const MAX_PARAM_FILE_BYTES = 2 * 1024 * 1024;
+
+// btoa needs a binary string; chunked so a multi-MB file doesn't blow the
+// argument limit of String.fromCharCode.
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+// Base64 inflates by 4/3, so the decoded size is what the user actually
+// picked — showing the encoded length would overstate every file by a third.
+// A tool402 node's JSON body references its own fields with {{kind:name}}.
+// Kept in sync with nodes.bodyPlaceholder on the backend, which does the
+// real substitution at call time — this copy only powers the editor's live
+// feedback, so a bad body is caught while typing rather than by an endpoint
+// that charges for the attempt.
+const BODY_PLACEHOLDER = /\{\{(param|file|fileName|fileType):([^}]+)\}\}/g;
+
+// referenceTokens lists what a field can be referenced as. A file offers its
+// bytes, its name, and its type; a text field just its value.
+function referenceTokens(p: CustomParam): string[] {
+  if (!p.name) return [];
+  return p.kind === "file"
+    ? [`{{file:${p.name}}}`, `{{fileName:${p.name}}}`, `{{fileType:${p.name}}}`]
+    : [`{{param:${p.name}}}`];
+}
+
+// validateBodyTemplate reports the first problem with a JSON body, or null.
+// Two failure modes matter, and both are silent until money has moved: a
+// reference to a field that does not exist, and a body that is not valid
+// JSON once filled in.
+function validateBodyTemplate(
+  template: string,
+  fields: CustomParam[],
+  paramDefaults?: Record<string, string>,
+): string | null {
+  if (!template.trim()) return null;
+  const known = new Set(fields.map((f) => f.name).filter(Boolean));
+  const missing = new Set<string>();
+  for (const m of template.matchAll(BODY_PLACEHOLDER)) {
+    const name = m[2].trim();
+    const isDiscoveredValue = m[1] === "param" && paramDefaults?.[name] !== undefined;
+    if (!known.has(name) && !isDiscoveredValue) missing.add(m[0]);
+  }
+  if (missing.size > 0) {
+    return `No field named ${[...missing].join(", ")} — add it below, or fix the name.`;
+  }
+  // Placeholders always sit inside string literals, so a stand-in value is
+  // enough to check the surrounding document's shape.
+  try {
+    JSON.parse(template.replace(BODY_PLACEHOLDER, "x"));
+  } catch (e) {
+    return `Not valid JSON — ${e instanceof Error ? e.message : "check the syntax"}.`;
+  }
+  return null;
+}
+
+// bodySkeleton builds a starting body from whatever fields THIS node has,
+// so the editor teaches the reference syntax without asserting anything
+// about the endpoint. Nothing here knows a vendor's field names: an
+// endpoint's real shape lives in its own docs (and almost none publish a
+// machine-readable schema, so it cannot be generated), while the keys below
+// are only a scaffold the caller edits.
+function bodySkeleton(fields: CustomParam[]): string {
+  const named = fields.filter((f) => f.name);
+  if (named.length === 0) return "{\n  \n}";
+  const lines = named.map(
+    (f) =>
+      `  "${f.name}": "${f.kind === "file" ? `{{file:${f.name}}}` : `{{param:${f.name}}}`}"`,
+  );
+  return `{\n${lines.join(",\n")}\n}`;
+}
+
+
+function formatFileSize(base64: string): string {
+  const bytes = Math.floor((base64.length * 3) / 4);
+  return bytes < 1024
+    ? `${bytes} B`
+    : bytes < 1024 * 1024
+      ? `${(bytes / 1024).toFixed(0)} KB`
+      : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 // ── Tool402 Inspector ──────────────────────────────────────────────────────
 function Tool402Inspector({
   node,
@@ -970,6 +871,7 @@ function Tool402Inspector({
   const tpl = TOOL402_TEMPLATES.find((t) => t.id === node.template);
   const [draft, setDraft] = useState(node.endpoint ?? "");
   const [probing, setProbing] = useState(false);
+  const [fieldError, setFieldError] = useState<string | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const magenta = "#E879F9";
 
@@ -985,21 +887,105 @@ function Tool402Inspector({
       } catch {
         /* use raw draft */
       }
+      const params = quote.params ?? [];
+      // Seed each discovered param's value: keep whatever the user already
+      // typed for that name, otherwise take the backend's default (the
+      // platform wallet address, for address-shaped params). Values for
+      // params this endpoint no longer declares are dropped rather than
+      // silently sent to a different endpoint after the URL is edited.
+      const seeded: Record<string, string> = {};
+      for (const p of params) {
+        seeded[p.name] = node.paramDefaults?.[p.name] ?? p.default ?? "";
+      }
       onUpdate({
         ...node,
         endpoint: draft.trim(),
         price: quote.price ?? "?",
         unit: quote.unit ?? "call",
+        asset: quote.asset ?? "USDC",
         provider: host,
         priceLive: true,
         description: node.description || quote.description || "",
-        discoveredParams: quote.params ?? [],
+        // The target's own declared method wins over the dropdown's default:
+        // calling a POST-only resource with GET fails before payment is even
+        // considered.
+        method: quote.method ?? node.method ?? "GET",
+        discoveredParams: params,
+        paramDefaults: seeded,
       });
     } catch (err: unknown) {
       setProbeError(err instanceof Error ? err.message : "probe failed");
       onUpdate({ ...node, endpoint: draft.trim(), priceLive: false });
     } finally {
       setProbing(false);
+    }
+  };
+
+  const custom = node.customParams ?? [];
+  const hasDiscovered = !!node.discoveredParams?.length;
+  const hasFile = custom.some((p) => p.kind === "file" && p.value);
+  const bodyMode = node.bodyMode === "json" ? "json" : "params";
+  const bodyTemplate = node.bodyTemplate ?? "";
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const bodyError = validateBodyTemplate(bodyTemplate, custom, node.paramDefaults);
+  // How the configured values will actually reach the endpoint — worth
+  // stating outright, since it changes with the mode, the method, and
+  // whether a file is attached (a file forces multipart, a body forces POST).
+  const paramTransport =
+    bodyMode === "json"
+      ? "as the JSON body below (POST)"
+      : hasFile
+        ? "as multipart/form-data (POST)"
+        : node.method && node.method !== "GET"
+          ? "in the JSON request body"
+          : "as query params";
+
+  // Inserts a reference at the cursor, so a file can be dropped into the
+  // body without hand-typing a token whose spelling has to match exactly.
+  const insertReference = (token: string) => {
+    const el = bodyRef.current;
+    const base = bodyTemplate || bodySkeleton(custom);
+    if (!el) {
+      onUpdate({ ...node, bodyTemplate: base + token });
+      return;
+    }
+    const start = el.selectionStart ?? base.length;
+    const end = el.selectionEnd ?? start;
+    const next = base.slice(0, start) + token + base.slice(end);
+    onUpdate({ ...node, bodyTemplate: next });
+    requestAnimationFrame(() => {
+      el.focus();
+      const caret = start + token.length;
+      el.setSelectionRange(caret, caret);
+    });
+  };
+
+  const writeFields = (next: CustomParam[]) =>
+    onUpdate({ ...node, customParams: next });
+  const addField = () =>
+    writeFields([...custom, { name: "", kind: "text", value: "" }]);
+  const removeField = (i: number) =>
+    writeFields(custom.filter((_, idx) => idx !== i));
+  const patchField = (i: number, patch: Partial<CustomParam>) =>
+    writeFields(custom.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
+
+  const pickFile = async (i: number, file: File) => {
+    if (file.size > MAX_PARAM_FILE_BYTES) {
+      setFieldError(
+        `${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is 2 MB.`,
+      );
+      return;
+    }
+    setFieldError(null);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      patchField(i, {
+        value: bytesToBase64(bytes),
+        fileName: file.name,
+        mimeType: file.type,
+      });
+    } catch {
+      setFieldError(`Could not read ${file.name}.`);
     }
   };
 
@@ -1032,7 +1018,7 @@ function Tool402Inspector({
                 {tpl?.price}
               </span>
               <span style={{ color: "var(--fg-muted)" }}>
-                ALGO / {tpl?.unit}
+                USDC / {tpl?.unit}
               </span>
             </div>
           </div>
@@ -1065,7 +1051,7 @@ function Tool402Inspector({
             />
           </Field>
           <Field label="Max per call">
-            <input style={monoInputStyle} defaultValue={`${tpl?.price} ALGO`} />
+            <input style={monoInputStyle} defaultValue={`${tpl?.price} USDC`} />
           </Field>
         </Section>
       </>
@@ -1179,7 +1165,7 @@ function Tool402Inspector({
                 {node.price}
               </span>
               <span style={{ color: "var(--fg-muted)" }}>
-                ALGO / {node.unit}
+                {node.asset ?? "USDC"} / {node.unit}
               </span>
             </div>
             <div
@@ -1195,42 +1181,91 @@ function Tool402Inspector({
           </div>
         )}
       </Section>
-      {node.discoveredParams && node.discoveredParams.length > 0 && (
-        <Section label="Endpoint params">
-          <div
-            style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 6 }}
-          >
-            Filled automatically by the agent at runtime.
-          </div>
-          <div
-            style={{
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--r-2)",
-              overflow: "hidden",
-            }}
-          >
-            {node.discoveredParams.map((p, i) => (
-              <div
-                key={p.name}
+      <Section label="Endpoint params">
+        <div style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 8 }}>
+          {hasDiscovered
+            ? "Declared by this endpoint itself. "
+            : "This endpoint declares no inputs, so add whatever fields it needs. "}
+          Sent {paramTransport}.
+          {hasDiscovered && " An attached agent can override them per call."}
+        </div>
+
+        {/* Fields alone can only produce a flat request. An endpoint wanting a
+            nested body — an array of file objects, say — needs the caller to
+            write that shape, so the two ways of building a request are a
+            deliberate, visible choice rather than something inferred. */}
+        <div
+          style={{
+            display: "flex",
+            gap: 2,
+            padding: 2,
+            marginBottom: 10,
+            border: "1px solid var(--border)",
+            borderRadius: "var(--r-2)",
+            background: "var(--bg)",
+          }}
+        >
+          {(
+            [
+              ["params", "Fields"],
+              ["json", "JSON body"],
+            ] as const
+          ).map(([mode, label]) => {
+            const active = bodyMode === mode;
+            return (
+              <button
+                key={mode}
+                onClick={() =>
+                  onUpdate({
+                    ...node,
+                    bodyMode: mode,
+                    // Seed the editor the first time, so the shape and the
+                    // reference syntax are visible instead of a blank box.
+                    bodyTemplate:
+                      mode === "json" && !node.bodyTemplate
+                        ? bodySkeleton(custom)
+                        : node.bodyTemplate,
+                  })
+                }
                 style={{
-                  padding: "8px 12px",
-                  borderBottom:
-                    i < node.discoveredParams!.length - 1
-                      ? "1px solid var(--border)"
-                      : "none",
-                  display: "flex",
-                  alignItems: "flex-start",
-                  gap: 8,
+                  flex: 1,
+                  height: 26,
+                  border: "none",
+                  borderRadius: "var(--r-1)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10.5,
+                  letterSpacing: 0.3,
+                  background: active ? "rgba(232,121,249,0.12)" : "transparent",
+                  color: active ? magenta : "var(--fg-dim)",
                 }}
               >
-                <div style={{ flex: 1 }}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {hasDiscovered && (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              marginBottom: 12,
+            }}
+          >
+            {node.discoveredParams!.map((p) => {
+              const value = node.paramDefaults?.[p.name] ?? "";
+              const missing = p.required && !value.trim();
+              return (
+                <div key={p.name}>
                   <div
                     style={{
                       display: "flex",
                       alignItems: "center",
                       gap: 6,
-                      marginBottom: 2,
+                      marginBottom: 4,
                     }}
                   >
                     <span
@@ -1254,44 +1289,312 @@ function Tool402Inspector({
                     >
                       {p.type}
                     </span>
-                    {p.required ? (
-                      <span
-                        style={{
-                          fontFamily: "var(--font-mono)",
-                          fontSize: 9,
-                          color: "#F87171",
-                        }}
-                      >
-                        required
-                      </span>
-                    ) : (
-                      <span
-                        style={{
-                          fontFamily: "var(--font-mono)",
-                          fontSize: 9,
-                          color: "var(--fg-dim)",
-                        }}
-                      >
-                        optional
-                      </span>
-                    )}
+                    <span
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 9,
+                        color: missing ? "#F87171" : "var(--fg-dim)",
+                      }}
+                    >
+                      {p.required ? "required" : "optional"}
+                    </span>
                   </div>
+                  <input
+                    style={{
+                      ...monoInputStyle,
+                      borderColor: missing ? "#F87171" : undefined,
+                    }}
+                    value={value}
+                    placeholder={p.required ? "required" : "optional"}
+                    onChange={(e) =>
+                      onUpdate({
+                        ...node,
+                        paramDefaults: {
+                          ...node.paramDefaults,
+                          [p.name]: e.target.value,
+                        },
+                      })
+                    }
+                  />
+                  {p.description && (
+                    <div
+                      style={{
+                        fontSize: 10,
+                        color: "var(--fg-muted)",
+                        lineHeight: 1.4,
+                        marginTop: 3,
+                      }}
+                    >
+                      {p.description}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {custom.map((p, i) => (
+            <div
+              key={i}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                padding: 8,
+                border: "1px solid var(--border)",
+                borderRadius: "var(--r-2)",
+                background: "var(--bg)",
+              }}
+            >
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  style={{ ...monoInputStyle, flex: 1, minWidth: 0 }}
+                  placeholder="field name"
+                  value={p.name}
+                  onChange={(e) => patchField(i, { name: e.target.value })}
+                />
+                <select
+                  style={{ ...monoInputStyle, width: 74, flexShrink: 0 }}
+                  value={p.kind}
+                  onChange={(e) =>
+                    patchField(i, {
+                      kind: e.target.value as CustomParam["kind"],
+                      value: "",
+                      fileName: "",
+                      mimeType: "",
+                    })
+                  }
+                >
+                  <option value="text">text</option>
+                  <option value="file">file</option>
+                </select>
+                <button
+                  onClick={() => removeField(i)}
+                  title="remove field"
+                  style={{
+                    width: 30,
+                    flexShrink: 0,
+                    border: "1px solid var(--border)",
+                    background: "transparent",
+                    color: "var(--fg-dim)",
+                    borderRadius: "var(--r-2)",
+                    cursor: "pointer",
+                    fontSize: 12,
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {p.kind === "file" ? (
+                p.value ? (
                   <div
                     style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontFamily: "var(--font-mono)",
                       fontSize: 10,
-                      color: "var(--fg-muted)",
-                      lineHeight: 1.4,
                     }}
                   >
-                    {p.description}
-                    {p.default ? ` · default: ${p.default}` : ""}
+                    <span style={{ color: magenta }}>
+                      📎 {p.fileName || "file"}
+                    </span>
+                    <span style={{ color: "var(--fg-dim)" }}>
+                      {formatFileSize(p.value)}
+                    </span>
+                    <button
+                      onClick={() =>
+                        patchField(i, { value: "", fileName: "", mimeType: "" })
+                      }
+                      style={{
+                        marginLeft: "auto",
+                        border: "none",
+                        background: "none",
+                        color: "var(--fg-dim)",
+                        cursor: "pointer",
+                        fontSize: 11,
+                      }}
+                    >
+                      ✕
+                    </button>
                   </div>
+                ) : (
+                  <input
+                    type="file"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) pickFile(i, f);
+                    }}
+                    style={{ fontSize: 11, color: "var(--fg-muted)" }}
+                  />
+                )
+              ) : (
+                <input
+                  style={monoInputStyle}
+                  placeholder="value"
+                  value={p.value ?? ""}
+                  onChange={(e) => patchField(i, { value: e.target.value })}
+                />
+              )}
+
+              {/* In JSON mode a field is not sent on its own — it is a value
+                  the body can pull in. Clicking drops the exact token at the
+                  cursor, since it has to match the field name character for
+                  character to resolve. */}
+              {bodyMode === "json" && referenceTokens(p).length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {referenceTokens(p).map((token) => (
+                    <button
+                      key={token}
+                      onClick={() => insertReference(token)}
+                      title="insert into the JSON body"
+                      style={{
+                        padding: "2px 6px",
+                        border: "1px solid var(--border)",
+                        borderRadius: "var(--r-1)",
+                        background: bodyTemplate.includes(token)
+                          ? "rgba(232,121,249,0.10)"
+                          : "transparent",
+                        color: bodyTemplate.includes(token)
+                          ? magenta
+                          : "var(--fg-dim)",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 9.5,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {token}
+                    </button>
+                  ))}
                 </div>
-              </div>
-            ))}
+              )}
+            </div>
+          ))}
+        </div>
+
+        {fieldError && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: "6px 8px",
+              background: "rgba(248,113,113,0.08)",
+              border: "1px solid rgba(248,113,113,0.3)",
+              borderRadius: "var(--r-2)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              color: "#F87171",
+            }}
+          >
+            {fieldError}
           </div>
-        </Section>
-      )}
+        )}
+
+        <button
+          onClick={addField}
+          style={{
+            marginTop: 8,
+            height: 30,
+            width: "100%",
+            border: "1px dashed var(--border-strong)",
+            background: "transparent",
+            color: "var(--fg-muted)",
+            borderRadius: "var(--r-2)",
+            fontSize: 11,
+            cursor: "pointer",
+            fontFamily: "var(--font-sans)",
+          }}
+        >
+          + add field
+        </button>
+
+        {bodyMode === "json" && (
+          <div style={{ marginTop: 14 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "baseline",
+                justifyContent: "space-between",
+                marginBottom: 6,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10,
+                  letterSpacing: 0.4,
+                  color: "var(--fg-muted)",
+                  textTransform: "uppercase",
+                }}
+              >
+                Request body
+              </span>
+              <span style={{ fontSize: 10, color: "var(--fg-dim)" }}>
+                paste the shape this endpoint documents
+              </span>
+            </div>
+            <textarea
+              ref={bodyRef}
+              spellCheck={false}
+              value={bodyTemplate}
+              onChange={(e) =>
+                onUpdate({ ...node, bodyTemplate: e.target.value })
+              }
+              placeholder={bodySkeleton(custom)}
+              style={{
+                ...monoInputStyle,
+                height: 190,
+                width: "100%",
+                padding: 10,
+                lineHeight: 1.55,
+                resize: "vertical",
+                whiteSpace: "pre",
+                overflowWrap: "normal",
+                overflowX: "auto",
+                borderColor: bodyError ? "rgba(248,113,113,0.5)" : undefined,
+              }}
+            />
+            {bodyError ? (
+              <div
+                style={{
+                  marginTop: 6,
+                  padding: "6px 8px",
+                  background: "rgba(248,113,113,0.08)",
+                  border: "1px solid rgba(248,113,113,0.3)",
+                  borderRadius: "var(--r-2)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10,
+                  color: "#F87171",
+                }}
+              >
+                {bodyError}
+              </div>
+            ) : (
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: 10,
+                  lineHeight: 1.5,
+                  color: "var(--fg-dim)",
+                }}
+              >
+                {bodyTemplate.trim() ? (
+                  <>
+                    <span style={{ color: "var(--accent)" }}>✓ valid JSON</span>
+                    {" — keys must match what the endpoint documents; field"}
+                    {" names are yours, they only appear inside {{…}}. A file's"}
+                    {" bytes are filled in at call time, never pasted here."}
+                  </>
+                ) : (
+                  "Paste the body this endpoint documents, then click a field's chip above to reference it."
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </Section>
       <Section label="Tool description">
         <Field label="What this tool does" hint="shown to agent">
           <textarea

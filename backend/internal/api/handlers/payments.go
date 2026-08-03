@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -27,11 +29,37 @@ const (
 	maxCryptoAmountUSDCents = 600_000 // $6,000
 )
 
+// indianPhonePattern matches a bare 10-digit Indian mobile number (starts
+// 6-9, per TRAI's numbering plan) after normalizeIndianPhone has stripped
+// formatting and any country code.
+var indianPhonePattern = regexp.MustCompile(`^[6-9]\d{9}$`)
+
+// normalizeIndianPhone validates and normalizes a customer-entered phone
+// number to the bare 10-digit form Cashfree's customer_phone expects.
+// Accepts common variations a user might type or paste: spaces, hyphens,
+// a leading "+91", "91", or "0". Anything else is rejected outright rather
+// than passed through — Cashfree's own placeholder ("9999999999") was
+// silently accepted and shown back to real customers on their receipt,
+// which is the bug this replaces; a malformed number reaching Cashfree
+// unnoticed would be the same failure in a new shape.
+func normalizeIndianPhone(raw string) (string, error) {
+	digits := regexp.MustCompile(`\D`).ReplaceAllString(raw, "")
+	digits = strings.TrimPrefix(digits, "0")
+	if len(digits) == 12 && strings.HasPrefix(digits, "91") {
+		digits = digits[2:]
+	}
+	if !indianPhonePattern.MatchString(digits) {
+		return "", fmt.Errorf("invalid phone number")
+	}
+	return digits, nil
+}
+
 func (d *Deps) CreateCashfreeOrder(w http.ResponseWriter, r *http.Request) {
 	userID, _ := r.Context().Value(CtxUserID).(string)
 
 	var body struct {
-		AmountINRPaise int64 `json:"amount_inr_paise"`
+		AmountINRPaise int64  `json:"amount_inr_paise"`
+		Phone          string `json:"phone"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		respond.Error(w, http.StatusBadRequest, "invalid request body")
@@ -43,6 +71,11 @@ func (d *Deps) CreateCashfreeOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.AmountINRPaise > maxCashfreeAmountPaise {
 		respond.Error(w, http.StatusBadRequest, "amount exceeds maximum allowed")
+		return
+	}
+	phone, err := normalizeIndianPhone(body.Phone)
+	if err != nil {
+		respond.Error(w, http.StatusBadRequest, "enter a valid 10-digit phone number")
 		return
 	}
 
@@ -72,11 +105,7 @@ func (d *Deps) CreateCashfreeOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cashfree requires a phone; use a placeholder since our user model
-	// does not collect phone numbers.
-	const placeholderPhone = "9999999999"
-
-	order, err := d.Cashfree.CreateOrder(r.Context(), body.AmountINRPaise, orderID, userID, user.Email, placeholderPhone)
+	order, err := d.Cashfree.CreateOrder(r.Context(), body.AmountINRPaise, orderID, userID, user.Email, phone)
 	if err != nil {
 		log.Printf("cashfree order: create order: %v", err)
 		respond.Error(w, http.StatusBadGateway, "cashfree order creation failed")
@@ -179,7 +208,7 @@ func (d *Deps) CashfreeWebhook(w http.ResponseWriter, r *http.Request) {
 		Type string `json:"type"`
 		Data struct {
 			Order struct {
-				OrderID string `json:"order_id"`
+				OrderID     string `json:"order_id"`
 				OrderStatus string `json:"order_status"`
 			} `json:"order"`
 			Payment struct {

@@ -205,6 +205,64 @@ export const workflows = {
   },
 };
 
+// -- Credits ----------------------------------------------------------------
+export const credits = {
+  // The authoritative balance: users.credit_balance_usd_micros, the same row
+  // the engine reserves against and debits on every paid call. Anything shown
+  // from another source is a guess that drifts the moment a run spends money.
+  balance: async (): Promise<number> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/credits/balance`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "balance fetch failed");
+      return (data.credit_usd_micros ?? 0) / 1e6;
+    }
+    await delay(120);
+    return 0;
+  },
+};
+
+// -- Runs -------------------------------------------------------------------
+export interface RunLogRecord {
+  id: string;
+  runId: string;
+  stepIndex: number;
+  nodeId: string;
+  nodeType: string;
+  status: "pending" | "running" | "success" | "failed";
+  output?: unknown;
+  durationMs?: number;
+  ts: string;
+}
+
+export const runs = {
+  // The DB-backed source of truth for a run's logs — used as a reconciliation
+  // fallback once the live SSE stream ends, since the stream's broker only
+  // delivers events to clients subscribed at the exact moment they're
+  // published (see sse/broker.go's non-blocking, unbuffered-per-subscriber
+  // Publish): any run that finishes a step before/without a live subscriber
+  // silently drops that step's event, with no replay. Polling this after
+  // "done" (or a stream error) guarantees the console reflects what actually
+  // happened server-side, not just whatever fraction of events the stream
+  // happened to deliver live.
+  get: async (
+    runId: string,
+  ): Promise<{ run: { status: string }; logs: RunLogRecord[] }> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/runs/${runId}`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "failed to fetch run");
+      return data;
+    }
+    await delay(150);
+    return { run: { status: "success" }, logs: [] };
+  },
+};
+
 // -- Agents ---------------------------------------------------------------
 export const agents = {
   // TODO: GET /workflows/:wfId/agents/:agentId/balance
@@ -260,10 +318,17 @@ export const tools = {
   ): Promise<{
     price?: string;
     unit?: string;
+    asset?: string;
     network?: string;
     recipient?: string;
     raw?: string;
     description?: string;
+    // The HTTP method the target declares for itself, and whether its params
+    // ride in the query string or the body — both read out of the endpoint's
+    // own Bazaar extension, so the canvas configures an arbitrary endpoint
+    // correctly without anyone hardcoding support for it.
+    method?: string;
+    paramsIn?: "query" | "body";
     params?: Array<{
       name: string;
       type: string;
@@ -314,6 +379,7 @@ export const waitlist = {
 export const payments = {
   createCashfreeOrder: async (
     amountINRPaise: number,
+    phone: string,
   ): Promise<{
     order_id: string;
     payment_session_id: string;
@@ -326,7 +392,7 @@ export const payments = {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount_inr_paise: amountINRPaise }),
+      body: JSON.stringify({ amount_inr_paise: amountINRPaise, phone }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "order creation failed");

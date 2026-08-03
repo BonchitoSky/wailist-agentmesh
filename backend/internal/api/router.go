@@ -69,6 +69,15 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Post("/payments/cashfree/verify", d.VerifyCashfreePayment)
 		r.Post("/payments/nowpayments/invoice", d.CreateCryptoInvoice)
 		r.Get("/credits/balance", d.GetCreditBalance)
+
+		// Real spend reporting, read from debit_ledger (the rows the engine
+		// writes when it actually charges) — the usage page fell back to
+		// generated fixtures while these did not exist.
+		r.Get("/usage/summary", d.UsageSummary)
+		r.Get("/usage/timeseries", d.UsageTimeseries)
+		r.Get("/usage/by-workflow", d.UsageByWorkflow)
+		r.Get("/usage/by-endpoint", d.UsageByEndpoint)
+		r.Get("/usage/settlements", d.UsageSettlements)
 	})
 
 	return r

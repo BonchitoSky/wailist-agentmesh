@@ -9,10 +9,14 @@ import (
 	"io"
 	"log"
 	"math"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/agentmesh/backend/internal/alert"
@@ -64,6 +68,45 @@ func QuoteX402(ctx context.Context, rawURL string) (map[string]any, error) {
 	if err := urlValidator(rawURL); err != nil {
 		return nil, err
 	}
+	// Try the real x402 v2 challenge shape first, via the same prober
+	// ExecuteTool402V2/ProbeX402Price use. The legacy parser below only
+	// understands this codebase's own pre-v2 flat-quote dialect
+	// ({"price": "0.002", ...}) — real v2 targets (confirmed live against
+	// canix402-api.compx.io) never speak that: their amount lives at
+	// accepts[0].amount/maxAmountRequired, sometimes only inside a base64
+	// Payment-Required header with an empty body, which the legacy path
+	// can't see at all and silently fell back to a hardcoded "0" for.
+	isV2, notPaymentRequired, _, quote, err := probeTool402Endpoint(ctx, rawURL, http.MethodGet, nil, "")
+	// A POST-only resource answers a bare GET with 404/405 before it ever
+	// reaches its own 402 gate, so a GET-only probe would report a real,
+	// payable endpoint as unpriceable. Only retried when GET produced no
+	// challenge at all — never when it did, so a working GET is never
+	// second-guessed.
+	if notPaymentRequired || (err != nil && !isV2) {
+		if v2, npr, _, q, perr := probeTool402Endpoint(ctx, rawURL, http.MethodPost, nil, ""); perr == nil && v2 && !npr {
+			isV2, quote, err = true, q, nil
+		}
+	}
+	if err == nil && isV2 {
+		out := map[string]any{
+			"price":     strconv.FormatFloat(float64(quote.MaxAmountRequired)/1e6, 'f', -1, 64),
+			"unit":      "call",
+			"asset":     assetSymbol(quote.Asset),
+			"network":   "algorand",
+			"recipient": quote.PayTo,
+		}
+		// What the target says it needs from a caller, straight out of its
+		// own challenge — this is what lets the canvas show real, per-endpoint
+		// input fields for an arbitrary endpoint nobody hardcoded support for.
+		if params, method, in := ParamsFromChallenge(quote.RawChallenge); len(params) > 0 {
+			out["params"] = params
+			out["paramsIn"] = in
+			if method != "" {
+				out["method"] = method
+			}
+		}
+		return out, nil
+	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
@@ -72,11 +115,370 @@ func QuoteX402(ctx context.Context, rawURL string) (map[string]any, error) {
 	defer resp.Body.Close()
 	// Always attempt to parse payment info from header+body regardless of status.
 	// Proxies (Cloudflare tunnels) may rewrite 402 → 200/503 or strip headers.
-	quote := parsePaymentHeader(resp)
-	if _, hasPrice := quote["price"]; hasPrice {
-		return quote, nil
+	legacyQuote := parsePaymentHeader(resp)
+	if _, hasPrice := legacyQuote["price"]; hasPrice {
+		return legacyQuote, nil
 	}
-	return map[string]any{"price": "0", "unit": "", "network": "", "recipient": ""}, nil
+	// Neither dialect produced a price. Reporting "0" here (as this did until
+	// 2026-08-02) is worse than useless: a free endpoint and an endpoint that
+	// simply doesn't speak x402 become indistinguishable, and the canvas
+	// cheerfully shows a 0 price for a URL that can never be paid or called.
+	// Confirmed live against https://kepaix.com/api/x402-publisher-credits.php,
+	// which answers every request shape with a flat 400 and never a 402.
+	return nil, &ErrNoPaymentChallenge{Status: resp.StatusCode}
+}
+
+// ErrNoPaymentChallenge means a URL answered, but not with anything x402:
+// no 402 status, no v2 accepts[], no legacy price. Distinct from a transport
+// error — the endpoint is reachable, it just isn't a paid resource.
+type ErrNoPaymentChallenge struct{ Status int }
+
+func (e *ErrNoPaymentChallenge) Error() string {
+	return fmt.Sprintf("this URL answered with HTTP %d and no x402 payment challenge — it may not be an x402 endpoint, or it may expect a different request shape", e.Status)
+}
+
+// testnetUSDCAssetID mirrors mainnetUSDCAssetID for the other network a
+// probed target's accepts[].asset may name (main.go wires both ids as
+// USDCAssetID depending on environment; this package only needs them for
+// display, not for signing, so they're kept as local literals rather than
+// threading a shared constant through).
+const testnetUSDCAssetID = 10458941
+
+// assetSymbol turns a v2 challenge's accepts[].asset (an Algorand ASA id, or
+// empty/"0" for native ALGO) into the ticker QuoteX402 displays to the user
+// — without this, the frontend has no way to know a quote is priced in USDC
+// rather than ALGO.
+func assetSymbol(assetID string) string {
+	switch assetID {
+	case "", "0":
+		return "ALGO"
+	case strconv.Itoa(mainnetUSDCAssetID), strconv.Itoa(testnetUSDCAssetID):
+		return "USDC"
+	default:
+		return "ASA-" + assetID
+	}
+}
+
+// mapAt walks a chain of keys through nested map[string]any values, returning
+// nil the moment any hop is missing or isn't a map. Every level of a Bazaar
+// extension is optional, so this keeps the extraction below readable instead
+// of a type assertion per hop.
+func mapAt(m map[string]any, keys ...string) map[string]any {
+	for _, k := range keys {
+		if m == nil {
+			return nil
+		}
+		next, _ := m[k].(map[string]any)
+		m = next
+	}
+	return m
+}
+
+// bazaarInputKeys are the field names a target may use under
+// extensions.bazaar.info.input (and the matching schema node) to declare its
+// caller-supplied parameters. "queryParams" is the one the official
+// @x402/extensions package emits and the only one confirmed live
+// (canix402-api.compx.io, 2026-08-02); the body-shaped names are accepted
+// read-side so a POST-based target that picked a different-but-obvious
+// spelling still yields usable fields instead of silently none.
+var bazaarInputKeys = []string{"queryParams", "body", "bodyFields", "bodyParams"}
+
+// ParamsFromChallenge extracts the input parameters a real x402 v2 target
+// declares for itself in its challenge's Bazaar extension, so the canvas can
+// show a caller exactly what an arbitrary endpoint needs without anyone
+// hand-transcribing its docs. Returns the declared params, the HTTP method
+// the target expects, and where the params belong on the wire ("query" or
+// "body").
+//
+// Two sources, both optional, both used: info.input carries an example value
+// per param, while schema.properties.input.properties.* carries the real
+// types and — crucially — which params are required. The examples are
+// placeholders, not usable values (canix402's is the Algorand zero address),
+// so they land in Description rather than Default. A target declaring
+// neither yields no params, which is not an error: plenty of real endpoints
+// take no input at all.
+func ParamsFromChallenge(challenge map[string]any) (params []models.ParamDef, method string, in string) {
+	bazaar := mapAt(challenge, "extensions", "bazaar")
+	if bazaar == nil {
+		return nil, "", ""
+	}
+	input := mapAt(bazaar, "info", "input")
+	method, _ = input["method"].(string)
+	schemaInput := mapAt(bazaar, "schema", "properties", "input", "properties")
+
+	for _, key := range bazaarInputKeys {
+		examples, _ := input[key].(map[string]any)
+		spec := mapAt(schemaInput, key)
+		props := mapAt(spec, "properties")
+		if len(examples) == 0 && len(props) == 0 {
+			continue
+		}
+
+		required := map[string]bool{}
+		if reqList, ok := spec["required"].([]any); ok {
+			for _, r := range reqList {
+				if name, ok := r.(string); ok {
+					required[name] = true
+				}
+			}
+		}
+
+		seen := map[string]bool{}
+		names := make([]string, 0, len(examples)+len(props))
+		for _, src := range []map[string]any{props, examples} {
+			for name := range src {
+				if !seen[name] {
+					seen[name] = true
+					names = append(names, name)
+				}
+			}
+		}
+		// Stable ordering: map iteration is randomized, and these render as
+		// an ordered list of form fields that must not reshuffle between
+		// two probes of the same endpoint.
+		sort.Strings(names)
+
+		for _, name := range names {
+			paramType := "string"
+			if p := mapAt(props, name); p != nil {
+				if t, ok := p["type"].(string); ok && t != "" {
+					paramType = t
+				}
+			}
+			desc := ""
+			if ex, ok := examples[name]; ok {
+				desc = fmt.Sprintf("example: %v", ex)
+			}
+			params = append(params, models.ParamDef{
+				Name:        name,
+				Type:        paramType,
+				Required:    required[name],
+				Description: desc,
+			})
+		}
+
+		in = "body"
+		if key == "queryParams" {
+			in = "query"
+		}
+		return params, method, in
+	}
+	return nil, method, ""
+}
+
+// maxParamFileBytes bounds a single uploaded file's decoded size. Files live
+// inside the workflow document, so this is really a bound on how large a
+// workflow row can grow — and on how much gets re-sent on every save. The
+// frontend enforces the same ceiling before encoding; this is the
+// authoritative check, since the frontend's can be bypassed.
+const maxParamFileBytes = 2 << 20 // 2 MiB
+
+// buildTargetRequest turns a tool402 node's configured inputs into the actual
+// request to make: the endpoint URL to hit, the body to send, and the content
+// type that body is in. Three shapes, picked by what the inputs actually are:
+//
+//   - any file param with content -> multipart/form-data carrying every param
+//     as a part (the only encoding that can carry a file at all)
+//   - otherwise GET -> values appended to the query string, no body
+//   - otherwise -> a flat JSON object body
+//
+// Values already present on the endpoint URL are never overwritten: an agent's
+// LLM-chosen args (appended onto the URL by executeFunctionCall before this
+// runs) are a deliberate per-call choice, while these are static config.
+// Custom params take precedence over discovered ones of the same name, since
+// the user typing a field by hand is the more specific intent.
+// bodyPlaceholder matches a single {{kind:name}} reference in a JSON body
+// template. Name runs to the closing brace, so it may contain anything but
+// "}" -- endpoint field names are not restricted to identifiers.
+var bodyPlaceholder = regexp.MustCompile(`\{\{(param|file|fileName|fileType):([^}]+)\}\}`)
+
+// expandBodyTemplate fills a node's JSON body template from its configured
+// params. Four forms, each naming a param:
+//
+//	{{param:x}}     the text param's value (or its ParamDefaults entry)
+//	{{file:x}}      the file param's bytes, base64 -- what an endpoint that
+//	                takes uploads inside JSON actually wants
+//	{{fileName:x}}  the uploaded file's original name
+//	{{fileType:x}}  its MIME type
+//
+// Values are JSON-escaped, so a placeholder belongs inside a string literal
+// ("{{file:resume}}") and a filename containing a quote cannot break the
+// document. A reference to a param that does not exist is an error rather
+// than an empty string: this body is about to be sent with a real payment
+// attached, and an endpoint that silently receives null where a resume
+// should be still charges for the call.
+func expandBodyTemplate(node models.WorkflowNode, template string) ([]byte, error) {
+	byName := make(map[string]models.CustomParam, len(node.CustomParams))
+	for _, p := range node.CustomParams {
+		byName[p.Name] = p
+	}
+
+	var missing []string
+	expanded := bodyPlaceholder.ReplaceAllStringFunc(template, func(match string) string {
+		parts := bodyPlaceholder.FindStringSubmatch(match)
+		kind, name := parts[1], strings.TrimSpace(parts[2])
+		p, defined := byName[name]
+		if !defined {
+			// A text param may live in ParamDefaults instead (a value typed
+			// against a schema the endpoint declared), which has no file
+			// counterpart -- the other three forms genuinely need a param.
+			if v, ok := node.ParamDefaults[name]; ok && kind == "param" {
+				return jsonStringEscape(v)
+			}
+			missing = append(missing, match)
+			return match
+		}
+		switch kind {
+		case "param":
+			return jsonStringEscape(p.Value)
+		case "file":
+			return jsonStringEscape(p.Value) // already base64 in Value
+		case "fileName":
+			return jsonStringEscape(p.FileName)
+		case "fileType":
+			return jsonStringEscape(p.MIMEType)
+		}
+		return match
+	})
+
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("request body references %s, which this node has no field for", strings.Join(missing, ", "))
+	}
+	if !json.Valid([]byte(expanded)) {
+		return nil, fmt.Errorf("request body is not valid JSON once its fields are filled in")
+	}
+	return []byte(expanded), nil
+}
+
+// jsonStringEscape renders s as it must appear INSIDE a JSON string literal
+// (no surrounding quotes), so substituting it into a template cannot produce
+// a malformed document.
+func jsonStringEscape(s string) string {
+	quoted, err := json.Marshal(s)
+	if err != nil || len(quoted) < 2 {
+		return ""
+	}
+	return string(quoted[1 : len(quoted)-1])
+}
+
+func buildTargetRequest(node models.WorkflowNode, method string) (models.WorkflowNode, []byte, string, error) {
+	// A hand-written JSON body replaces the field-derived request entirely:
+	// the fields are still configured (and a file param still uploaded), but
+	// they reach the endpoint only where the template references them.
+	if node.BodyMode == models.BodyModeJSON {
+		if strings.TrimSpace(node.BodyTemplate) == "" {
+			return node, nil, "", nil
+		}
+		body, err := expandBodyTemplate(node, node.BodyTemplate)
+		if err != nil {
+			return node, nil, "", err
+		}
+		return node, body, "application/json", nil
+	}
+
+	text := map[string]string{}
+	for k, v := range node.ParamDefaults {
+		if v != "" {
+			text[k] = v
+		}
+	}
+	var files []models.CustomParam
+	for _, p := range node.CustomParams {
+		if p.Name == "" {
+			continue
+		}
+		if p.Kind == "file" {
+			if p.Value != "" {
+				files = append(files, p)
+			}
+			// A file param never doubles as a text field: its Value is
+			// base64 bytes, which would otherwise be pasted into a query
+			// string or JSON field as a giant meaningless string.
+			delete(text, p.Name)
+			continue
+		}
+		if p.Value != "" {
+			text[p.Name] = p.Value
+		}
+	}
+
+	if len(files) > 0 {
+		body, contentType, err := multipartBody(text, files)
+		if err != nil {
+			// Fall through to a bodyless request rather than sending a
+			// half-built multipart payload: a target rejecting a request with
+			// missing fields is diagnosable, one parsing a truncated body is
+			// not.
+			log.Printf("x402: building multipart body for node %s failed: %v", node.ID, err)
+			return node, nil, "", nil
+		}
+		return node, body, contentType, nil
+	}
+
+	if len(text) == 0 {
+		return node, nil, "", nil
+	}
+
+	if method == "" || method == http.MethodGet {
+		u, err := url.Parse(node.Endpoint)
+		if err != nil {
+			return node, nil, "", nil
+		}
+		q := u.Query()
+		for k, v := range text {
+			if q.Get(k) != "" {
+				continue
+			}
+			q.Set(k, v)
+		}
+		u.RawQuery = q.Encode()
+		node.Endpoint = u.String()
+		return node, nil, "", nil
+	}
+
+	encoded, err := json.Marshal(text)
+	if err != nil {
+		return node, nil, "", nil
+	}
+	return node, encoded, "application/json", nil
+}
+
+// multipartBody encodes text fields and files as a single multipart/form-data
+// payload, returning it with the exact content type (including the generated
+// boundary) that must accompany it — a multipart body sent under any other
+// content type is unparseable by the receiver.
+func multipartBody(text map[string]string, files []models.CustomParam) ([]byte, string, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for k, v := range text {
+		if err := mw.WriteField(k, v); err != nil {
+			return nil, "", err
+		}
+	}
+	for _, f := range files {
+		raw, err := base64.StdEncoding.DecodeString(f.Value)
+		if err != nil {
+			return nil, "", fmt.Errorf("param %q: %w", f.Name, err)
+		}
+		if len(raw) > maxParamFileBytes {
+			return nil, "", fmt.Errorf("param %q: file is %d bytes, over the %d byte limit", f.Name, len(raw), maxParamFileBytes)
+		}
+		name := f.FileName
+		if name == "" {
+			name = f.Name
+		}
+		part, err := mw.CreateFormFile(f.Name, name)
+		if err != nil {
+			return nil, "", err
+		}
+		if _, err := part.Write(raw); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := mw.Close(); err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), mw.FormDataContentType(), nil
 }
 
 func ExecuteTool402(ctx context.Context, node models.WorkflowNode, rc RunContexter, wallet models.AgentWallet, signer WalletSigner) (any, error) {
@@ -230,6 +632,15 @@ type X402RelayConfig struct {
 	// node's own DB balance still needs checking before its first outbound
 	// HTTP call.
 	RunFundedToolIDs map[string]bool
+	// RunFundingTxID is the on-chain id of the single inbound settlement
+	// (Wallet 1 -> Wallet 2) that RunFundingID refers to — the only inbound
+	// leg a run-funded call has, since that settlement happened once, in
+	// bulk, before the agent's tool-calling loop started. Surfaced on every
+	// run-funded payment receipt as its txId: without it a run-funded tool
+	// call produced a receipt with no tx id at all, leaving real money that
+	// had moved unverifiable from the UI. Empty whenever RunFundingID is
+	// "".
+	RunFundingTxID string
 	// Wallet2 carries what's needed to pay a real target directly from
 	// Wallet 2, in-process, once RunFundingID is set. See Wallet2PayConfig.
 	Wallet2 Wallet2PayConfig
@@ -263,6 +674,26 @@ type Tool402PaymentResult struct {
 	Response         any
 	SettledUSDMicros int64
 	DebitKind        string
+
+	// TxID/ExplorerURL identify the INBOUND settlement leg that paid for
+	// this call (caller -> Wallet 2): the per-call facilitator settlement
+	// on the public-relay path, or the run's single up-front funding
+	// settlement on the run-funded path (where no per-call inbound leg
+	// exists at all — see executeTool402RunLevel). OutboundTxID/
+	// OutboundExplorerURL are the second leg (Wallet 2 -> target), when the
+	// target returned one; not every target does.
+	//
+	// These duplicate the txId/explorerURL/outboundTxId/outboundExplorerURL
+	// keys merged into Response, and exist because that merge is only
+	// possible when the target's own response happens to unmarshal as a
+	// JSON object — a target answering with a bare array or string has
+	// nowhere to carry sibling fields, and the agent-attached path
+	// (provider.go's paymentReceipt, which reads the merged map) then had
+	// no tx id to show at all.
+	TxID                string
+	ExplorerURL         string
+	OutboundTxID        string
+	OutboundExplorerURL string
 }
 
 // ChallengeAcceptsFromHeader extracts a v2 challenge's accepts[] from a
@@ -344,7 +775,12 @@ type x402Quote struct {
 // every caller's behavior before this parameter existed. body is only ever
 // sent when method is not GET, mirroring nodes.go's callHTTP convention for
 // the plain "tool" node type.
-func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []byte) (isV2 bool, notPaymentRequired bool, rawResponse any, quote x402Quote, err error) {
+//
+// contentType describes body's encoding; empty defaults to application/json,
+// which is what this always assumed. It has to be explicit for a multipart
+// body, whose generated boundary lives in the content type and without which
+// the receiver cannot parse a single field.
+func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []byte, contentType string) (isV2 bool, notPaymentRequired bool, rawResponse any, quote x402Quote, err error) {
 	if err := urlValidator(endpoint); err != nil {
 		return false, false, nil, x402Quote{}, err
 	}
@@ -357,7 +793,10 @@ func probeTool402Endpoint(ctx context.Context, endpoint, method string, body []b
 	}
 	req, _ := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
 	if bodyReader != nil {
-		req.Header.Set("Content-Type", "application/json")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
@@ -465,7 +904,7 @@ func ParseMaxAmountRequiredAsMicros(v any) (int64, bool) {
 // validation, so a pure price probe never needs the real call's payload —
 // only its method.
 func ProbeX402Price(ctx context.Context, endpoint, method string) (isV2 bool, amountUSDMicros int64, err error) {
-	isV2, _, _, quote, err := probeTool402Endpoint(ctx, endpoint, method, nil)
+	isV2, _, _, quote, err := probeTool402Endpoint(ctx, endpoint, method, nil, "")
 	return isV2, quote.MaxAmountRequired, err
 }
 
@@ -498,7 +937,7 @@ type TargetQuote struct {
 // pay it via PayTargetFromWallet2 (Task 3). Same empty-body reasoning as
 // ProbeX402Price.
 func ProbeX402Quote(ctx context.Context, endpoint, method string) (isV2 bool, quote TargetQuote, err error) {
-	isV2, _, _, q, err := probeTool402Endpoint(ctx, endpoint, method, nil)
+	isV2, _, _, q, err := probeTool402Endpoint(ctx, endpoint, method, nil, "")
 	return isV2, TargetQuote{
 		PayTo:             q.PayTo,
 		Asset:             q.Asset,
@@ -524,7 +963,50 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 	if method == "" {
 		method = http.MethodGet
 	}
-	isV2, notPaymentRequired, rawResponse, quote, err := probeTool402Endpoint(ctx, node.Endpoint, method, nil)
+	// Fill in the caller-configured values for whatever this target declared
+	// it needs (ParamsFromChallenge -> the canvas's param fields -> here)
+	// before the endpoint is probed or paid: a target that requires a param
+	// rejects the PAID retry with a validation error otherwise, having
+	// already taken the money.
+	node, paramBody, paramContentType, err := buildTargetRequest(node, method)
+	if err != nil {
+		// Before any probe or payment: a body we cannot build is a
+		// configuration error, and this node is one HTTP call away from
+		// spending real money on a request the endpoint would reject.
+		return Tool402PaymentResult{}, fmt.Errorf("x402: %w", err)
+	}
+	// A body can only be sent on a request that has one, so an endpoint
+	// configured with a file (multipart) or a hand-written JSON body is
+	// called with POST regardless of the dropdown — GET with a body is not a
+	// valid request, and the body is the whole point of both modes.
+	if len(paramBody) > 0 && method == http.MethodGet {
+		method = http.MethodPost
+	}
+	// The body this node's real call carries when method isn't GET: the run's
+	// input, or the configured params when there are any — those describe the
+	// endpoint's own required input shape, which the run's free-form trigger
+	// message does not. Same convention nodes.go's callHTTP uses for the plain
+	// "tool" node type's http template; GET requests never carry a body (their
+	// params went onto the query string in buildTargetRequest above).
+	var payBody []byte
+	if method != http.MethodGet {
+		payBody = []byte(rc.Message())
+		if paramBody != nil {
+			payBody = paramBody
+		}
+	}
+	// The probe carries that same body rather than nothing. It used to send
+	// nil unconditionally, being "just" a check for a 402 challenge -- but
+	// when the endpoint answers with anything other than 402, the probe IS
+	// the node's only request and its response IS the node's result. A
+	// body-reading endpoint then received an empty request and its complaint
+	// about that was surfaced as the node's output, with every configured
+	// param silently dropped (confirmed live 2026-08-02: a POST tool402 node
+	// returned the target's own {"error":"Unexpected end of JSON input"} as a
+	// successful step). Sending it costs nothing on a real 402 target, which
+	// answers 402 before reading a body, and is exactly what the paid retry
+	// below sends anyway.
+	isV2, notPaymentRequired, rawResponse, quote, err := probeTool402Endpoint(ctx, node.Endpoint, method, payBody, paramContentType)
 	if err != nil {
 		return Tool402PaymentResult{}, err
 	}
@@ -532,15 +1014,6 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 		return Tool402PaymentResult{Response: rawResponse}, nil
 	}
 	if isV2 {
-		// The real, final call (as opposed to the probe above) carries the
-		// run's actual input as its body when method isn't GET — same
-		// convention nodes.go's callHTTP already uses for the plain "tool"
-		// node type's http template. GET requests never carry a body,
-		// unchanged from before this parameter existed.
-		var payBody []byte
-		if method != http.MethodGet {
-			payBody = []byte(rc.Message())
-		}
 		// toolIsRunFunded (not a blanket RunFundingID != "" check) decides
 		// this: a run can be funded while a SPECIFIC tool's probe failed
 		// during estimation and was never folded into that estimate, and
@@ -560,7 +1033,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 			}
 			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired, method, payBody)
 		}
-		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.Ledger), method, payBody)
+		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.Ledger), method, payBody, paramContentType)
 	}
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing,
@@ -634,13 +1107,69 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 // far more (net/http's default MaxHeaderBytes is 1MB). Same base64-in-
 // header pattern this file/x402relay.go already use for X-Payment and
 // Payment-Required.
-func setRelayTargetHeaders(req *http.Request, method string, body []byte) {
+func setRelayTargetHeaders(req *http.Request, method string, body []byte, contentType string) {
 	if method != "" && method != http.MethodGet {
 		req.Header.Set("X-Relay-Method", method)
 	}
-	if len(body) > 0 {
+	// Only small bodies still ride in the header, and only for compatibility
+	// with a relay that predates newRelayRequest sending them as a real
+	// request body -- see relayHeaderBodyLimit.
+	if len(body) > 0 && len(body) <= relayHeaderBodyLimit {
 		req.Header.Set("X-Relay-Body", base64.StdEncoding.EncodeToString(body))
 	}
+	// Without this the relay would send the body as application/json — fine
+	// for a JSON body, unparseable for multipart, whose boundary token only
+	// exists in this header.
+	if contentType != "" {
+		req.Header.Set("X-Relay-Content-Type", contentType)
+	}
+}
+
+// relayHeaderBodyLimit bounds what may travel in the X-Relay-Body header.
+// That header was originally the ONLY way to give the relay a target body,
+// justified by net/http's 1MB default MaxHeaderBytes -- but our own server's
+// limit is not the binding one. Every proxy in front of it caps headers far
+// lower (Cloudflare ~16KB, and the tunnel/edge in between drops the
+// connection outright rather than answering), so a file param turned into a
+// multipart body never arrived: a 138KB PDF became a ~184KB header, and the
+// request died before the relay's handler ran at all (confirmed live
+// 2026-08-03 against prism-99h2.onrender.com/resume-screen-accurate, which
+// failed at ~2.5s with no payment attempted; bisected between 60KB working
+// and 100KB failing).
+//
+// 8KB stays clear of the smallest proxy limit worth worrying about. Anything
+// larger goes in the request body, where it belongs.
+const relayHeaderBodyLimit = 8 << 10
+
+// newRelayRequest builds the call to our own /x402/relay. A target body is
+// sent as this request's own body (a plain POST) rather than smuggled
+// through a header, because that is what bodies are for and what every
+// intermediary is sized for. The relay reads its request body first and
+// falls back to X-Relay-Body, so a small body still works against a relay
+// that has not been redeployed yet.
+//
+// The relay route accepts any method (router.go registers it with Handle,
+// not Get), and neither side treats the method used to reach the relay as
+// the method for the target -- that has always been X-Relay-Method's job.
+func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetBody []byte, targetContentType string) (*http.Request, error) {
+	if len(targetBody) == 0 {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		setRelayTargetHeaders(req, targetMethod, nil, targetContentType)
+		return req, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, relayURL, bytes.NewReader(targetBody))
+	if err != nil {
+		return nil, err
+	}
+	// Deliberately opaque: this body is bytes destined for the target as-is,
+	// not something the relay should parse. The encoding the TARGET needs
+	// travels separately in X-Relay-Content-Type.
+	req.Header.Set("Content-Type", "application/octet-stream")
+	setRelayTargetHeaders(req, targetMethod, targetBody, targetContentType)
+	return req, nil
 }
 
 // targetMethod/targetBody describe the call the RELAY should make to
@@ -649,15 +1178,17 @@ func setRelayTargetHeaders(req *http.Request, method string, body []byte) {
 // target on the relay's own end, same "method/body only matter for the
 // downstream target, never for talking to the relay" split PayTargetFromWallet2
 // and probeTool402Endpoint already follow).
-func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger, targetMethod string, targetBody []byte) (Tool402PaymentResult, error) {
+func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger, targetMethod string, targetBody []byte, targetContentType string) (Tool402PaymentResult, error) {
 	if platformSpendEncMnemonic == "" || usdcSigner == nil {
 		return Tool402PaymentResult{Response: map[string]any{"error": "payment required but no platform spend wallet configured"}}, nil
 	}
 
 	relayURL := relayBaseURL + "/x402/relay?target=" + url.QueryEscape(node.Endpoint)
 
-	quoteReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
-	setRelayTargetHeaders(quoteReq, targetMethod, targetBody)
+	quoteReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType)
+	if err != nil {
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: building the quote request failed: %w", err)
+	}
 	quoteResp, err := relayHTTPClient.Do(quoteReq)
 	if err != nil {
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay quote failed: %w", err)
@@ -762,9 +1293,12 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	}
 	xPayment, _ := json.Marshal(xPaymentFields)
 
-	payReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
+	payReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType)
+	if err != nil {
+		releaseReservation()
+		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: building the payment request failed: %w", err)
+	}
 	payReq.Header.Set("X-Payment", string(xPayment))
-	setRelayTargetHeaders(payReq, targetMethod, targetBody)
 	payResp, err := relayHTTPClient.Do(payReq)
 	if err != nil {
 		releaseReservation()
@@ -805,11 +1339,21 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		// Only when Response unmarshaled as a JSON object: a non-object
 		// response (e.g. the target returned a bare string/array) has no
 		// place to attach sibling fields without changing its type.
-		if txID := payResp.Header.Get("X-Settlement-TxId"); txID != "" {
+		if txID := payResp.Header.Get("X-Settlement-TxId"); txID == "" {
+			// A paid call whose settlement id never reaches the caller is
+			// unauditable from the UI, so say why rather than dropping it
+			// silently: either the relay did not send the header, or the
+			// target's response is not a JSON object with room to carry it.
+			_, isObject := out.Response.(map[string]any)
+			log.Printf("x402: no X-Settlement-TxId on relay response for %s (relay headers: %v, response is JSON object: %t)",
+				node.Endpoint, payResp.Header, isObject)
+		} else {
+			out.TxID = txID
+			out.ExplorerURL = ExplorerURLForAsset(expectedAssetID, txID)
 			if m, ok := out.Response.(map[string]any); ok {
 				m["txId"] = txID
-				m["amount"] = strconv.FormatUint(amount, 10)
-				m["explorerURL"] = explorerURLForAsset(expectedAssetID, txID)
+				m["amount"] = formatUSDCAmount(int64(amount))
+				m["explorerURL"] = out.ExplorerURL
 			}
 		}
 		// The OUTBOUND leg's own settlement id (Wallet 2 -> target) --
@@ -819,9 +1363,11 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		// every target returns one (Settled/StatusCode already say whether
 		// the payment worked regardless), so this is additive/best-effort.
 		if outboundTxID := payResp.Header.Get("X-Outbound-Settlement-TxId"); outboundTxID != "" {
+			out.OutboundTxID = outboundTxID
+			out.OutboundExplorerURL = ExplorerURLForAsset(expectedAssetID, outboundTxID)
 			if m, ok := out.Response.(map[string]any); ok {
 				m["outboundTxId"] = outboundTxID
-				m["outboundExplorerURL"] = explorerURLForAsset(expectedAssetID, outboundTxID)
+				m["outboundExplorerURL"] = out.OutboundExplorerURL
 			}
 		}
 		// Billing (above) and target delivery are separate concerns by
@@ -848,12 +1394,12 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	return out, nil
 }
 
-// explorerURLForAsset picks the Lora explorer network segment from the
+// ExplorerURLForAsset picks the Lora explorer network segment from the
 // USDC asset id the relay was configured to expect -- the same
 // testnet/mainnet asset id split main.go already uses to choose
 // usdcAssetID and relayNetwork together, so the two stay consistent without
 // threading a separate network string through this call chain.
-func explorerURLForAsset(assetID uint64, txID string) string {
+func ExplorerURLForAsset(assetID uint64, txID string) string {
 	network := "testnet"
 	if assetID == mainnetUSDCAssetID {
 		network = "mainnet"
@@ -972,16 +1518,55 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 			fmt.Errorf("x402 run-level: target rejected the paid request (status %d): %s", result.StatusCode, snippet)
 	}
 
+	out := Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost}
+
+	// The INBOUND leg for a run-funded call is the run's single up-front
+	// funding settlement (Wallet 1 -> Wallet 2), settled once in bulk by
+	// reserveAndFundRun before this agent's loop started -- there is no
+	// per-call inbound settlement on this path, and nothing else here can
+	// ever produce one. Reporting it on every run-funded receipt is what
+	// makes these calls auditable on-chain at all: before this, the console
+	// showed a paid tool402 step carrying no tx id whatsoever, and the
+	// usage page's settlements list stayed permanently empty for any agent-
+	// attached x402 tool. The same id repeats across every call in the run
+	// by design -- one real settlement funded all of them -- so consumers
+	// that key on tx id (frontend lib/settlements.ts) must de-duplicate.
+	out.TxID = cfg.RunFundingTxID
+	if out.TxID != "" {
+		out.ExplorerURL = ExplorerURLForAsset(cfg.ExpectedAssetID, out.TxID)
+	}
 	// The outbound leg's own settlement id (Wallet 2 -> target), when the
 	// target returned one -- see the matching merge in
 	// executeTool402V2Relay above for why this is surfaced in the node's
 	// output rather than only the DB audit trail.
 	if result.OutboundTxID != "" {
-		if m, ok := response.(map[string]any); ok {
-			m["outboundTxId"] = result.OutboundTxID
-			m["outboundExplorerURL"] = explorerURLForAsset(cfg.ExpectedAssetID, result.OutboundTxID)
+		out.OutboundTxID = result.OutboundTxID
+		out.OutboundExplorerURL = ExplorerURLForAsset(cfg.ExpectedAssetID, result.OutboundTxID)
+	}
+	// Merged into the response body too (best-effort, only possible when
+	// the target answered with a JSON object) so a STANDALONE tool402 node,
+	// whose console row renders the raw response map rather than a payment
+	// receipt, shows the same links -- see runner.go's NodeTypeTool402 case,
+	// which returns paymentResult.Response and discards everything else.
+	if m, ok := response.(map[string]any); ok {
+		if out.TxID != "" {
+			m["txId"] = out.TxID
+			m["amount"] = formatUSDCAmount(amount)
+			m["explorerURL"] = out.ExplorerURL
+		}
+		if out.OutboundTxID != "" {
+			m["outboundTxId"] = out.OutboundTxID
+			m["outboundExplorerURL"] = out.OutboundExplorerURL
 		}
 	}
+	return out, nil
+}
 
-	return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost}, nil
+// formatUSDCAmount renders a USDC micro-unit amount as the decimal string
+// the console displays (LogDrawer's OutputCell parseFloat's it directly).
+// The legacy direct-pay dialect has always emitted this shape; the relay
+// path used to emit raw micros here instead, which rendered a one-cent call
+// as "10000.000000 paid".
+func formatUSDCAmount(usdMicros int64) string {
+	return fmt.Sprintf("%.6f", float64(usdMicros)/1e6)
 }

@@ -295,7 +295,7 @@ export function CanvasGraph({
             const a = workflow.nodes.find((n) => n.id === e.from);
             const b = workflow.nodes.find((n) => n.id === e.to);
             if (!a || !b) return null;
-            const fromPort = portForFrom(a);
+            const fromPort = portForFrom(a, e.kind);
             const toPort = e.toPort ?? portForTo(b);
             const p1 = portWorld(a, fromPort);
             const p2 = portWorld(b, toPort);
@@ -342,7 +342,7 @@ export function CanvasGraph({
             selected={selectedId === n.id}
             deployed={deployed}
             onMouseDown={(e) => startNodeDrag(e, n)}
-            onStartWire={(e) => startWire(e, n.id, portForFrom(n))}
+            onStartWire={(e, port) => startWire(e, n.id, port)}
             onPortHover={(port) => setHoverPort({ nodeId: n.id, port })}
             onPortLeave={() => setHoverPort(null)}
             attachedSummary={attachedSummaries[n.id]}

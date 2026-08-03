@@ -25,9 +25,11 @@ type fakeCashfree struct {
 	statusValue string
 	statusErr   error
 	sigValid    bool
+	gotPhone    string // records the phone CreateOrder was actually called with
 }
 
-func (f *fakeCashfree) CreateOrder(_ context.Context, _ int64, orderID, _, _, _ string) (payments.CashfreeOrder, error) {
+func (f *fakeCashfree) CreateOrder(_ context.Context, _ int64, orderID, _, _, phone string) (payments.CashfreeOrder, error) {
+	f.gotPhone = phone
 	if f.createErr != nil {
 		return payments.CashfreeOrder{}, f.createErr
 	}
@@ -432,5 +434,82 @@ func TestNOWPaymentsWebhookMarksPartialWithoutCrediting(t *testing.T) {
 	}
 	if balance != 0 {
 		t.Fatalf("want balance untouched at 0 pending manual reconciliation, got %d", balance)
+	}
+}
+
+// TestCreateCashfreeOrderRejectsMissingPhone pins the fix for a real bug: an
+// order used to be created with a hardcoded "9999999999" whenever the
+// request carried no phone, silently sending a fake number to Cashfree and
+// showing it back to a real paying customer on their receipt. A missing or
+// malformed phone must now fail the request instead of substituting one.
+func TestCreateCashfreeOrderRejectsMissingPhone(t *testing.T) {
+	d := &handlers.Deps{Cashfree: &fakeCashfree{}}
+	body, _ := json.Marshal(map[string]any{"amount_inr_paise": 10000})
+	req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/order", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "user1"))
+	w := httptest.NewRecorder()
+
+	d.CreateCashfreeOrder(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for a missing phone, got %d", w.Code)
+	}
+}
+
+// TestCreateCashfreeOrderRejectsMalformedPhone covers a phone that is
+// present but not a real 10-digit Indian mobile number — too short, or
+// starting with a digit TRAI never assigns to mobiles (0-5).
+func TestCreateCashfreeOrderRejectsMalformedPhone(t *testing.T) {
+	for _, phone := range []string{"12345", "123456789", "0123456789", "notaphone"} {
+		d := &handlers.Deps{Cashfree: &fakeCashfree{}}
+		body, _ := json.Marshal(map[string]any{"amount_inr_paise": 10000, "phone": phone})
+		req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/order", bytes.NewReader(body))
+		req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "user1"))
+		w := httptest.NewRecorder()
+
+		d.CreateCashfreeOrder(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("phone %q: want 400, got %d", phone, w.Code)
+		}
+	}
+}
+
+// TestCreateCashfreeOrderAcceptsRealPhoneFormats confirms the common ways a
+// user actually types or pastes a number all normalize to the same 10 digits
+// Cashfree receives — plain, with a "+91" country code, with a bare "91",
+// and with spaces/hyphens as a real keypad or paste would produce.
+func TestCreateCashfreeOrderAcceptsRealPhoneFormats(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	payments.SetFetchRateForTest(func(context.Context) (float64, error) { return 0.012, nil })
+	defer payments.SetFetchRateForTest(nil)
+
+	for _, input := range []string{"9876543210", "+91 98765 43210", "919876543210", "98765-43210"} {
+		d := testDeps(t)
+		fake := &fakeCashfree{order: payments.CashfreeOrder{PaymentSessionID: "session_123"}}
+		d.Cashfree = fake
+
+		email := fmt.Sprintf("phone-test-%d@example.com", time.Now().UnixNano())
+		user, err := d.Store.CreateUser(context.Background(), email, "hash")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		body, _ := json.Marshal(map[string]any{"amount_inr_paise": 10000, "phone": input})
+		req := httptest.NewRequest(http.MethodPost, "/payments/cashfree/order", bytes.NewReader(body))
+		req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, user.ID))
+		w := httptest.NewRecorder()
+
+		d.CreateCashfreeOrder(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("phone %q: want 201, got %d (%s)", input, w.Code, w.Body.String())
+		}
+		if fake.gotPhone != "9876543210" {
+			t.Fatalf("phone %q: want normalized to 9876543210, got %q", input, fake.gotPhone)
+		}
 	}
 }
