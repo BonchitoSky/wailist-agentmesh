@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useId, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useRef, useState } from "react";
 import { type NavItem, groupNavItems, isNavItemActive } from "@/lib/nav";
 import { useScrollLock } from "@/hooks/useScrollLock";
 
@@ -18,14 +18,33 @@ interface AppNavProps {
     active: boolean;
     onClick: () => void;
   }) => React.ReactNode;
+  /**
+   * Visual treatment. `app` is the solid 56px bar on the authed shell;
+   * `landing` is the taller transparent bar over the marketing hero. Only the
+   * skin differs — layout, semantics and motion are shared.
+   */
+  variant?: "app" | "landing";
+  /**
+   * Appended below the links in the sheet. For a CTA that lives in the bar at
+   * wide widths and needs somewhere to go once the bar drops it. Rendered
+   * outside the <nav>, because a call to action is not wayfinding.
+   */
+  sheetFooter?: React.ReactNode;
+  /**
+   * The element that actually scrolls, when it is not the document. The landing
+   * page scrolls an inner `overflow-y: auto` div, so locking <html>/<body>
+   * there would silently do nothing.
+   */
+  scrollContainer?: React.RefObject<HTMLElement | null>;
 }
 
 /**
  * The navigation shell for both the marketing and application surfaces.
  *
  * Above the `md` breakpoint it is an ordinary bar with inline links. Below it,
- * the links are replaced by a trigger and the bar's own container grows into a
- * full-height sheet (see the AppNav block in globals.css for the motion).
+ * the links are replaced by a trigger and a full-height sheet fades in beneath
+ * the bar (see the AppNav block in globals.css for the motion, and for why the
+ * sheet is fixed rather than a grown bar).
  *
  * Semantics follow the ARIA disclosure pattern, not `role="menu"`: a real
  * <button> with aria-expanded/aria-controls revealing a <nav> of links. A menu
@@ -43,13 +62,16 @@ export function AppNav({
   pathname,
   onSelect,
   renderInlineLink,
+  variant = "app",
+  sheetFooter,
+  scrollContainer,
 }: AppNavProps) {
   const [open, setOpen] = useState(false);
   const sheetId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  useScrollLock(open);
+  useScrollLock(open, scrollContainer);
 
   // Escape closes and returns focus to the trigger, per the disclosure pattern.
   useEffect(() => {
@@ -102,7 +124,7 @@ export function AppNav({
     <>
       <div
         ref={rootRef}
-        className={`appnav${open ? " appnav--open" : ""}`}
+        className={`appnav appnav--${variant}${open ? " appnav--open" : ""}`}
         data-open={open || undefined}
       >
         <div className="appnav__shell">
@@ -110,13 +132,18 @@ export function AppNav({
             {brand}
             <div className="appnav__spacer" />
             <nav className="appnav__inline" aria-label="Primary">
-              {items.map((item) =>
-                renderInlineLink({
-                  item,
-                  active: isNavItemActive(item, pathname),
-                  onClick: () => select(item),
-                }),
-              )}
+              {/* Keyed here rather than in renderInlineLink: `href` is optional
+                  on a NavItem, so a consumer keying by it silently produces
+                  undefined keys for the landing page's section links. */}
+              {items.map((item) => (
+                <Fragment key={item.label}>
+                  {renderInlineLink({
+                    item,
+                    active: isNavItemActive(item, pathname),
+                    onClick: () => select(item),
+                  })}
+                </Fragment>
+              ))}
             </nav>
             {actions ? <div className="appnav__actions">{actions}</div> : null}
             <button
@@ -132,29 +159,34 @@ export function AppNav({
             </button>
           </div>
 
-          <nav id={sheetId} className="appnav__sheet" aria-label="Primary">
-            {groupNavItems(items).map(({ group, items: groupItems }) => (
-              <div key={group || "_"}>
-                {group ? <div className="appnav__group">{group}</div> : null}
-                <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-                  {groupItems.map((item) => (
-                    <li key={item.label}>
-                      <button
-                        type="button"
-                        className="appnav__link"
-                        aria-current={
-                          isNavItemActive(item, pathname) ? "page" : undefined
-                        }
-                        onClick={() => select(item)}
-                      >
-                        {item.label}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </nav>
+          <div id={sheetId} className="appnav__sheet">
+            <nav aria-label="Primary">
+              {groupNavItems(items).map(({ group, items: groupItems }) => (
+                <div key={group || "_"}>
+                  {group ? <div className="appnav__group">{group}</div> : null}
+                  <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                    {groupItems.map((item) => (
+                      <li key={item.label}>
+                        <button
+                          type="button"
+                          className="appnav__link"
+                          aria-current={
+                            isNavItemActive(item, pathname) ? "page" : undefined
+                          }
+                          onClick={() => select(item)}
+                        >
+                          {item.label}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </nav>
+            {sheetFooter ? (
+              <div className="appnav__sheet-foot">{sheetFooter}</div>
+            ) : null}
+          </div>
         </div>
       </div>
       {/* Sibling, so the open-state class on .appnav drives it through `~` with

@@ -935,6 +935,13 @@ body {
 .appnav__link:active {
   background: var(--bg-elev-2);
 }
+/* Sits below the links, outside the <nav>, separated by a rule rather than a
+   heading — it is an action, not another destination. */
+.appnav__sheet-foot {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
 
 /* Sibling of .appnav, driven purely by the open state class — no JS toggle. */
 .appnav__scrim {
@@ -974,6 +981,60 @@ body {
 @media (max-width: 520px) {
   .appnav__bar {
     padding: 0 16px;
+  }
+}
+
+/* ── Landing variant ──────────────────────────────────────────────────────
+   The same bar with a different skin: taller, transparent over the hero video,
+   near-white type because it sits on moving footage rather than on --bg-elev-1.
+   Colours are the landing surface's own (--fg at 90%, white on hover), kept as
+   literals to match the rest of the marketing CSS.
+
+   The links are optically centred with `position: absolute`, which reserves no
+   width. That is what made them overprint the logo on a phone before — safe
+   now only because below the breakpoint they are `display: none` rather than
+   merely repositioned, so there is no narrow viewport where they render. */
+.appnav--landing {
+  --nav-h: 74px;
+}
+.appnav--landing .appnav__shell {
+  background: transparent;
+  border-bottom: none;
+}
+.appnav--landing .appnav__bar {
+  padding: 0 32px;
+}
+.appnav--landing .appnav__actions {
+  gap: 8px;
+}
+.appnav--landing .appnav__sheet {
+  background: rgba(12, 10, 24, 0.96);
+  backdrop-filter: saturate(1.4) blur(16px);
+}
+.appnav--landing .appnav__link,
+.appnav--landing .appnav__trigger {
+  color: rgba(242, 240, 247, 0.9);
+}
+.appnav--landing .appnav__link[aria-current="page"],
+.appnav--landing .appnav__trigger:hover {
+  color: #fff;
+}
+.appnav--landing .appnav__sheet-foot {
+  border-top-color: rgba(242, 240, 247, 0.12);
+}
+@media (min-width: 769px) {
+  .appnav--landing .appnav__inline {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+}
+@media (max-width: 520px) {
+  .appnav--landing {
+    --nav-h: 66px;
+  }
+  .appnav--landing .appnav__bar {
+    padding: 0 20px;
   }
 }
 
