@@ -833,10 +833,14 @@ body {
 }
 
 .appnav__bar {
+  position: relative;
   height: var(--nav-h);
   display: flex;
   align-items: center;
-  gap: 20px;
+  /* 12px, not 20: the only gap that is ever visible is inline-links → actions,
+     and that spacing carries over from the pre-AppNav bar. The gaps either side
+     of the flex:1 spacer are absorbed by the spacer. */
+  gap: 12px;
   padding: 0 24px;
 }
 .appnav__inline {

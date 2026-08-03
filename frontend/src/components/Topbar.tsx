@@ -91,12 +91,7 @@ export function Topbar() {
         if (item.href) router.push(item.href);
       }}
       renderInlineLink={({ item, active, onClick }) => (
-        <NavLink
-          key={item.href}
-          label={item.label}
-          active={active}
-          onClick={onClick}
-        />
+        <NavLink label={item.label} active={active} onClick={onClick} />
       )}
       brand={
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -126,6 +121,9 @@ export function Topbar() {
       }
       actions={
         <>
+          {/* Separates wayfinding from identity. Drops out with the inline
+              links, so the avatar is not left trailing a stray rule. */}
+          <Hairline className="hide-md" vertical length={22} />
           <div
             className="profile-menu"
             ref={menuRef}
