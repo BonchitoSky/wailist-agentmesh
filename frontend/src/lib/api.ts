@@ -379,6 +379,7 @@ export const waitlist = {
 export const payments = {
   createCashfreeOrder: async (
     amountINRPaise: number,
+    phone: string,
   ): Promise<{
     order_id: string;
     payment_session_id: string;
@@ -391,7 +392,7 @@ export const payments = {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount_inr_paise: amountINRPaise }),
+      body: JSON.stringify({ amount_inr_paise: amountINRPaise, phone }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "order creation failed");
