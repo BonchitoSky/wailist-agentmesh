@@ -360,3 +360,74 @@ the mock-FX amount`). Credits/FX logic, unrelated to layout.
 - Carding the nine-column usage endpoints table.
 - Consolidating the four duplicated button-style blocks into `components/ui`.
 - Real-device pass — everything above is a desktop browser at emulated widths.
+
+---
+
+## 8. Review against master
+
+`upstream/master` is unchanged at `2788a44` — the same commit this branch was cut
+from, so the merge base _is_ master's head. GitHub reports `mergeable=MERGEABLE`.
+**There are no conflicts to resolve.**
+
+### CI is red, and none of it is this branch
+
+`mergeStateStatus` is UNSTABLE. All three failures are pre-existing:
+
+| Check                               | Failure                                                     | Introduced here?                                                 |
+| ----------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------- |
+| `frontend / lint, typecheck, build` | `npm ci` → `Missing: @emnapi/runtime@1.11.3 from lock file` | No — this branch changes no `package.json` / `package-lock.json` |
+| `backend / test`                    | Go failures in `ledger_internal_test.go`, `debit_test.go`   | No — this branch changes no backend file                         |
+| Vercel                              | "Authorization required to deploy"                          | No — fork deploy permission                                      |
+
+The branch's 14 files are 13 under `frontend/src` plus this document. The
+frontend job dies at install, so lint/typecheck/build never execute in CI; all
+three were run locally instead and pass, including a full `next build`.
+
+### Two regressions found in review and fixed
+
+Both were caught by looking at a screenshot in a real browser — neither would
+have been caught by the scripted overflow/overlap/spill assertions, which is
+worth remembering.
+
+1. **Missing word space.** Hiding the forced `<br>` below `sm` with
+   `display: none` left `"…for autonomousagent networks."` — nothing separated
+   the two words once the break was gone. Fixed with an explicit `{" "}`, which
+   is now load-bearing and commented as such.
+2. **Desktop hero shrank.** The clamp had been changed from
+   `clamp(80px, 16vw, 220px)` to `clamp(44px, 13vw, 220px)`, dropping the 1440px
+   hero from 220px to 187.2px — a 15% desktop change, contradicting this
+   document's own "desktop pixel-identical" claim. Only the _floor_ was ever the
+   bug: at 375px, `16vw` is 60px but the 80px floor overrode it. Now
+   `clamp(44px, 16vw, 220px)` — slope and ceiling untouched.
+
+### Also corrected
+
+- **ARIA.** This PR had added the three primary routes as `role="menuitem"`
+  inside `role="menu"`. Per the W3C disclosure guidance, a list of navigation
+  links must not use the menu role, which promises roving focus it does not
+  implement. All `role="menu"` / `role="menuitem"` are removed from `Topbar`, and
+  `aria-haspopup` is now `"true"` rather than `"menu"`.
+- **Dead markup.** `className="wf-table"` was applied with no rule targeting it;
+  removed.
+
+### Verified in a real browser
+
+Earlier verification used the Claude Code in-app browser pane, which is known to
+mis-apply some rules (see `NAVBAR_HAMBURGER_RESEARCH_PLAN.md` §8). Everything
+below was re-run in Chrome via the DevTools MCP with device emulation, and the
+geometry results match what the pane reported — which retroactively validates the
+earlier numbers.
+
+| Width                  | Result                                                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| 320 (2x, mobile+touch) | hero 51.2px, spans 28→284, `docOverflow 0`, unclipped overflow 0, label spill 0                                 |
+| 375 (3x, mobile+touch) | hero 60px, spans 34→333, `overlaps []`, `docOverflow 0`, unclipped 0, spill 0, burger shown / inline nav hidden |
+| 1440 (1x)              | hero **220px — identical to master**, nav still absolutely centred, burger hidden, `docOverflow 0`              |
+
+Landing sheet driven end-to-end in Chrome: opens with all three items, sits
+inside the viewport (20→347), first item hit-testable, `aria-expanded` flips
+`false → true → false`, and the sheet unmounts on close.
+
+`tsc --noEmit`, `eslint`, and `next build` all pass locally. The one remaining
+eslint warning (`iconBtnStyle` unused in `canvas/Inspector.tsx`) is pre-existing
+and untouched.
