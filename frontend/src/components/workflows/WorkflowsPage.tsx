@@ -471,7 +471,7 @@ function WorkflowRows({
   onOpen: (id: string) => void;
 }) {
   return (
-    <Card className="wf-table" style={{ padding: 0, overflowX: "auto" }}>
+    <Card style={{ padding: 0, overflowX: "auto" }}>
       <div
         className="wf-thead hide-md"
         style={{

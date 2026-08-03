@@ -152,7 +152,7 @@ export function Topbar() {
         >
           <button
             className="profile-menu__trigger"
-            aria-haspopup="menu"
+            aria-haspopup="true"
             aria-expanded={menuOpen}
             aria-label="Account menu"
             onClick={() =>
@@ -162,7 +162,7 @@ export function Topbar() {
             {initials}
           </button>
           {menuOpen && (
-            <div className="profile-menu__panel" role="menu">
+            <div className="profile-menu__panel">
               <div className="profile-menu__card">
                 <div
                   style={{
@@ -221,7 +221,6 @@ export function Topbar() {
                     <button
                       key={href}
                       className="profile-menu__item"
-                      role="menuitem"
                       aria-current={
                         pathname.startsWith(href) ? "page" : undefined
                       }
@@ -237,7 +236,6 @@ export function Topbar() {
                 </div>
                 <button
                   className="profile-menu__item"
-                  role="menuitem"
                   onClick={() => setMenuState("closed")}
                 >
                   Settings
@@ -245,7 +243,6 @@ export function Topbar() {
                 <div className="profile-menu__divider" />
                 <button
                   className="profile-menu__item profile-menu__item--danger"
-                  role="menuitem"
                   onClick={() => {
                     setMenuState("closed");
                     handleSignOut();
