@@ -784,3 +784,206 @@ body {
   cursor: pointer;
   white-space: nowrap;
 }
+
+/* ══ AppNav ═══════════════════════════════════════════════════════════════
+   Navigation shell shared by the landing page and the authed pages. Below the
+   `md` breakpoint the inline links are replaced by a trigger and a sheet that
+   covers the viewport under the bar.
+
+   Timing vocabulary (one easing, layered by delay):
+     0.24s  sheet cross-fade
+     0.32s  scrim
+     80ms   stagger between layers
+   Opening runs at 0ms delay and closing inherits the stagger, so opening feels
+   immediate and closing feels unhurried at the same duration.
+
+   `visibility` is transitioned with step-start / step-end, never left to
+   opacity alone: opacity:0 would leave an invisible element that is still
+   clickable and still in the accessibility tree. Stepping flips it at the
+   correct end of the timeline, so the sheet is interactive for the whole fade
+   and genuinely gone afterwards.
+
+   The sheet is `position: fixed`, so its containing block is the viewport. An
+   earlier version grew the bar's own absolutely-positioned container into the
+   sheet (the seamless bar-to-sheet effect apple.com uses). That container
+   refused to exceed its 56px parent — its height was ignored even at
+   `!important` and inline, while other declarations in the same rule applied.
+   Cause unresolved; fixed positioning sidesteps the containing block entirely.
+   See NAVBAR_HAMBURGER_RESEARCH_PLAN.md §1.3 for what the ideal version does. */
+:root {
+  --ease-nav: cubic-bezier(0.4, 0, 0.6, 1);
+  --nav-rate-fade: 0.24s;
+  --nav-rate-scrim: 0.32s;
+  --nav-stagger: 80ms;
+  --nav-h: 56px;
+}
+
+.appnav {
+  position: relative;
+  height: var(--nav-h);
+  flex-shrink: 0;
+  z-index: 60;
+}
+.appnav__shell {
+  position: relative;
+  z-index: 2;
+  height: var(--nav-h);
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.appnav__bar {
+  height: var(--nav-h);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 24px;
+}
+.appnav__inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.appnav__spacer {
+  flex: 1;
+}
+.appnav__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.appnav__trigger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-right: -10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-2);
+  color: var(--fg-muted);
+  cursor: pointer;
+  outline-offset: -6px;
+  flex-shrink: 0;
+  transition: color var(--nav-rate-scrim) var(--ease-nav);
+}
+.appnav__trigger:hover {
+  color: var(--fg);
+}
+
+.appnav__sheet {
+  position: fixed;
+  top: var(--nav-h);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-elev-1);
+  padding: 8px 16px 40px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px);
+  transition:
+    opacity var(--nav-rate-fade) var(--ease-nav),
+    transform var(--nav-rate-fade) var(--ease-nav),
+    visibility var(--nav-rate-fade) step-end;
+}
+.appnav--open .appnav__sheet {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  transition:
+    opacity var(--nav-rate-fade) var(--ease-nav) var(--nav-stagger),
+    transform var(--nav-rate-fade) var(--ease-nav) var(--nav-stagger),
+    visibility var(--nav-rate-fade) step-start var(--nav-stagger);
+}
+.appnav__group {
+  margin-top: 18px;
+  padding: 0 8px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+}
+.appnav__link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 13px 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-2);
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  font-weight: 400;
+  cursor: pointer;
+  transition: color var(--nav-rate-fade) var(--ease-nav);
+}
+.appnav__link[aria-current="page"] {
+  color: var(--fg);
+  font-weight: 500;
+}
+.appnav__link:active {
+  background: var(--bg-elev-2);
+}
+
+/* Sibling of .appnav, driven purely by the open state class — no JS toggle. */
+.appnav__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(4, 3, 12, 0.5);
+  backdrop-filter: saturate(1.4) blur(8px);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity var(--nav-rate-scrim) var(--ease-nav),
+    visibility var(--nav-rate-scrim) step-end;
+}
+.appnav--open ~ .appnav__scrim {
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity var(--nav-rate-scrim) var(--ease-nav) var(--nav-stagger),
+    visibility var(--nav-rate-scrim) step-start var(--nav-stagger);
+}
+
+@media (max-width: 768px) {
+  .appnav__trigger {
+    display: inline-flex;
+  }
+  .appnav__inline {
+    display: none;
+  }
+}
+@media (min-width: 769px) {
+  .appnav__sheet,
+  .appnav__scrim {
+    display: none;
+  }
+}
+@media (max-width: 520px) {
+  .appnav__bar {
+    padding: 0 16px;
+  }
+}
+
+/* Applied while the viewport is being resized so crossing the breakpoint never
+   plays the open animation. */
+.appnav-block-transitions .appnav__sheet,
+.appnav-block-transitions .appnav__scrim {
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .appnav__sheet,
+  .appnav__scrim,
+  .appnav__trigger,
+  .appnav__link {
+    transition: none !important;
+  }
+}
