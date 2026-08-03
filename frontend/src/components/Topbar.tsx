@@ -9,6 +9,15 @@ import { useAuth } from "@/hooks/useAuth";
 // deployment doesn't have to lie in the other direction.
 const ALGORAND_NETWORK = process.env.NEXT_PUBLIC_ALGORAND_NETWORK ?? "mainnet";
 
+// Single source of truth for the primary routes. Rendered as pills in the bar on
+// wide screens and as menu items inside the account panel once the bar collapses,
+// so the two surfaces can never drift apart.
+const NAV_ITEMS = [
+  { label: "Workflows", href: "/workflows" },
+  { label: "Usage", href: "/usage" },
+  { label: "Credits", href: "/billing" },
+] as const;
+
 // Shared application top bar. Rendered identically on every authed page so the
 // brand cluster, primary navigation, and account menu never drift between routes.
 export function Topbar() {
@@ -59,6 +68,12 @@ export function Topbar() {
 
   useEffect(() => cancelHoverClose, [cancelHoverClose]);
 
+  // Below the nav breakpoint the menu is also the navigation, so a route change
+  // has to dismiss it — otherwise the panel hangs over the page you just opened.
+  useEffect(() => {
+    setMenuState("closed");
+  }, [pathname]);
+
   useEffect(() => {
     if (!menuOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -83,12 +98,12 @@ export function Topbar() {
 
   return (
     <div
+      className="tb"
       style={{
         height: 56,
         flexShrink: 0,
         background: "var(--bg-elev-1)",
         borderBottom: "1px solid var(--border)",
-        padding: "0 24px",
         display: "flex",
         alignItems: "center",
         gap: 20,
@@ -109,7 +124,11 @@ export function Topbar() {
         </button>
         <Hairline vertical length={22} />
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button style={ghostBtnSm}>Acme Capital ▾</button>
+          {/* Workspace switcher drops out on narrow screens — it is the widest
+              element in the cluster and the least load-bearing. */}
+          <button className="hide-md" style={ghostBtnSm}>
+            Acme Capital ▾
+          </button>
           <Pill mono dot tone="warm">
             {ALGORAND_NETWORK}
           </Pill>
@@ -118,24 +137,19 @@ export function Topbar() {
       <div style={{ flex: 1 }} />
       {/* Navigation + account — the other group */}
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <nav style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
-          <NavLink
-            label="Workflows"
-            active={pathname.startsWith("/workflows")}
-            onClick={() => router.push("/workflows")}
-          />
-          <NavLink
-            label="Usage"
-            active={pathname.startsWith("/usage")}
-            onClick={() => router.push("/usage")}
-          />
-          <NavLink
-            label="Credits"
-            active={pathname.startsWith("/billing")}
-            onClick={() => router.push("/billing")}
-          />
+        {/* `display` lives in .tb-nav (globals.css) so the breakpoint can drop it
+            without fighting an inline style. */}
+        <nav className="tb-nav" aria-label="Primary">
+          {NAV_ITEMS.map(({ label, href }) => (
+            <NavLink
+              key={href}
+              label={label}
+              active={pathname.startsWith(href)}
+              onClick={() => router.push(href)}
+            />
+          ))}
         </nav>
-        <Hairline vertical length={22} />
+        <Hairline className="hide-md" vertical length={22} />
         <div
           className="profile-menu"
           ref={menuRef}
@@ -205,6 +219,28 @@ export function Topbar() {
                   </div>
                 </div>
                 <div className="profile-menu__divider" />
+                {/* The bar's nav is hidden below the breakpoint, so the routes
+                    surface here instead — one overflow surface, not a second
+                    menu component with its own open/close state. */}
+                <div className="show-md">
+                  {NAV_ITEMS.map(({ label, href }) => (
+                    <button
+                      key={href}
+                      className="profile-menu__item"
+                      role="menuitem"
+                      aria-current={
+                        pathname.startsWith(href) ? "page" : undefined
+                      }
+                      onClick={() => {
+                        setMenuState("closed");
+                        router.push(href);
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                  <div className="profile-menu__divider" />
+                </div>
                 <button
                   className="profile-menu__item"
                   role="menuitem"

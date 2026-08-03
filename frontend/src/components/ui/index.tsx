@@ -187,12 +187,17 @@ export function Tag({ children }: { children: React.ReactNode }) {
 export function Hairline({
   vertical = false,
   length = "100%",
+  className,
 }: {
   vertical?: boolean;
   length?: string | number;
+  // Lets callers attach a responsive utility (e.g. `hide-md`) to a separator
+  // whose neighbours drop out at a breakpoint.
+  className?: string;
 }) {
   return (
     <div
+      className={className}
       style={{
         background: "var(--border)",
         width: vertical ? 1 : length,

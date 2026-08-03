@@ -427,3 +427,31 @@ body {
     display: none !important;
   }
 }
+
+/* ── Topbar ───────────────────────────────────────────────────────────────
+   Below `md` the bar keeps only logo, network pill and avatar; the workspace
+   chip and the nav (marked `hide-md` / `.tb-nav`) drop out, and the routes
+   reappear as items inside the account menu. */
+.tb {
+  padding: 0 24px;
+}
+.tb-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+@media (max-width: 768px) {
+  .tb-nav {
+    display: none;
+  }
+}
+@media (max-width: 520px) {
+  .tb {
+    padding: 0 16px;
+  }
+}
+/* Active route inside the collapsed menu — mirrors the pill's filled state. */
+.profile-menu__item[aria-current="page"] {
+  background: var(--bg-elev-3);
+  color: var(--fg);
+}
