@@ -843,6 +843,8 @@ const ghostBtnSm: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 const btnStyle: React.CSSProperties = {
   height: 28,
@@ -858,6 +860,8 @@ const btnStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 const primaryBtnStyle: React.CSSProperties = {
   height: 28,
@@ -873,4 +877,6 @@ const primaryBtnStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };

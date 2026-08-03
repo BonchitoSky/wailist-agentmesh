@@ -772,6 +772,8 @@ function fmtDate(iso?: string): string {
 }
 
 // Shared styles
+// nowrap + no-shrink: fixed height, so a wrapped label spills out of the box.
+// See the note on ghostBtnSm in components/ui.
 const ghostBtn: React.CSSProperties = {
   height: 36,
   padding: "0 14px",
@@ -785,6 +787,9 @@ const ghostBtn: React.CSSProperties = {
   fontFamily: "var(--font-sans)",
   display: "inline-flex",
   alignItems: "center",
+  justifyContent: "center",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 const primaryBtn: React.CSSProperties = {
   height: 36,
@@ -799,4 +804,7 @@ const primaryBtn: React.CSSProperties = {
   fontFamily: "var(--font-sans)",
   display: "inline-flex",
   alignItems: "center",
+  justifyContent: "center",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };

@@ -577,6 +577,8 @@ const inputStyle: React.CSSProperties = {
   outline: "none",
 };
 
+// nowrap + no-shrink: fixed height, so a wrapped label spills out of the box.
+// See the note on ghostBtnSm in components/ui.
 const ghostBtnStyle: React.CSSProperties = {
   height: 40,
   display: "flex",
@@ -591,4 +593,6 @@ const ghostBtnStyle: React.CSSProperties = {
   fontWeight: 500,
   fontFamily: "var(--font-sans)",
   cursor: "pointer",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
