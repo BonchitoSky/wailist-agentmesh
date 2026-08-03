@@ -401,3 +401,29 @@ body {
     transition: none;
   }
 }
+
+/* ══ Responsive layer ═════════════════════════════════════════════════════
+   The app is styled with inline styles, which cannot hold media queries — so
+   anything that must change with viewport width lives here as a class, and the
+   corresponding property is removed from the element's inline style. Inline
+   styles beat external CSS regardless of specificity, so leaving the property
+   in both places would silently win over the breakpoint.
+
+   Breakpoints (use these three, do not invent more):
+     lg  ≤ 1024px  small laptop / landscape tablet
+     md  ≤  768px  tablet portrait — navigation collapses here
+     sm  ≤  520px  phone
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* Visibility helpers. `!important` is warranted: these override an inline
+   `display` on the same element, which is the whole point of the utility. */
+@media (max-width: 768px) {
+  .hide-md {
+    display: none !important;
+  }
+}
+@media (min-width: 769px) {
+  .show-md {
+    display: none !important;
+  }
+}
