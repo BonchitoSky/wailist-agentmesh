@@ -217,6 +217,86 @@ func TestGetCreditBalanceReturnsStoredBalance(t *testing.T) {
 	}
 }
 
+func redeemCoupon(t *testing.T, d *handlers.Deps, userID, code string) (int, map[string]any) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"code": code})
+	req := httptest.NewRequest(http.MethodPost, "/credits/redeem-coupon", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, userID))
+	w := httptest.NewRecorder()
+
+	d.RedeemCoupon(w, req)
+
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	return w.Code, resp
+}
+
+func TestRedeemCouponCreditsBalanceOnce(t *testing.T) {
+	d := testDeps(t)
+	email := fmt.Sprintf("coupon-test-%d@example.com", time.Now().UnixNano())
+	user, err := d.Store.CreateUser(context.Background(), email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, status := redeemCoupon(t, d, user.ID, "AYASHISGAY6969")
+	if code != http.StatusOK {
+		t.Fatalf("want 200 got %d (%v)", code, status)
+	}
+	if got := status["credit_usd_micros"].(float64); got != 5_000_000 {
+		t.Fatalf("want balance 5000000 got %v", got)
+	}
+
+	// Same code again: rejected, balance unchanged.
+	code, status = redeemCoupon(t, d, user.ID, "AYASHISGAY6969")
+	if code != http.StatusConflict {
+		t.Fatalf("want 409 got %d (%v)", code, status)
+	}
+	balance, err := d.Store.GetCreditBalance(context.Background(), user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if balance != 5_000_000 {
+		t.Fatalf("want balance still 5000000 got %d", balance)
+	}
+}
+
+func TestRedeemCouponStacksAcrossDistinctCodes(t *testing.T) {
+	d := testDeps(t)
+	email := fmt.Sprintf("coupon-stack-test-%d@example.com", time.Now().UnixNano())
+	user, err := d.Store.CreateUser(context.Background(), email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code, status := redeemCoupon(t, d, user.ID, "AYASHISGAY6969"); code != http.StatusOK {
+		t.Fatalf("want 200 got %d (%v)", code, status)
+	}
+	code, status := redeemCoupon(t, d, user.ID, "INNOFUSIONFTW")
+	if code != http.StatusOK {
+		t.Fatalf("want 200 got %d (%v)", code, status)
+	}
+	if got := status["credit_usd_micros"].(float64); got != 10_000_000 {
+		t.Fatalf("want stacked balance 10000000 got %v", got)
+	}
+}
+
+func TestRedeemCouponRejectsUnknownCode(t *testing.T) {
+	d := testDeps(t)
+	email := fmt.Sprintf("coupon-invalid-test-%d@example.com", time.Now().UnixNano())
+	user, err := d.Store.CreateUser(context.Background(), email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, status := redeemCoupon(t, d, user.ID, "NOTAREALCODE")
+	if code != http.StatusBadRequest {
+		t.Fatalf("want 400 got %d (%v)", code, status)
+	}
+}
+
 // --- NOWPayments tests (unchanged) ---
 
 type fakeNOWPayments struct {

@@ -6,6 +6,7 @@ import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { CheckoutModal } from "@/components/checkout/CheckoutModal";
 import { useCredits } from "@/lib/credits/store";
 import { bonusRate, creditsForTopup } from "@/lib/credits/fx";
+import { credits as creditsApi } from "@/lib/api";
 
 const PRESETS_INR = [100, 500, 1000, 2000];
 const LOW_BALANCE_USD = 5;
@@ -41,14 +42,36 @@ const panelStyle: React.CSSProperties = {
 const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
 
 export default function BillingPage() {
-  const { balanceUSD, lastPurchase } = useCredits();
+  const { balanceUSD, lastPurchase, refreshBalance } = useCredits();
   const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
+  const [couponCode, setCouponCode] = useState("");
+  const [couponState, setCouponState] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+  const [couponMessage, setCouponMessage] = useState("");
+
   const openCheckoutFor = (inr: number) => {
     setCustomINR(String(inr));
     setCheckoutOpen(true);
+  };
+
+  const applyCoupon = async () => {
+    const code = couponCode.trim();
+    if (!code || couponState === "loading") return;
+    setCouponState("loading");
+    try {
+      await creditsApi.redeemCoupon(code);
+      await refreshBalance();
+      setCouponState("success");
+      setCouponMessage("Coupon applied — $5 added to your balance.");
+      setCouponCode("");
+    } catch (e) {
+      setCouponState("error");
+      setCouponMessage(e instanceof Error ? e.message : "coupon redemption failed");
+    }
   };
 
   const parsedCustom = customINR ? parseFloat(customINR) : NaN;
@@ -429,6 +452,89 @@ export default function BillingPage() {
 
             {/* SIDEBAR column */}
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              {/* Coupon redemption */}
+              <div
+                className="bill-reveal"
+                style={{ ...panelStyle, animationDelay: "0.12s" }}
+              >
+                <div
+                  style={{
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "var(--fg-muted)",
+                    marginBottom: 12,
+                  }}
+                >
+                  Have a coupon?
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    type="text"
+                    placeholder="Coupon code"
+                    value={couponCode}
+                    onChange={(e) => {
+                      setCouponCode(e.target.value);
+                      if (couponState !== "idle") setCouponState("idle");
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && applyCoupon()}
+                    style={{
+                      flex: 1,
+                      height: 38,
+                      padding: "0 12px",
+                      borderRadius: "var(--r-2)",
+                      border: "1px solid var(--border)",
+                      background: "var(--bg)",
+                      color: "var(--fg)",
+                      fontSize: 13,
+                      fontFamily: "var(--font-mono)",
+                      outline: "none",
+                      textTransform: "uppercase",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={applyCoupon}
+                    disabled={!couponCode.trim() || couponState === "loading"}
+                    style={{
+                      height: 38,
+                      padding: "0 16px",
+                      borderRadius: "var(--r-2)",
+                      border: "1px solid var(--accent-line)",
+                      background: "var(--accent-soft)",
+                      color: "var(--accent)",
+                      fontSize: 12.5,
+                      fontWeight: 600,
+                      cursor:
+                        !couponCode.trim() || couponState === "loading"
+                          ? "default"
+                          : "pointer",
+                      opacity:
+                        !couponCode.trim() || couponState === "loading"
+                          ? 0.5
+                          : 1,
+                      fontFamily: "var(--font-sans)",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {couponState === "loading" ? "Applying…" : "Apply"}
+                  </button>
+                </div>
+                {couponMessage && (
+                  <p
+                    style={{
+                      margin: "8px 2px 0",
+                      fontSize: 11.5,
+                      color:
+                        couponState === "success"
+                          ? "var(--accent)"
+                          : "var(--danger)",
+                    }}
+                  >
+                    {couponMessage}
+                  </p>
+                )}
+              </div>
+
               {/* How credits work */}
               <div
                 className="bill-reveal"

@@ -565,6 +565,66 @@ func (s *Store) GetCreditBalance(ctx context.Context, userID string) (int64, err
 	return balance, err
 }
 
+// --- Coupons ---
+
+// CouponAmountsUSDMicros is the fixed catalog of redeemable coupon codes. Each
+// code is independently redeemable once per user (enforced by the UNIQUE
+// (user_id, code) constraint on coupon_redemptions) — redeeming multiple
+// distinct codes stacks.
+var CouponAmountsUSDMicros = map[string]int64{
+	"AYASHISGAY6969": 5_000_000, // $5
+	"INNOFUSIONFTW":  5_000_000, // $5
+}
+
+var (
+	ErrCouponInvalid         = errors.New("invalid coupon code")
+	ErrCouponAlreadyRedeemed = errors.New("coupon already redeemed")
+)
+
+// RedeemCoupon credits a user's balance for an unredeemed, known coupon code,
+// atomically. The UNIQUE (user_id, code) constraint plus ON CONFLICT DO
+// NOTHING is what actually enforces "once per user per code" under
+// concurrent requests — RowsAffected == 0 means another request (or an
+// earlier one) already claimed this code for this user.
+func (s *Store) RedeemCoupon(ctx context.Context, userID, code string) (int64, error) {
+	amount, ok := CouponAmountsUSDMicros[code]
+	if !ok {
+		return 0, ErrCouponInvalid
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO coupon_redemptions (user_id, code, credit_usd_micros)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (user_id, code) DO NOTHING
+	`, userID, code, amount)
+	if err != nil {
+		return 0, err
+	}
+	if tag.RowsAffected() == 0 {
+		return 0, ErrCouponAlreadyRedeemed
+	}
+
+	var newBalance int64
+	if err := tx.QueryRow(ctx, `
+		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1
+		WHERE id = $2
+		RETURNING credit_balance_usd_micros
+	`, amount, userID).Scan(&newBalance); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return newBalance, nil
+}
+
 // MarkCreditTransactionStatus moves a still-pending ledger row directly to status
 // (e.g. "failed"/"expired" for a NOWPayments IPN that will never complete, or "partial"
 // for partially_paid) without touching the user's balance — a pending row never credited

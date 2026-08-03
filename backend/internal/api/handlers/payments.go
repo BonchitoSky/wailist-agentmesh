@@ -134,6 +134,39 @@ func (d *Deps) GetCreditBalance(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"credit_usd_micros": balance})
 }
 
+// RedeemCoupon credits a signed-in user's balance for a known, unredeemed
+// coupon code. Each code is redeemable once per user (db.RedeemCoupon
+// enforces this via a unique constraint) — a repeat or unknown code is a 4xx,
+// not a transient failure, so callers shouldn't retry it.
+func (d *Deps) RedeemCoupon(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Code) == "" {
+		respond.Error(w, http.StatusBadRequest, "missing code")
+		return
+	}
+	code := strings.ToUpper(strings.TrimSpace(body.Code))
+
+	balance, err := d.Store.RedeemCoupon(r.Context(), userID, code)
+	switch {
+	case errors.Is(err, db.ErrCouponInvalid):
+		respond.Error(w, http.StatusBadRequest, "invalid coupon code")
+		return
+	case errors.Is(err, db.ErrCouponAlreadyRedeemed):
+		respond.Error(w, http.StatusConflict, "coupon already redeemed")
+		return
+	case err != nil:
+		log.Printf("redeem coupon: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	respond.JSON(w, http.StatusOK, map[string]any{"credit_usd_micros": balance})
+}
+
 // VerifyCashfreePayment is called by the frontend after the Cashfree JS SDK
 // reports payment completion. It fetches the order status from Cashfree's API
 // (server-to-server, so it cannot be spoofed) and credits the user if PAID.

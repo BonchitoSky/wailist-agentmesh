@@ -222,6 +222,25 @@ export const credits = {
     await delay(120);
     return 0;
   },
+
+  // Redeems a coupon code and returns the new balance. Throws with the
+  // server's message (e.g. "invalid coupon code", "coupon already redeemed")
+  // on failure so the caller can show it directly.
+  redeemCoupon: async (code: string): Promise<number> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/credits/redeem-coupon`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "coupon redemption failed");
+      return (data.credit_usd_micros ?? 0) / 1e6;
+    }
+    await delay(120);
+    throw new Error("coupons aren't available in mock mode");
+  },
 };
 
 // -- Runs -------------------------------------------------------------------
