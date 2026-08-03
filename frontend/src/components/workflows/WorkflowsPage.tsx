@@ -106,24 +106,17 @@ export function WorkflowsPage() {
           style={{
             maxWidth: 1280,
             margin: "0 auto",
-            padding: "36px 24px 80px",
+            padding: "var(--wf-page-pad)",
           }}
         >
           {/* Header */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "flex-end",
-              justifyContent: "space-between",
-              marginBottom: 28,
-            }}
-          >
+          <div className="wf-header" style={{ marginBottom: 28 }}>
             <div>
               <Tag>your workspace</Tag>
               <h1
                 style={{
                   margin: "12px 0 4px",
-                  fontSize: 36,
+                  fontSize: "var(--wf-h1)",
                   fontWeight: 500,
                   letterSpacing: "-0.025em",
                 }}
@@ -134,7 +127,7 @@ export function WorkflowsPage() {
                 Design, deploy, and monitor agent pipelines.
               </p>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div className="wf-actions">
               <button style={ghostBtn}>Import</button>
               <button
                 onClick={handleLoadDemoWorkflow}
@@ -166,7 +159,7 @@ export function WorkflowsPage() {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)",
+              gridTemplateColumns: "var(--wf-kpi-cols)",
               gap: 16,
               marginBottom: 24,
             }}
@@ -191,15 +184,8 @@ export function WorkflowsPage() {
           </div>
 
           {/* Controls */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              marginBottom: 12,
-            }}
-          >
-            <div style={{ position: "relative", flex: 1, maxWidth: 360 }}>
+          <div className="wf-controls" style={{ marginBottom: 12 }}>
+            <div className="wf-search" style={{ position: "relative" }}>
               <span
                 style={{
                   position: "absolute",
@@ -485,12 +471,12 @@ function WorkflowRows({
   onOpen: (id: string) => void;
 }) {
   return (
-    <Card style={{ padding: 0, overflowX: "auto" }}>
+    <Card className="wf-table" style={{ padding: 0, overflowX: "auto" }}>
       <div
+        className="wf-thead hide-md"
         style={{
           display: "grid",
-          gridTemplateColumns:
-            "minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr) minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px",
+          gridTemplateColumns: "var(--wf-row-cols)",
           gap: 12,
           padding: "10px 16px",
           background: "var(--bg-elev-2)",
@@ -513,11 +499,11 @@ function WorkflowRows({
       {items.map((wf, i) => (
         <div
           key={wf.id}
+          className="wf-row"
           onClick={() => onOpen(wf.id)}
           style={{
             display: "grid",
-            gridTemplateColumns:
-              "minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr) minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px",
+            gridTemplateColumns: "var(--wf-row-cols)",
             gap: 12,
             padding: "14px 16px",
             alignItems: "center",
@@ -573,12 +559,16 @@ function WorkflowRows({
             </div>
           </div>
           <StatusBadge status={wf.status} />
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+          <span
+            data-label="Agents"
+            style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}
+          >
             {wf.agents ??
               wf.nodes?.filter((n) => n.type === "agent").length ??
               0}
           </span>
           <span
+            data-label="Runs · 30d"
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 12,
@@ -588,6 +578,7 @@ function WorkflowRows({
             {wf.runs?.toLocaleString() ?? "—"}
           </span>
           <span
+            data-label="Spend · 30d"
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 12,
@@ -598,6 +589,7 @@ function WorkflowRows({
             {wf.spend && <span style={{ color: "var(--fg-dim)" }}> ALGO</span>}
           </span>
           <span
+            data-label="Updated"
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 11,
@@ -645,7 +637,7 @@ function WorkflowGrid({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "repeat(3, 1fr)",
+        gridTemplateColumns: "var(--wf-card-cols)",
         gap: 16,
       }}
     >
@@ -711,7 +703,7 @@ function WorkflowGrid({
               paddingTop: 12,
               borderTop: "1px solid var(--border-soft)",
               display: "grid",
-              gridTemplateColumns: "repeat(3, 1fr)",
+              gridTemplateColumns: "var(--wf-cardmeta-cols)",
               gap: 8,
               fontFamily: "var(--font-mono)",
               fontSize: 11,

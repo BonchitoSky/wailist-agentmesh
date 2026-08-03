@@ -627,3 +627,101 @@ body {
     padding: 24px 20px;
   }
 }
+
+/* ── Workflows page ───────────────────────────────────────────────────────
+   Row grid, KPI grid and card grid are all driven by custom properties: the
+   declarations live in inline styles, which a media query cannot reach, but a
+   custom property redefined at :root can. */
+:root {
+  --wf-page-pad: 36px 24px 80px;
+  --wf-h1: 36px;
+  --wf-kpi-cols: repeat(4, 1fr);
+  --wf-card-cols: repeat(3, 1fr);
+  --wf-cardmeta-cols: repeat(3, 1fr);
+  --wf-row-cols: minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr)
+    minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px;
+}
+.wf-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+.wf-actions {
+  display: flex;
+  gap: 8px;
+}
+.wf-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wf-search {
+  flex: 1;
+  max-width: 360px;
+}
+
+@media (max-width: 1024px) {
+  :root {
+    --wf-card-cols: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --wf-kpi-cols: repeat(2, 1fr);
+    --wf-card-cols: minmax(0, 1fr);
+    /* Two even columns: the row stops being a table and becomes a card. */
+    --wf-row-cols: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .wf-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .wf-actions {
+    flex-wrap: wrap;
+  }
+  .wf-actions > button {
+    flex: 1 1 auto;
+  }
+  .wf-controls {
+    flex-wrap: wrap;
+  }
+  .wf-search {
+    flex: 1 0 100%;
+    max-width: none;
+  }
+
+  /* Table → cards. The header row is dropped via the hide-md utility (its
+     `display: grid` is inline, which no class can override without
+     !important); each metric grows a caption from its data-label. */
+  .wf-row {
+    align-items: start;
+    row-gap: 12px;
+  }
+  .wf-row > *:first-child,
+  .wf-row > *:last-child {
+    grid-column: 1 / -1;
+  }
+  .wf-row > *:last-child {
+    justify-content: flex-start;
+  }
+  .wf-row > [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+  }
+}
+
+@media (max-width: 520px) {
+  :root {
+    --wf-page-pad: 24px 16px 64px;
+    --wf-h1: 28px;
+    --wf-cardmeta-cols: repeat(2, 1fr);
+  }
+}
