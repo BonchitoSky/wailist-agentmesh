@@ -725,3 +725,17 @@ body {
     --wf-cardmeta-cols: repeat(2, 1fr);
   }
 }
+
+/* ── Usage settlements ────────────────────────────────────────────────────
+   Five columns of which three are fixed-width (362px before the two flexible
+   ones), so on a phone the row cannot fit. It becomes a two-up card, with the
+   header row dropped via hide-md. The endpoints table below it keeps its own
+   horizontal scroll — it is nine columns wide and already self-contained. */
+:root {
+  --us-settle-cols: minmax(0, 1.9fr) minmax(0, 1.15fr) 140px 114px 108px;
+}
+@media (max-width: 768px) {
+  :root {
+    --us-settle-cols: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}

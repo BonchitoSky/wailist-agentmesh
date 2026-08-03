@@ -70,7 +70,9 @@ export default function BillingPage() {
       setCouponCode("");
     } catch (e) {
       setCouponState("error");
-      setCouponMessage(e instanceof Error ? e.message : "coupon redemption failed");
+      setCouponMessage(
+        e instanceof Error ? e.message : "coupon redemption failed",
+      );
     }
   };
 
@@ -88,7 +90,7 @@ export default function BillingPage() {
   return (
     <div
       style={{
-        height: "100vh",
+        minHeight: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -251,7 +253,7 @@ export default function BillingPage() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "repeat(4, 1fr)",
+                    gridTemplateColumns: "var(--wf-kpi-cols)",
                     gap: 8,
                   }}
                 >
