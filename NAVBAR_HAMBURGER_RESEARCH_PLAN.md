@@ -400,3 +400,62 @@ CSSOM as served. Interaction-model guidance:
 Related internal docs: `MOBILE_UI_FIX_PLAN.md` (breakpoint tokens, verification
 harness), `NAVBAR_UI_POLISH_PLAN.md` (visual polish of the current bar; its
 720px collapse is superseded by §4 commit 4).
+
+---
+
+## 8. Implementation status — BLOCKED
+
+Branch `feature/appnav-hamburger`, stacked on `fix/mobile-responsive-ui` (it
+depends on that branch's `hide-md`/`show-md` utilities and 768px token).
+
+### Working and verified
+
+- Route manifest (`lib/nav.ts`) with grouping support; `Topbar` and the sheet
+  read from it, so the two surfaces cannot drift.
+- `useScrollLock` — locks `<html>` and `<body>`, restores the previous inline
+  values, and pins/restores scroll position. **Verified:** `htmlOvf` flips
+  `visible → hidden → visible`, `scrollY` identical before open and after close.
+- Disclosure semantics. **Verified:** trigger is a `<button>`, `aria-expanded`
+  flips `false ↔ true`, `aria-label` swaps Menu/Close menu, `aria-controls`
+  resolves to the sheet element.
+- **`role="menu"` / `role="menuitem"` count is now 0** across the authed shell —
+  the ARIA defect in §2 is fixed.
+- Sheet geometry: `position: fixed` under the bar, correctly measured at
+  `top: 56px, height: 756px` in a 812px viewport.
+
+### Blocked
+
+**The sheet never becomes visible.** `.appnav--open .appnav__sheet` (and
+`.appnav--open ~ .appnav__scrim`) do not take effect, so opacity stays 0 and
+visibility stays hidden while open.
+
+What was ruled out, in order:
+
+| Hypothesis                 | Test                                                     | Result                                                |
+| -------------------------- | -------------------------------------------------------- | ----------------------------------------------------- |
+| Stale HMR CSS              | hard reload                                              | unchanged                                             |
+| Invalid `calc`/`dvh` value | same value on a probe element                            | resolves to 812px correctly                           |
+| Selector does not match    | `el.matches()` for both class and attribute forms        | `true`                                                |
+| A competing rule wins      | enumerated every matching rule in the CSSOM              | only 2, the open rule wins on specificity _and_ order |
+| Author-origin override     | runtime-injected `!important` rule that provably matches | **still ignored**                                     |
+
+The last row is the anomaly: an injected `opacity: 1 !important; visibility:
+visible !important` rule, confirmed matching via `matches()`, leaves the
+computed values at `0` / `hidden`. In an earlier variant that grew the bar's own
+absolutely-positioned container, the same shape of failure appeared on `height` —
+ignored at `!important` and inline — while `outline` in the _same rule_ applied.
+
+That combination is not explainable by ordinary cascade rules, which is why the
+investigation was stopped rather than continued by guesswork.
+
+### Next step
+
+Inspect the element's actual matched-rules list in real DevTools (or via the
+Chrome DevTools MCP) instead of inferring from `getComputedStyle`. That shows
+directly which declarations are struck through and why — the one thing the
+computed-style probes could not reveal. Verify in a real browser too, in case
+this is specific to the automation context.
+
+Until then this branch must not merge: the trigger renders and toggles state but
+opens nothing, which is worse than the shipped behaviour on
+`fix/mobile-responsive-ui`.
