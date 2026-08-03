@@ -384,9 +384,10 @@ function HeroSection({
                 margin: 0,
                 fontFamily: "var(--font-sans)",
                 fontWeight: 400,
-                // The 80px floor, not the 16vw, is what made this span edge to
-                // edge on a phone: 16vw is only 60px at 375px, so the floor won.
-                fontSize: "clamp(44px, 13vw, 220px)",
+                // Only the floor was wrong. At 375px, 16vw is 60px but the old
+                // 80px floor overrode it and pushed the wordmark edge to edge.
+                // Slope and ceiling are untouched, so desktop is unchanged.
+                fontSize: "clamp(44px, 16vw, 220px)",
                 lineHeight: 1.02,
                 letterSpacing: "-0.024em",
                 color: "rgba(242, 240, 247, 0.98)",
@@ -407,9 +408,11 @@ function HeroSection({
                 letterSpacing: "-0.005em",
               }}
             >
-              The visual canvas for autonomous
+              The visual canvas for autonomous{" "}
               {/* Forced break is a desktop typographic choice; on a phone it
-                  fights the natural wrap, so it drops out below `sm`. */}
+                  fights the natural wrap, so it drops out below `sm`. The
+                  explicit space above is load-bearing: with the <br> hidden
+                  there is otherwise nothing separating the two words. */}
               <br className="hide-sm" />
               agent networks.
             </p>
