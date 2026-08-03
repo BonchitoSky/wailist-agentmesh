@@ -3,20 +3,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Logo, Pill, Hairline, ghostBtnSm } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
+import { AppNav } from "@/components/nav/AppNav";
+import { APP_NAV_ITEMS, type NavItem } from "@/lib/nav";
 
 // Which chain settlements actually run on. Mainnet is the default because
 // that is what the platform runs; overridable so a genuine testnet
 // deployment doesn't have to lie in the other direction.
 const ALGORAND_NETWORK = process.env.NEXT_PUBLIC_ALGORAND_NETWORK ?? "mainnet";
-
-// Single source of truth for the primary routes. Rendered as pills in the bar on
-// wide screens and as menu items inside the account panel once the bar collapses,
-// so the two surfaces can never drift apart.
-const NAV_ITEMS = [
-  { label: "Workflows", href: "/workflows" },
-  { label: "Usage", href: "/usage" },
-  { label: "Credits", href: "/billing" },
-] as const;
 
 // Shared application top bar. Rendered identically on every authed page so the
 // brand cluster, primary navigation, and account menu never drift between routes.
@@ -91,174 +84,140 @@ export function Topbar() {
   };
 
   return (
-    <div
-      className="tb"
-      style={{
-        height: 56,
-        flexShrink: 0,
-        background: "var(--bg-elev-1)",
-        borderBottom: "1px solid var(--border)",
-        display: "flex",
-        alignItems: "center",
-        gap: 20,
+    <AppNav
+      items={APP_NAV_ITEMS}
+      pathname={pathname}
+      onSelect={(item: NavItem) => {
+        if (item.href) router.push(item.href);
       }}
-    >
-      {/* Brand + workspace context — one visual group */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button
-          onClick={() => router.push("/")}
-          style={{
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-            padding: 0,
-          }}
-        >
-          <Logo size={18} />
-        </button>
-        <Hairline vertical length={22} />
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {/* Workspace switcher drops out on narrow screens — it is the widest
-              element in the cluster and the least load-bearing. */}
-          <button className="hide-md" style={ghostBtnSm}>
-            Acme Capital ▾
-          </button>
-          <Pill mono dot tone="warm">
-            {ALGORAND_NETWORK}
-          </Pill>
-        </div>
-      </div>
-      <div style={{ flex: 1 }} />
-      {/* Navigation + account — the other group */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        {/* `display` lives in .tb-nav (globals.css) so the breakpoint can drop it
-            without fighting an inline style. */}
-        <nav className="tb-nav" aria-label="Primary">
-          {NAV_ITEMS.map(({ label, href }) => (
-            <NavLink
-              key={href}
-              label={label}
-              active={pathname.startsWith(href)}
-              onClick={() => router.push(href)}
-            />
-          ))}
-        </nav>
-        <Hairline className="hide-md" vertical length={22} />
-        <div
-          className="profile-menu"
-          ref={menuRef}
-          onPointerEnter={onMenuPointerEnter}
-          onPointerLeave={onMenuPointerLeave}
-        >
+      renderInlineLink={({ item, active, onClick }) => (
+        <NavLink
+          key={item.href}
+          label={item.label}
+          active={active}
+          onClick={onClick}
+        />
+      )}
+      brand={
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <button
-            className="profile-menu__trigger"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            aria-label="Account menu"
-            onClick={() =>
-              setMenuState((s) => (s === "pinned" ? "closed" : "pinned"))
-            }
+            onClick={() => router.push("/")}
+            style={{
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              padding: 0,
+            }}
           >
-            {initials}
+            <Logo size={18} />
           </button>
-          {menuOpen && (
-            <div className="profile-menu__panel" role="menu">
-              <div className="profile-menu__card">
-                <div
-                  style={{
-                    padding: "12px 14px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                  }}
-                >
+          <Hairline vertical length={22} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Workspace switcher drops out on narrow screens — it is the widest
+                element in the cluster and the least load-bearing. */}
+            <button className="hide-md" style={ghostBtnSm}>
+              Acme Capital ▾
+            </button>
+            <Pill mono dot tone="warm">
+              {ALGORAND_NETWORK}
+            </Pill>
+          </div>
+        </div>
+      }
+      actions={
+        <>
+          <div
+            className="profile-menu"
+            ref={menuRef}
+            onPointerEnter={onMenuPointerEnter}
+            onPointerLeave={onMenuPointerLeave}
+          >
+            <button
+              className="profile-menu__trigger"
+              aria-haspopup="true"
+              aria-expanded={menuOpen}
+              aria-label="Account menu"
+              onClick={() =>
+                setMenuState((s) => (s === "pinned" ? "closed" : "pinned"))
+              }
+            >
+              {initials}
+            </button>
+            {menuOpen && (
+              <div className="profile-menu__panel">
+                <div className="profile-menu__card">
                   <div
                     style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 999,
-                      background: "var(--accent)",
-                      color: "var(--accent-fg)",
-                      display: "inline-flex",
+                      padding: "12px 14px",
+                      display: "flex",
                       alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 11,
-                      fontWeight: 700,
-                      flexShrink: 0,
+                      gap: 10,
                     }}
                   >
-                    {initials}
-                  </div>
-                  <div style={{ minWidth: 0 }}>
                     <div
                       style={{
-                        fontSize: 13,
-                        fontWeight: 600,
-                        color: "var(--fg)",
-                      }}
-                    >
-                      Acme Capital
-                    </div>
-                    <div
-                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 999,
+                        background: "var(--accent)",
+                        color: "var(--accent-fg)",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                         fontSize: 11,
-                        color: "var(--fg-dim)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
+                        fontWeight: 700,
+                        flexShrink: 0,
                       }}
                     >
-                      {user?.email ?? "—"}
+                      {initials}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: "var(--fg)",
+                        }}
+                      >
+                        Acme Capital
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "var(--fg-dim)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {user?.email ?? "—"}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="profile-menu__divider" />
-                {/* The bar's nav is hidden below the breakpoint, so the routes
-                    surface here instead — one overflow surface, not a second
-                    menu component with its own open/close state. */}
-                <div className="show-md">
-                  {NAV_ITEMS.map(({ label, href }) => (
-                    <button
-                      key={href}
-                      className="profile-menu__item"
-                      role="menuitem"
-                      aria-current={
-                        pathname.startsWith(href) ? "page" : undefined
-                      }
-                      onClick={() => {
-                        setMenuState("closed");
-                        router.push(href);
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
                   <div className="profile-menu__divider" />
+                  <button
+                    className="profile-menu__item"
+                    onClick={() => setMenuState("closed")}
+                  >
+                    Settings
+                  </button>
+                  <div className="profile-menu__divider" />
+                  <button
+                    className="profile-menu__item profile-menu__item--danger"
+                    onClick={() => {
+                      setMenuState("closed");
+                      handleSignOut();
+                    }}
+                  >
+                    Sign out
+                  </button>
                 </div>
-                <button
-                  className="profile-menu__item"
-                  role="menuitem"
-                  onClick={() => setMenuState("closed")}
-                >
-                  Settings
-                </button>
-                <div className="profile-menu__divider" />
-                <button
-                  className="profile-menu__item profile-menu__item--danger"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuState("closed");
-                    handleSignOut();
-                  }}
-                >
-                  Sign out
-                </button>
               </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+            )}
+          </div>
+        </>
+      }
+    />
   );
 }
 
