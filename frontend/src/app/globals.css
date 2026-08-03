@@ -597,3 +597,33 @@ body {
     padding: 0 20px 32px;
   }
 }
+
+/* ── Auth split ───────────────────────────────────────────────────────────
+   Two equal columns on desktop. Below 900px each column is too narrow for the
+   360px form, so the split collapses and the marketing panel — decoration —
+   drops rather than stacking, which would bury the sign-in button under a
+   screenful of copy. The old `height: 100vh; overflow: hidden` clipped the
+   overflow instead of letting it scroll, so on a phone the form's lower half
+   was simply unreachable. */
+.auth-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  min-height: 100dvh;
+}
+.auth-form-col {
+  padding: 40px 56px;
+  overflow: auto;
+}
+@media (max-width: 900px) {
+  .auth-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .auth-aside {
+    display: none;
+  }
+}
+@media (max-width: 520px) {
+  .auth-form-col {
+    padding: 24px 20px;
+  }
+}

@@ -104,22 +104,18 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
 
   return (
     <div
+      className="auth-grid"
       style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        height: "100vh",
-        overflow: "hidden",
         background: "var(--bg)",
       }}
     >
       {/* Left — form */}
       <div
+        className="auth-form-col"
         style={{
-          padding: "40px 56px",
           display: "flex",
           flexDirection: "column",
           background: "var(--bg)",
-          overflow: "auto",
         }}
       >
         <div
@@ -145,6 +141,8 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
               fontFamily: "var(--font-mono)",
               fontSize: 11,
               color: "var(--fg-dim)",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             v0.4 · testnet
@@ -383,6 +381,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
 
       {/* Right — visual */}
       <div
+        className="auth-aside"
         style={{
           background: "var(--bg-elev-1)",
           borderLeft: "1px solid var(--border)",
