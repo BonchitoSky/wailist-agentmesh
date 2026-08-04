@@ -101,3 +101,81 @@ export function buildCanix402DemoWorkflow(): Pick<
   ];
   return { nodes, edges };
 }
+
+// Tendril — an official AgentMesh collaboration. This workflow has no agent
+// and no LLM in it at all. It lays out the money flow left to right so the two
+// balances are visible as separate steps rather than hidden inside one node:
+//
+//   trigger -> Topup -> Rent -> Run -> end
+//              ^^^^^    ^^^^
+//              buys     spends that credit on hours,
+//              Tendril  and hands back an SSH command the
+//              credit   console turns into a live terminal
+//
+// Topup is its own node precisely because it is a currency conversion, not a
+// purchase: AgentMesh credits become Tendril credits, which only ever buy
+// machine time. Delete the Topup node once you already hold enough credit.
+export function buildTendrilWorkflow(
+  hours: string = "1",
+  topupUsd: string = "10",
+): Pick<Workflow, "nodes" | "edges"> {
+  const nodes: WorkflowNode[] = [
+    {
+      id: "n1",
+      type: "trigger",
+      template: "manual",
+      x: 60,
+      y: 240,
+      label: "Run to rent a machine",
+    },
+    {
+      id: "n2",
+      type: "tendril",
+      template: "tendril_topup",
+      x: 340,
+      y: 220,
+      name: "Buy Tendril Credit",
+      icon: "＄",
+      tendrilAction: "topup",
+      tendrilAmount: topupUsd,
+      description:
+        "Settles a real mainnet USDC payment into AgentMesh's Tendril pool and converts the same amount of your AgentMesh credits into Tendril credit. Tendril credit is yours alone and can only be spent on machine time.",
+    },
+    {
+      id: "n3",
+      type: "tendril",
+      template: "tendril_rent",
+      x: 640,
+      y: 220,
+      name: "Rent a Machine",
+      icon: "▣",
+      tendrilAction: "rent",
+      tendrilHours: hours,
+      description:
+        "Reserves the hours from your Tendril credit, opens a metered lease on the cheapest online machine, and authorizes a freshly generated SSH key. The machine listed today is $6.00/hour. Release early and the unused hours return to your Tendril credit.",
+    },
+    {
+      id: "n4",
+      type: "tendril",
+      template: "tendril_run",
+      x: 940,
+      y: 220,
+      name: "Run a Job",
+      icon: "▶",
+      tendrilAction: "run",
+      customParams: [
+        { name: "payload", kind: "text", value: "print(sum(range(100)))" },
+      ],
+      description:
+        "Executes Python inside the machine the Rent node just opened and returns its stdout. Flat 0.01 USDC per job.",
+    },
+    { id: "n5", type: "end", template: "done", x: 1240, y: 240 },
+  ];
+  const edges: WorkflowEdge[] = [
+    { id: "e1", from: "n1", to: "n2", kind: "flow", toPort: "in" },
+    { id: "e2", from: "n2", to: "n3", kind: "flow", toPort: "in" },
+    { id: "e3", from: "n3", to: "n4", kind: "flow", toPort: "in" },
+    { id: "e4", from: "n4", to: "n5", kind: "flow", toPort: "in" },
+  ];
+  return { nodes, edges };
+}

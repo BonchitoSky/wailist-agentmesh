@@ -15,6 +15,7 @@ import { workflows as workflowsApi } from "@/lib/api";
 import {
   buildX402DemoWorkflow,
   buildCanix402DemoWorkflow,
+  buildTendrilWorkflow,
 } from "@/lib/demoWorkflow";
 
 export function WorkflowsPage() {
@@ -27,6 +28,7 @@ export function WorkflowsPage() {
   const [creating, setCreating] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
   const [creatingCanixDemo, setCreatingCanixDemo] = useState(false);
+  const [creatingTendril, setCreatingTendril] = useState(false);
 
   useEffect(() => {
     workflowsApi
@@ -85,6 +87,19 @@ export function WorkflowsPage() {
       setCreatingCanixDemo(false);
     }
   }, [creatingCanixDemo, router]);
+
+  const handleLoadTendrilWorkflow = useCallback(async () => {
+    if (creatingTendril) return;
+    setCreatingTendril(true);
+    try {
+      const wf = await workflowsApi.create("Tendril — Rent a Machine");
+      const { nodes, edges } = buildTendrilWorkflow();
+      await workflowsApi.update(wf.id, { name: wf.name, nodes, edges });
+      router.push(`/workflows/${wf.id}`);
+    } catch {
+      setCreatingTendril(false);
+    }
+  }, [creatingTendril, router]);
 
   const activeCount = wfList.filter((w) => w.status === "active").length;
 
@@ -151,6 +166,33 @@ export function WorkflowsPage() {
                 title="Loads a no-agent workflow: a trigger paying CANIX402's real x402 endpoint (Algorand DeFi opportunities) on mainnet, settled on-chain."
               >
                 {creatingCanixDemo ? "Loading…" : "Load canix402 workflow"}
+              </button>
+              <button
+                onClick={handleLoadTendrilWorkflow}
+                disabled={creatingTendril}
+                style={{
+                  ...ghostBtn,
+                  opacity: creatingTendril ? 0.6 : 1,
+                  position: "relative",
+                }}
+                title="Rent a real Linux machine by the hour. SSH from the console. Official — built with Tendril."
+              >
+                {creatingTendril ? "Loading…" : "Load Tendril workflow"}
+                <span
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 9,
+                    fontFamily: "var(--font-mono)",
+                    color: "#E879F9",
+                    border: "1px solid #E879F9",
+                    borderRadius: 999,
+                    padding: "1px 5px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  Official
+                </span>
               </button>
               <button
                 onClick={handleNewWorkflow}
