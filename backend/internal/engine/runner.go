@@ -648,6 +648,14 @@ func (r *Runner) executeNode(
 			RelayBaseURL:             r.relayBaseURL,
 			Ledger:                   nodes.RunLedger(rf.Ledger),
 			MarkupLedger:             nodes.RunLedger(rf.MarkupLedger),
+			// PerCallLedger backs any v2 dispatch not covered by this run's
+			// funding -- either the whole agent has no run-level pre-fund
+			// (rf.Ledger degrades to r.newPaymentLedger itself in that case,
+			// via reserveAndFundRun's noFund branch) or this specific tool's
+			// probe failed during estimation and toolIsRunFunded is false
+			// for it. Always DB-backed, never the in-memory pool -- see
+			// X402RelayConfig.PerCallLedger.
+			PerCallLedger: nodes.CallLedger(r.newPaymentLedger(wf, run)),
 			// LegacyLedger is always the original per-call, DB-backed
 			// ledger — never rf.Ledger, which is the run-level in-memory
 			// pool once the agent is run-funded. Legacy-dialect billing
@@ -739,18 +747,19 @@ func (r *Runner) executeNode(
 			return nil, err
 		}
 		// A standalone tool402 node is never run-funded (that only ever
-		// applies to an agent's attached tools), so Ledger and LegacyLedger
-		// are the same DB-backed, per-call ledger here — both fields are
-		// still populated so ExecuteTool402V2's legacy-dialect branch (which
-		// only ever reads LegacyLedger) works identically to the v2 branch
-		// (which only ever reads Ledger).
+		// applies to an agent's attached tools, RunFundingID stays "" here),
+		// so toolIsRunFunded is always false and v2 dispatch always takes
+		// the PerCallLedger path -- Ledger is never actually read for a
+		// standalone node, but PerCallLedger and LegacyLedger are the same
+		// DB-backed, per-call ledger, matching the identical
+		// legacy-dialect/v2-dialect split ExecuteTool402V2 already makes.
 		standaloneLedger := r.newPaymentLedger(wf, run)
 		relayCfg := nodes.X402RelayConfig{
 			USDCSigner:               usdcSigner,
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 			ExpectedAssetID:          r.x402.USDCAssetID,
 			RelayBaseURL:             r.relayBaseURL,
-			Ledger:                   nodes.RunLedger(standaloneLedger),
+			PerCallLedger:            nodes.CallLedger(standaloneLedger),
 			LegacyLedger:             nodes.CallLedger(standaloneLedger),
 		}
 		paymentResult, err := nodes.ExecuteTool402V2(ctx, node, rc, aw, r.walletSvc, relayCfg)

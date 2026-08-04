@@ -192,14 +192,29 @@ type X402RelayConfig struct {
 	PlatformSpendEncMnemonic string
 	ExpectedAssetID          uint64
 	RelayBaseURL             string
-	// Ledger reserves/commits/releases credits for real on-chain tool402
-	// payments made through this config. For a run-funded agent this is
-	// swapped to the in-memory run-level pool (Task 5) and is ONLY ever
-	// used for v2-dialect dispatch (executeTool402V2Relay when
-	// RunFundingID == "", executeTool402RunLevel when it isn't) — the
-	// legacy-dialect branch below must never read this field directly; see
-	// LegacyLedger.
+	// Ledger reserves/commits/releases credits for executeTool402RunLevel
+	// only -- the in-memory run-level pool, sized to `estimate` (never
+	// padded with markup, see MarkupLedger), read only when
+	// toolIsRunFunded(node.ID) is true. Every other v2 dispatch path uses
+	// PerCallLedger instead; the legacy-dialect branch below never reads
+	// this field directly either, see LegacyLedger.
 	Ledger RunLedger
+	// PerCallLedger is the DB-backed, per-call ledger executeTool402V2Relay
+	// reserves/commits/releases amount+markup against for any v2 dispatch
+	// NOT covered by run funding for this specific tool -- both when the
+	// whole agent has no run-level pre-fund (RunFundingID == "") and when
+	// it does but THIS tool's own probe failed during estimation
+	// (toolIsRunFunded(node.ID) == false; see that method's doc comment).
+	// Deliberately never Ledger: Ledger is the in-memory run-level pool
+	// once RunFundingID != "", sized only for the tools reserveAndFundRun
+	// actually folded into its estimate -- reserving a not-run-funded
+	// tool's amount+markup against that pool would either draw down
+	// another tool's budget it was never sized for, or (now that a call
+	// reserves amount+markup instead of amount alone) spuriously exhaust
+	// it and hard-block the run even though the user's real DB balance is
+	// untouched and sufficient. Always r.newPaymentLedger(wf, run) in
+	// production, same as LegacyLedger/FlatFeeLedger.
+	PerCallLedger CallLedger
 	// MarkupLedger is the platform-flat-markup counterpart to Ledger, read
 	// only by executeTool402RunLevel. Kept as a SEPARATE pool rather than
 	// folded into Ledger's own budget: reserveAndFundRun sizes Ledger to
@@ -605,7 +620,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 			}
 			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired, method, payBody)
 		}
-		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.Ledger), method, payBody)
+		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.PerCallLedger), method, payBody)
 	}
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing,
