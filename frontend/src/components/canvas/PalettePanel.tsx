@@ -344,7 +344,7 @@ export function PalettePanel({
           flex: 1,
         }}
       >
-        {/* Create row — always spans the full width, above the grid */}
+        {/* Create row -- always spans the full width, above the grid */}
         <div style={{ gridColumn: "1 / -1" }}>
           <CreateRow
             meta={CREATE_META[tab]}
@@ -376,7 +376,7 @@ export function PalettePanel({
               textAlign: "center",
             }}
           >
-            no presets — drag the + above to build your own
+            no presets, drag the + above to build your own
           </div>
         )}
       </div>

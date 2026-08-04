@@ -391,7 +391,7 @@ function SecretField({
         style={monoInputStyle}
         type="password"
         value={isSet ? "" : (val ?? "")}
-        placeholder={isSet ? "Key set — enter to replace" : placeholder}
+        placeholder={isSet ? "Key set, enter to replace" : placeholder}
         onChange={(e) => {
           const next = e.target.value || (isSet ? "__enc__" : "");
           onUpdate({
@@ -506,7 +506,7 @@ function AgentInspector({
       const res = await agentsApi.balance(workflowId, node.id);
       onUpdate({ ...node, balance: res.balance });
     } catch {
-      // balance fetch failed silently — keep existing value
+      // balance fetch failed silently -- keep existing value
     } finally {
       setRefreshing(false);
     }
@@ -555,7 +555,7 @@ function AgentInspector({
               </button>
             </div>
 
-            {/* Full address — monospace, selectable, wrapped cleanly */}
+            {/* Full address -- monospace, selectable, wrapped cleanly */}
             <div
               style={{
                 fontFamily: "var(--font-mono)",
@@ -870,7 +870,7 @@ function ProviderInspector({
               value={node.apiKey === "__enc__" ? "" : (node.apiKey ?? "")}
               placeholder={
                 node.apiKey === "__enc__"
-                  ? "Key set — enter to replace"
+                  ? "Key set, enter to replace"
                   : "AIza···"
               }
               onChange={(e) =>
@@ -1924,7 +1924,7 @@ const CONNECTOR_AUTH: Record<
 };
 
 // Small "where to get the credential" deep-link. Underline-free per the design
-// system — links read via --accent color, not decoration.
+// system -- links read via --accent color, not decoration.
 function AuthDocLink({ href, label }: { href: string; label: string }) {
   return (
     <a
@@ -2100,7 +2100,7 @@ function ActionInspector({
               }
               placeholder={
                 node.emailApiKey === "__enc__"
-                  ? "Key set — enter to replace"
+                  ? "Key set, enter to replace"
                   : node.emailProvider === "postmark"
                     ? "your-postmark-server-token"
                     : "re_xxxxxxxxxxxx"
@@ -2153,7 +2153,7 @@ function ActionInspector({
               rows={5}
               value={node.emailBody ?? ""}
               placeholder={
-                "Hi,\n\nHere is your result:\n\n{{ result }}\n\n— AgentMesh"
+                "Hi,\n\nHere is your result:\n\n{{ result }}\n\nAgentMesh"
               }
               onChange={(e) => onUpdate({ ...node, emailBody: e.target.value })}
             />

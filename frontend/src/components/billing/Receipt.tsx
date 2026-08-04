@@ -20,7 +20,7 @@ const dateFmt = new Intl.DateTimeFormat("en", {
 // legible on paper, so print inverts the receipt to black-on-white and hides
 // everything else on the page.
 const RECEIPT_CSS = `
-/* margin:auto re-centres the modal — Tailwind's preflight resets the native
+/* margin:auto re-centres the modal -- Tailwind's preflight resets the native
    dialog's default centring margin, which otherwise pins it to the top-left. */
 .receipt-dialog { margin: auto; }
 .receipt-dialog[open] { animation: receipt-in 0.22s var(--ease); }
@@ -151,7 +151,7 @@ export function Receipt({
         </div>
 
         <p style={{ fontSize: 11, color: "var(--fg-dim)", margin: "14px 0 0" }}>
-          Mock receipt — not a valid tax invoice.
+          Mock receipt: not a valid tax invoice.
         </p>
 
         <div

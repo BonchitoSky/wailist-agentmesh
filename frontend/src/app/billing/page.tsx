@@ -20,7 +20,7 @@ const LOW_BALANCE_USD = 5;
 
 const HOW_IT_WORKS = [
   "Credits are spent as your agents call paid tools, x402 endpoints, and LLM providers.",
-  "Testnet usage is always free — you only pay for mainnet calls.",
+  "Testnet usage is always free. You only pay for mainnet calls.",
   "Top-ups of ₹1000 or more earn 5% bonus credits.",
   "Every purchase generates a printable receipt for your records.",
 ];
@@ -89,7 +89,7 @@ export default function BillingPage() {
     >
       <style>{BILLING_CSS}</style>
 
-      {/* Topbar — matches the workflows / usage pages */}
+      {/* Topbar -- matches the workflows / usage pages */}
       <div
         style={{
           height: 56,
@@ -186,7 +186,7 @@ export default function BillingPage() {
               }}
             >
               Credits are spent as your agents call paid tools and models. Top
-              up anytime — testnet usage stays free.
+              up anytime; testnet usage stays free.
             </p>
           </div>
 

@@ -463,7 +463,7 @@ function AgentNode({
         )}
       </div>
 
-      {/* Wallet row — fully contained, no overflow */}
+      {/* Wallet row -- fully contained, no overflow */}
       <div
         style={{
           padding: "8px 14px 10px",
@@ -643,7 +643,7 @@ function ProviderNode({
   const t = NODE_TYPES.provider;
   const tpl = PROVIDER_TEMPLATES.find((x) => x.id === node.template);
   const hasKey = !!node.apiKey;
-  // Always a fixed mask, never a slice of the raw value — the canvas node is
+  // Always a fixed mask, never a slice of the raw value -- the canvas node is
   // visible in screen shares/recordings, unlike the Inspector's password
   // input, so no characters of an unsaved key should ever render here.
   const maskedKey = hasKey ? "•".repeat(14) : null;
@@ -872,7 +872,7 @@ function Tool402Node({
             <span style={{ color: "var(--fg-dim)" }}> / {unit}</span>
           </span>
         ) : (
-          <span style={{ color: "var(--fg-dim)" }}>price — set endpoint</span>
+          <span style={{ color: "var(--fg-dim)" }}>price: set endpoint</span>
         )}
       </div>
       <TopPort

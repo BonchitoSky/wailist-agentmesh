@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { creditsForTopup } from "./fx";
 
 // `store.ts` keeps its wallet state in a module-level variable (mirroring a
-// real singleton store), so each test needs a fresh module instance —
+// real singleton store), so each test needs a fresh module instance --
 // otherwise state written by one test would leak into the next. Reset both
 // the module registry and localStorage before every test, then re-import.
 const STORAGE_KEY = "agentmesh_credits_v1";

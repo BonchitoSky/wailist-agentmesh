@@ -24,7 +24,7 @@ const DEFAULT_DEST = "/workflows";
 
 // middleware redirects protected deep links here as ?next=<path>, so this value
 // is attacker-controlled: anyone can hand out /signin?next=<anywhere>. Only a
-// same-origin absolute path is allowed through — "//evil.com" is protocol-
+// same-origin absolute path is allowed through -- "//evil.com" is protocol-
 // relative and "https://evil.com" absolute, and either would turn the sign-in
 // form into an open redirect that lands a just-authenticated user off-site.
 // Backslashes are rejected too: browsers normalize them to forward slashes for
@@ -66,7 +66,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
     if (code) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- post-mount URL read; a lazy initializer would render the error on the server and break hydration
       setError(OAUTH_ERRORS[code] ?? "Something went wrong. Please try again.");
-      // Drop only ?error= — rewriting to a bare pathname would also discard the
+      // Drop only ?error= -- rewriting to a bare pathname would also discard the
       // ?next= deep link the user is still trying to reach after a failed OAuth
       // attempt, sending them to /workflows once they retry with a password.
       const url = new URL(window.location.href);
@@ -112,7 +112,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
         background: "var(--bg)",
       }}
     >
-      {/* Left — form */}
+      {/* Left -- form */}
       <div
         style={{
           padding: "40px 56px",
@@ -381,7 +381,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
         </div>
       </div>
 
-      {/* Right — visual */}
+      {/* Right -- visual */}
       <div
         style={{
           background: "var(--bg-elev-1)",

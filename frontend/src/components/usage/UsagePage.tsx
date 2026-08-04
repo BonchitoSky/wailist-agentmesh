@@ -62,7 +62,7 @@ export function UsagePage() {
     if (wf) setScopedWf(wf);
   }, []);
 
-  // The fetch effect only fetches — loading/error resets live in the event
+  // The fetch effect only fetches -- loading/error resets live in the event
   // handlers (changeRange/retry) that trigger it, and the initial state
   // already starts as loading. Sync setState in effects cascades renders.
   useEffect(() => {
@@ -80,7 +80,7 @@ export function UsagePage() {
       })
       .catch((e) => {
         if (cancelled) return;
-        // Surface the failure but keep the last good payload — a transient error
+        // Surface the failure but keep the last good payload -- a transient error
         // on a range switch shouldn't blank a page that was already working.
         console.error("usage load failed", e);
         setLoadError(e instanceof Error ? e : new Error(String(e)));
@@ -261,7 +261,7 @@ export function UsagePage() {
                 color: "var(--danger)",
               }}
             >
-              couldn&apos;t refresh — showing the last loaded data
+              couldn&apos;t refresh, showing the last loaded data
               <button
                 onClick={retry}
                 style={{
@@ -307,7 +307,7 @@ export function UsagePage() {
                 couldn&apos;t load usage
               </div>
               <div style={{ color: "var(--fg-dim)", marginBottom: 16 }}>
-                the usage service didn&apos;t respond — this is different from
+                the usage service didn&apos;t respond; this is different from
                 having no usage yet
               </div>
               <button onClick={retry} style={ghostBtnSm}>
@@ -326,7 +326,7 @@ export function UsagePage() {
                 fontSize: 12,
               }}
             >
-              no usage yet — run a workflow to see spend here
+              no usage yet, run a workflow to see spend here
             </div>
           ) : (
             <UsageBody
@@ -390,7 +390,7 @@ function UsageBody({
     <div style={{ opacity: loading ? 0.6 : 1, transition: "opacity .15s" }}>
       <LowBalanceBanner onTopUp={onTopUp} />
       {/* Header row above the Endpoints table: credits left (left) mirrors the range selector (right).
-          Keep the empty headspace above it — content starts low on the page. */}
+          Keep the empty headspace above it -- content starts low on the page. */}
       <div
         className="reveal reveal-delay-1"
         style={{
@@ -413,8 +413,8 @@ function UsageBody({
         >
           {(() => {
             const b = data.summary.budget;
-            // "Credits left" is the prepaid wallet — the same single source the
-            // billing page shows — so the two pages always agree. The box works
+            // "Credits left" is the prepaid wallet -- the same single source the
+            // billing page shows -- so the two pages always agree. The box works
             // in ALGO and converts to USD at display (compactUsd × rate), so
             // convert the USD wallet balance back to ALGO here. The mock plan
             // allowance (b.limit) is used only as the progress-bar reference; it
@@ -555,14 +555,14 @@ function UsageBody({
         </div>
       </div>
 
-      {/* ④ Endpoints table — first */}
+      {/* ④ Endpoints table -- first */}
       <EndpointTable
         rows={byEndpoint}
         className="reveal reveal-delay-1"
         style={{ marginBottom: 16 }}
       />
 
-      {/* ② Usage + Spend merged — two distinct-coloured lines, combined tooltip */}
+      {/* ② Usage + Spend merged -- two distinct-coloured lines, combined tooltip */}
       <Card className="reveal reveal-delay-2" style={{ marginBottom: 16 }}>
         <CardHead
           title="Usage & Spend over time"
@@ -724,7 +724,7 @@ function UsageBody({
         </Card>
       </div>
 
-      {/* ⑤ Recent settlements — on-chain, kept in ALGO */}
+      {/* ⑤ Recent settlements -- on-chain, kept in ALGO */}
       <Card style={{ marginBottom: 16 }}>
         <CardHead
           title="Recent settlements"
@@ -840,7 +840,7 @@ function UsageBody({
 }
 
 // ── Endpoints table ─────────────────────────────────────────────────────────
-// "type" sorts by the rank below, not alphabetically — a-l-x (action, llm,
+// "type" sorts by the rank below, not alphabetically -- a-l-x (action, llm,
 // x402) reads as noise. x402 first matches the filter pills and the spend
 // order the rest of the page is built around.
 type SortKey =
@@ -894,7 +894,7 @@ function EndpointTable({
       const av = a[sort.key],
         bv = b[sort.key];
       let cmp: number;
-      // Type only has 3 values, so it leaves big ties — order those by spend
+      // Type only has 3 values, so it leaves big ties -- order those by spend
       // (desc) rather than leaving each group in arbitrary fixture order.
       if (sort.key === "type")
         cmp =
@@ -1091,11 +1091,11 @@ function EndpointTable({
                 </span>
                 <TypeTag type={r.type} />
                 <span style={numCell}>{r.calls.toLocaleString()}</span>
-                {/* Both money columns are USD like every other figure on the page —
+                {/* Both money columns are USD like every other figure on the page --
                   a bare "6.110" reads as dollars but is ALGO (~6× off). The exact
                   on-chain ALGO amount stays available on hover for anyone
                   cross-checking settlements. LLM unit prices are estimates
-                  (see footer) — the * marks the price, not the total. */}
+                  (see footer) -- the * marks the price, not the total. */}
                 <span
                   className={r.unitPrice != null ? "cell-tip" : undefined}
                   data-tip={
@@ -1116,7 +1116,7 @@ function EndpointTable({
                       <span style={{ color: "var(--fg-dim)" }}>/{r.unit}</span>
                     </>
                   ) : (
-                    "—"
+                    "-"
                   )}
                 </span>
                 <span
@@ -1154,7 +1154,7 @@ function EndpointTable({
                       }}
                     />
                   </span>
-                  {/* Fixed-width value box so the bars line up in a column — with the
+                  {/* Fixed-width value box so the bars line up in a column -- with the
                     text free-width, wider values pushed each row's bar to a different x. */}
                   <span style={{ minWidth: 40, textAlign: "right" }}>
                     {r.pctOfSpend}%
@@ -1173,7 +1173,7 @@ function EndpointTable({
                             : "var(--fg-muted)",
                   }}
                 >
-                  {r.successRate == null ? "—" : `${r.successRate}%`}
+                  {r.successRate == null ? "-" : `${r.successRate}%`}
                 </span>
                 <span style={{ ...numCell, color: "var(--fg-muted)" }}>
                   {relTime(r.lastUsedAt)}
@@ -1187,7 +1187,7 @@ function EndpointTable({
   );
 }
 
-// Sortable column header — declared at module scope (not inside EndpointTable's
+// Sortable column header -- declared at module scope (not inside EndpointTable's
 // render) so it isn't recreated every render. Sort state + toggle come via props.
 function Th({
   k,
@@ -1359,7 +1359,7 @@ function Empty({ text }: { text: string }) {
 
 // ── formatting helpers ──────────────────────────────────────────────────────
 // On-chain amounts are ALGO; user-facing credit/spend is shown in USD.
-// Single display rate — swap for a live oracle when available.
+// Single display rate -- swap for a live oracle when available.
 const ALGO_USD = 0.17;
 function usd(algoAmount: number, dp = 2) {
   return (algoAmount * ALGO_USD).toLocaleString("en", {
@@ -1367,7 +1367,7 @@ function usd(algoAmount: number, dp = 2) {
     maximumFractionDigits: dp,
   });
 }
-// Compact USD for the credit balance — keeps large figures small (100K, 50, 2.3M).
+// Compact USD for the credit balance -- keeps large figures small (100K, 50, 2.3M).
 function compactUsd(algoAmount: number) {
   return Intl.NumberFormat("en", {
     notation: "compact",

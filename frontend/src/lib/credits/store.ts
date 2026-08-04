@@ -4,7 +4,7 @@ import type { PaymentMethod } from "@/components/checkout/types";
 import type { AutoRecharge, CreditsState, Purchase } from "@/lib/credits/types";
 import { creditsForTopup } from "@/lib/credits/fx";
 
-// Frontend-only credit wallet, shared across routes via useSyncExternalStore —
+// Frontend-only credit wallet, shared across routes via useSyncExternalStore --
 // the idiomatic way to subscribe React to an external (localStorage) source
 // without a provider or a setState-in-effect. Mock: per-browser, no backend.
 

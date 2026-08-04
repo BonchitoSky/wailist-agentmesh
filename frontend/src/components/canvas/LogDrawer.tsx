@@ -16,7 +16,7 @@ interface X402Payment {
   txId: string;
   amount?: string;
   explorerURL?: string;
-  // outboundTxId/outboundExplorerURL are the SECOND real settlement leg —
+  // outboundTxId/outboundExplorerURL are the SECOND real settlement leg --
   // txId above is always the inbound leg (caller -> Wallet 2), this is
   // Wallet 2 -> the actual target, when the target returned one (not
   // every target does).
@@ -171,7 +171,7 @@ export function LogDrawer({
   };
 
   const outputPreview = (output: unknown): string => {
-    if (output === null || output === undefined) return "—";
+    if (output === null || output === undefined) return "-";
     if (typeof output === "string") return output;
     if (typeof output === "object" && output !== null) {
       const m = output as Record<string, unknown>;

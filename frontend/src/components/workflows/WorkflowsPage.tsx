@@ -65,7 +65,7 @@ export function WorkflowsPage() {
     if (creatingDemo) return;
     setCreatingDemo(true);
     try {
-      const wf = await workflowsApi.create("x402 — Prism Resume Screener");
+      const wf = await workflowsApi.create("x402: Prism Resume Screener");
       const { nodes, edges } = buildX402DemoWorkflow();
       await workflowsApi.update(wf.id, { name: wf.name, nodes, edges });
       router.push(`/workflows/${wf.id}`);
@@ -78,7 +78,7 @@ export function WorkflowsPage() {
     if (creatingCanixDemo) return;
     setCreatingCanixDemo(true);
     try {
-      const wf = await workflowsApi.create("x402 — CANIX402 DeFi Opportunities");
+      const wf = await workflowsApi.create("x402: CANIX402 DeFi Opportunities");
       const { nodes, edges } = buildCanix402DemoWorkflow();
       await workflowsApi.update(wf.id, { name: wf.name, nodes, edges });
       router.push(`/workflows/${wf.id}`);
@@ -240,16 +240,16 @@ export function WorkflowsPage() {
             />
             <KpiCard
               label="Agents deployed"
-              value="—"
+              value="-"
               sub="deploy a workflow"
             />
             <KpiCard
               label="Spend · 30d"
-              value="—"
+              value="-"
               unit="ALGO"
               sub="run a workflow"
             />
-            <KpiCard label="Runs · 30d" value="—" sub="no runs yet" tone="ok" />
+            <KpiCard label="Runs · 30d" value="-" sub="no runs yet" tone="ok" />
           </div>
 
           {/* Controls */}
@@ -402,7 +402,7 @@ export function WorkflowsPage() {
               }}
             >
               {wfList.length === 0
-                ? "no workflows yet — create one to get started"
+                ? "no workflows yet, create one to get started"
                 : "no workflows match"}
             </div>
           )}
@@ -645,7 +645,7 @@ function WorkflowRows({
               color: "var(--fg-muted)",
             }}
           >
-            {wf.runs?.toLocaleString() ?? "—"}
+            {wf.runs?.toLocaleString() ?? "-"}
           </span>
           <span
             style={{
@@ -654,7 +654,7 @@ function WorkflowRows({
               color: "var(--accent)",
             }}
           >
-            {wf.spend ?? "—"}
+            {wf.spend ?? "-"}
             {wf.spend && <span style={{ color: "var(--fg-dim)" }}> ALGO</span>}
           </span>
           <span
@@ -786,8 +786,8 @@ function WorkflowGrid({
                     0,
                 ),
               },
-              { label: "Runs", val: wf.runs?.toLocaleString() ?? "—" },
-              { label: "Spend", val: wf.spend ?? "—", accent: true },
+              { label: "Runs", val: wf.runs?.toLocaleString() ?? "-" },
+              { label: "Spend", val: wf.spend ?? "-", accent: true },
             ].map((s) => (
               <div key={s.label}>
                 <div
@@ -818,7 +818,7 @@ function WorkflowGrid({
 }
 
 function fmtDate(iso?: string): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   try {
     return new Intl.DateTimeFormat("en", {
       month: "short",

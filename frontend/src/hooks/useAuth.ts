@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { auth } from "@/lib/api";
 
 const UI_COOKIE = "agentmesh_ui";
-const TTL = 60 * 60 * 24 * 7; // 7 days — matches backend JWT TTL
+const TTL = 60 * 60 * 24 * 7; // 7 days -- matches backend JWT TTL
 
 function setUICookie() {
   document.cookie = `${UI_COOKIE}=1; Path=/; SameSite=Lax; Max-Age=${TTL}`;

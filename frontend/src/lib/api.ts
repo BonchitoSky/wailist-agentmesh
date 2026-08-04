@@ -80,7 +80,7 @@ export const auth = {
   },
 
   // Full URL to kick off a backend OAuth flow. Empty string when no backend
-  // is configured (mock mode) — callers should guard on the http prefix.
+  // is configured (mock mode) -- callers should guard on the http prefix.
   oauthURL: (provider: "github" | "google"): string =>
     BASE ? `${BASE}/auth/oauth/${provider}` : "",
 };
@@ -350,7 +350,7 @@ export const payments = {
 };
 
 // -- Usage & Credits ------------------------------------------------------
-// Real endpoints don't exist yet (see plan §5 — needs a metering change in
+// Real endpoints don't exist yet (see plan §5 -- needs a metering change in
 // tool402.go + provider.go). Until then these return fixtures in mock mode,
 // and in real mode call the proposed /usage/* routes once the backend adds them.
 // Mock fixtures depend on Date.now(); memoize per range so every panel in a
@@ -373,7 +373,7 @@ function bucketFor(range: UsageRange): "hour" | "day" {
 }
 
 // One fetch/mock branch for every usage endpoint. Always reads the response
-// body for a server-provided `error` message — before this was shared, only
+// body for a server-provided `error` message -- before this was shared, only
 // summary did, and the other four threw fixed strings that discarded detail.
 async function usageFetch<T>(path: string, mock: () => T): Promise<T> {
   if (BASE) {
@@ -419,7 +419,7 @@ export const usage = {
       () => mockUsage(range).byEndpoint,
     ),
 
-  // Settlements are the latest on-chain payments, not a range-scoped metric —
+  // Settlements are the latest on-chain payments, not a range-scoped metric --
   // the real endpoint takes only `limit`, and the panel deliberately ignores
   // the 24h/7d/30d selector. Any range yields the same rows in mock mode, so
   // "30d" just picks a canonical memoized payload to slice from.
