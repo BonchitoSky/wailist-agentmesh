@@ -19,6 +19,16 @@ const BASE =
   _CONFIGURED && typeof window !== "undefined" ? "/api" : _CONFIGURED;
 
 // -- Auth ------------------------------------------------------------------
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  orgName: string;
+  // True for an OAuth account that has never set a name/org — Google and
+  // GitHub only hand back a verified email, not an organization.
+  needsOnboarding: boolean;
+}
+
 export const auth = {
   signIn: async (email: string, password: string): Promise<void> => {
     if (BASE) {
@@ -40,6 +50,7 @@ export const auth = {
   signUp: async (
     email: string,
     password: string,
+    name: string,
     org: string,
   ): Promise<void> => {
     if (BASE) {
@@ -47,7 +58,7 @@ export const auth = {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, org }),
+        body: JSON.stringify({ email, password, name, org }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "sign up failed");
@@ -55,17 +66,48 @@ export const auth = {
     }
     void email;
     void password;
+    void name;
     void org;
     await delay(500);
   },
 
-  me: async (): Promise<{ id: string; email: string }> => {
+  me: async (): Promise<AuthUser> => {
     if (BASE) {
       const res = await fetch(`${BASE}/auth/me`, { credentials: "include" });
       if (!res.ok) throw new Error("unauthorized");
       return res.json();
     }
-    return { id: "dev", email: "dev@local" };
+    return {
+      id: "dev",
+      email: "dev@local",
+      name: "Dev",
+      orgName: "Acme Capital",
+      needsOnboarding: false,
+    };
+  },
+
+  // Sets name/org for the signed-in user. Used by the post-OAuth onboarding
+  // prompt (OAuth accounts start with no name/org), and reusable as a
+  // general profile edit.
+  updateProfile: async (name: string, orgName: string): Promise<AuthUser> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/auth/me`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, orgName }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "could not update profile");
+      return data;
+    }
+    return {
+      id: "dev",
+      email: "dev@local",
+      name,
+      orgName,
+      needsOnboarding: false,
+    };
   },
 
   signOut: async (): Promise<void> => {

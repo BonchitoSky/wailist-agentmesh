@@ -56,6 +56,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
   const [mode, setMode] = useState<Mode>(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
   const [org, setOrg] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -92,7 +93,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
       if (mode === "signin") {
         await signIn(email, password);
       } else {
-        await signUp(email, password, org);
+        await signUp(email, password, name, org);
       }
       router.push(nextPath());
     } catch {
@@ -185,6 +186,17 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
                 gap: 12,
               }}
             >
+              {mode === "signup" && (
+                <FormField label="Full name">
+                  <input
+                    style={inputStyle}
+                    required
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Ada Lovelace"
+                  />
+                </FormField>
+              )}
               {mode === "signup" && (
                 <FormField label="Organization">
                   <input

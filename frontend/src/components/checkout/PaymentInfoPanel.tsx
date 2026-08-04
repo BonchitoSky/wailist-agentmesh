@@ -32,8 +32,8 @@ const PANEL_CSS = `
 `;
 
 // Right-hand payment column: pick a provider, then pay. Cashfree runs the real
-// hosted-checkout flow (order → SDK modal → server-side verify); NOWPayments is
-// wired as a stub until its backend lands. PayPal and Stripe render disabled.
+// hosted-checkout flow (order → SDK modal → server-side verify). NOWPayments,
+// PayPal and Stripe render disabled ("coming soon").
 // The provider hosts card entry, so there is no in-app card form here.
 export function PaymentInfoPanel({
   method,
@@ -111,9 +111,6 @@ export function PaymentInfoPanel({
       // useCashfreeCheckout owns loading/dismiss; leave status idle so the
       // button reflects the hook's state, not a stuck "processing".
       cashfree.pay(Math.round(amountINR * 100), normalizedPhone);
-    } else if (method === "nowpayments") {
-      setStatus("processing");
-      window.setTimeout(finish, 900);
     }
   };
 
@@ -125,10 +122,7 @@ export function PaymentInfoPanel({
         ? `Pay ₹${amountINR.toFixed(2)}`
         : "Add an amount to continue";
 
-  const trust =
-    method === "nowpayments"
-      ? "Settled on-chain via NOWPayments"
-      : "Secured by Cashfree · details are encrypted";
+  const trust = "Secured by Cashfree · details are encrypted";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>

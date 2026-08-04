@@ -312,26 +312,40 @@ func (s *Store) CreateUser(ctx context.Context, email, passwordHash string) (mod
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO users (id, email, password_hash)
 		VALUES (gen_random_uuid()::text, $1, $2)
-		RETURNING id, email, password_hash, created_at
-	`, email, passwordHash).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+		RETURNING id, email, password_hash, name, org_name, created_at
+	`, email, passwordHash).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.OrgName, &u.CreatedAt)
 	return u, err
 }
 
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (models.User, error) {
 	var u models.User
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, email, password_hash, created_at
+		SELECT id, email, password_hash, name, org_name, created_at
 		FROM users WHERE email = $1
-	`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.OrgName, &u.CreatedAt)
 	return u, err
 }
 
 func (s *Store) GetUserByID(ctx context.Context, id string) (models.User, error) {
 	var u models.User
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, email, password_hash, created_at
+		SELECT id, email, password_hash, name, org_name, created_at
 		FROM users WHERE id = $1
-	`, id).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	`, id).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.OrgName, &u.CreatedAt)
+	return u, err
+}
+
+// UpdateProfile sets the display name and organization name for a user —
+// collected at signup for password accounts, or via a post-login onboarding
+// step for OAuth accounts (which have no name/org until the provider redirect
+// completes, since neither Google nor GitHub's basic profile scope carries one).
+func (s *Store) UpdateProfile(ctx context.Context, userID, name, orgName string) (models.User, error) {
+	var u models.User
+	err := s.pool.QueryRow(ctx, `
+		UPDATE users SET name = $2, org_name = $3
+		WHERE id = $1
+		RETURNING id, email, password_hash, name, org_name, created_at
+	`, userID, name, orgName).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.OrgName, &u.CreatedAt)
 	return u, err
 }
 
@@ -342,8 +356,8 @@ func (s *Store) GetUserByID(ctx context.Context, id string) (models.User, error)
 func (s *Store) GetOrCreateOAuthUser(ctx context.Context, email string) (models.User, error) {
 	var u models.User
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, email, password_hash, created_at FROM users WHERE email = $1
-	`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+		SELECT id, email, password_hash, name, org_name, created_at FROM users WHERE email = $1
+	`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.OrgName, &u.CreatedAt)
 	if err == nil {
 		if u.PasswordHash != "" {
 			return models.User{}, ErrPasswordAccountExists
@@ -354,19 +368,22 @@ func (s *Store) GetOrCreateOAuthUser(ctx context.Context, email string) (models.
 		return models.User{}, err
 	}
 
-	// No existing user — create an OAuth-only account.
+	// No existing user — create an OAuth-only account. name/org_name are left
+	// blank: neither provider's basic profile scope carries an organization,
+	// and the frontend prompts for both once the user lands back on the app
+	// (see Deps.Me's needsOnboarding and Deps.UpdateProfile).
 	err = s.pool.QueryRow(ctx, `
 		INSERT INTO users (id, email, password_hash)
 		VALUES (gen_random_uuid()::text, $1, '')
 		ON CONFLICT (email) DO NOTHING
-		RETURNING id, email, password_hash, created_at
-	`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+		RETURNING id, email, password_hash, name, org_name, created_at
+	`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.OrgName, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Lost a race: a row appeared between SELECT and INSERT. Re-fetch and
 		// apply the same password-account guard.
 		err = s.pool.QueryRow(ctx, `
-			SELECT id, email, password_hash, created_at FROM users WHERE email = $1
-		`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+			SELECT id, email, password_hash, name, org_name, created_at FROM users WHERE email = $1
+		`, email).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Name, &u.OrgName, &u.CreatedAt)
 		if err == nil && u.PasswordHash != "" {
 			return models.User{}, ErrPasswordAccountExists
 		}
