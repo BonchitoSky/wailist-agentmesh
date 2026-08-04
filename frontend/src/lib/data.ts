@@ -18,6 +18,7 @@ export const NODE_TYPES: Record<string, NodeTypeMeta> = {
   tool402: { w: 220, h: 84, ports: ["top"] },
   action: { w: 200, h: 64, ports: ["in", "out"] },
   end: { w: 200, h: 60, ports: ["in"] },
+  tendril: { w: 240, h: 96, ports: ["in", "out", "top"] },
 };
 
 export const TRIGGER_TEMPLATES = [
@@ -229,6 +230,37 @@ export const ACTION_TEMPLATES = [
 export const END_TEMPLATES = [
   { id: "http", name: "Respond to Webhook", desc: "Return JSON", icon: "◳" },
   { id: "done", name: "End", desc: "Mark complete", icon: "■" },
+];
+
+export const TENDRIL_TEMPLATES = [
+  {
+    id: "tendril_topup",
+    name: "Buy Tendril Credit",
+    desc: "AgentMesh credits → Tendril credit",
+    action: "topup" as const,
+    icon: "＄",
+  },
+  {
+    id: "tendril_rent",
+    name: "Rent a Machine",
+    desc: "Open a metered SSH session",
+    action: "rent" as const,
+    icon: "▣",
+  },
+  {
+    id: "tendril_run",
+    name: "Run a Job",
+    desc: "Execute Python on the machine",
+    action: "run" as const,
+    icon: "▶",
+  },
+  {
+    id: "tendril_release",
+    name: "Release",
+    desc: "Stop the meter and bill",
+    action: "release" as const,
+    icon: "■",
+  },
 ];
 
 export const SAMPLE_WORKFLOW: Workflow = {

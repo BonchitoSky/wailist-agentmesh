@@ -1,5 +1,12 @@
 export type NodeType =
-  "trigger" | "agent" | "provider" | "tool" | "tool402" | "action" | "end";
+  | "trigger"
+  | "agent"
+  | "provider"
+  | "tool"
+  | "tool402"
+  | "action"
+  | "end"
+  | "tendril";
 export type EdgeKind = "flow" | "attach";
 export type PortName = "in" | "out" | "model" | "tools" | "top";
 
@@ -76,6 +83,12 @@ export interface WorkflowNode {
   // "__enc__" sentinel on read), non-secret settings go in config
   secrets?: Record<string, string>;
   config?: Record<string, string>;
+  // tendril-specific
+  tendrilAction?: "topup" | "rent" | "run" | "release";
+  tendrilNodeId?: string;
+  tendrilHours?: string;
+  // USD of AgentMesh credit to convert into Tendril credit, on a topup node.
+  tendrilAmount?: string;
 }
 
 export interface WorkflowEdge {
