@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/agentmesh/backend/internal/db"
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/x402"
@@ -192,6 +193,12 @@ func (f *fakeUSDCSignerForLedgerTest) SignAndSendPayment(_ context.Context, _, _
 func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
 	return []string{"g0", "g1"}, 0, nil
 }
+
+func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
+	return []string{"s0"}, 0, nil
+}
+
+var _ nodes.USDCGroupSigner = (*fakeUSDCSignerForLedgerTest)(nil)
 
 // TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFails
 // is a white-box regression test for the exact bug this branch's final
