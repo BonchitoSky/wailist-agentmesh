@@ -18,6 +18,29 @@ import (
 
 const authCookieName = "agentmesh_token"
 
+// uiCookieName mirrors the frontend's own agentmesh_ui cookie (see
+// useAuth.ts's setUICookie / middleware.ts) — a non-HttpOnly signal cookie
+// the Next.js middleware gates protected routes on, since it can't read the
+// HttpOnly agentmesh_token cookie set on the backend's cross-site response.
+// Password sign-in/signup set it client-side right after a successful call,
+// but OAuth is a pure server-redirect chain with no client JS in the loop,
+// so OAuthCallback has to set it here or the middleware bounces a freshly
+// signed-in OAuth user straight back to /signin.
+const uiCookieName = "agentmesh_ui"
+
+func (d *Deps) setUICookie(w http.ResponseWriter) {
+	secure := strings.HasPrefix(os.Getenv("BASE_URL"), "https")
+	http.SetCookie(w, &http.Cookie{
+		Name:     uiCookieName,
+		Value:    "1",
+		Path:     "/",
+		MaxAge:   int(tokenTTL.Seconds()),
+		HttpOnly: false,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 func (d *Deps) setAuthCookie(w http.ResponseWriter, token string) {
 	secure := strings.HasPrefix(os.Getenv("BASE_URL"), "https")
 	sameSite := http.SameSiteLaxMode

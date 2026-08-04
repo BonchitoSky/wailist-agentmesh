@@ -143,8 +143,12 @@ func (d *Deps) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set the token as an HttpOnly cookie so it never appears in URLs or logs.
-	// Redirect straight to the app — the callback page is no longer needed.
+	// Also set the UI signal cookie the Next.js middleware gates protected
+	// routes on — see uiCookieName's doc comment: with no client JS in this
+	// server-redirect flow, skipping this would bounce the just-authenticated
+	// user straight back to /signin.
 	d.setAuthCookie(w, token)
+	d.setUICookie(w)
 	http.Redirect(w, r, d.FrontendURL+"/workflows", http.StatusFound)
 }
 
