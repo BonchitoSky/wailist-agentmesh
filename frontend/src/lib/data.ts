@@ -89,11 +89,15 @@ export const MODEL_TIERS: Record<
   },
 };
 
+// Display-only mirror of backend/internal/models.PlatformKeyEconomy/Standard/
+// FrontierFeeUSDMicros — same hand-sync caveat as MODEL_TIERS above: the
+// backend is billing-authoritative, this only drives the Inspector's fee
+// badge. Keep in sync by hand when the Go constants change.
 export const TIER_FEES: Record<"economy" | "standard" | "frontier", number> =
   {
-    economy: 0.01,
-    standard: 0.03,
-    frontier: 0.05,
+    economy: 0.03,
+    standard: 0.09,
+    frontier: 0.15,
   };
 
 // modelTier mirrors nodes.ModelTier's default: unrecognized template/model

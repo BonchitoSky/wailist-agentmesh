@@ -229,8 +229,21 @@ const (
 )
 
 const (
-	ByokFlatFeeUSDMicros     int64 = 10_000  // $0.01
-	X402PlatformFeeUSDMicros int64 = 500_000 // $0.50
+	ByokFlatFeeUSDMicros     int64 = 500_000   // $0.50
+	X402PlatformFeeUSDMicros int64 = 1_500_000 // $1.50
+	// X402ProbeFloorUSDMicros is the pre-call balance floor checked before
+	// letting an agent make ANY outbound HTTP request to a tool402 node's
+	// endpoint -- including the unauthenticated probe that just fetches the
+	// 402 price quote, before any real payment exists. Checked at two call
+	// sites: nodes.executeFunctionCall (an agent-attached tool402 call not
+	// covered by run funding) and Runner.executeNode (a standalone
+	// NodeTypeTool402 node, which is never run-funded). Deliberately its own
+	// constant, separate from X402PlatformFeeUSDMicros: this one guards
+	// against an unfunded caller driving unbounded outbound requests through
+	// a tool402 node (SSRF / DoS-amplification risk), not against
+	// underpaying -- so it should stay cheap even as the real platform
+	// markup moves for pricing reasons.
+	X402ProbeFloorUSDMicros int64 = 50_000 // $0.05
 	// MaxSingleX402QuoteUSDMicros is a sanity ceiling on any one attached
 	// tool402 node's live quote during reserveAndFundRun's estimate
 	// summation — generous against any real tool price, tight against an
@@ -262,13 +275,14 @@ type X402RunFunding struct {
 }
 
 // Platform-key LLM tiers follow Zapier's flat-multiplier pattern: a fixed
-// credit charge per tier per call (1x/3x/5x the BYOK convenience-fee unit),
-// known upfront so it can feed the pre-run cost estimate, rather than live
-// per-token metering. Token usage is still captured (DebitEntry.TokensIn/
-// TokensOut) purely to confirm these multiples hold a healthy margin
-// against real provider cost as pricing/models change.
+// credit charge per tier per call, known upfront so it can feed the pre-run
+// cost estimate, rather than live per-token metering. Token usage is still
+// captured (DebitEntry.TokensIn/TokensOut) purely to confirm these
+// multiples hold a healthy margin against real provider cost as
+// pricing/models change. Tier ratio (1x/3x/5x) is relative to the economy
+// tier itself, not to ByokFlatFeeUSDMicros — the two moved independently.
 const (
-	PlatformKeyEconomyFeeUSDMicros  int64 = 10_000 // $0.01 (1x)
-	PlatformKeyStandardFeeUSDMicros int64 = 30_000 // $0.03 (3x)
-	PlatformKeyFrontierFeeUSDMicros int64 = 50_000 // $0.05 (5x)
+	PlatformKeyEconomyFeeUSDMicros  int64 = 30_000  // $0.03 (1x)
+	PlatformKeyStandardFeeUSDMicros int64 = 90_000  // $0.09 (3x)
+	PlatformKeyFrontierFeeUSDMicros int64 = 150_000 // $0.15 (5x)
 )

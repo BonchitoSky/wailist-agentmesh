@@ -704,7 +704,7 @@ func (r *Runner) executeNode(
 		// see the matching comment in provider.go's executeFunctionCall. The
 		// real, exact-amount reservation happens inside ExecuteTool402V2 via
 		// ledger below.
-		if err := r.preflightCheck(ctx, wf, models.X402PlatformFeeUSDMicros); err != nil {
+		if err := r.preflightCheck(ctx, wf, models.X402ProbeFloorUSDMicros); err != nil {
 			return nil, err
 		}
 		// A standalone tool402 node is never run-funded (that only ever

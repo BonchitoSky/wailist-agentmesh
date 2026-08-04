@@ -234,7 +234,7 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 				// an unfunded caller drive unbounded outbound requests
 				// through it.
 				if !relayCfg.toolIsRunFunded(toolNode.ID) {
-					feeAmount = models.X402PlatformFeeUSDMicros
+					feeAmount = models.X402ProbeFloorUSDMicros
 				}
 			case BillableFlatFee(toolNode.Type, toolNode.Template):
 				feeAmount = models.ByokFlatFeeUSDMicros
