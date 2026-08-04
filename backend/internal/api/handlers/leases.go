@@ -1,10 +1,16 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
+	"time"
 
+	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/respond"
@@ -107,4 +113,129 @@ func (d *Deps) TendrilCredits(w http.ResponseWriter, r *http.Request) {
 		"tendrilCreditUsdMicros": balance,
 		"recent":                 recent,
 	})
+}
+
+// LeaseTerminal bridges a browser WebSocket to an SSH shell on the rented
+// machine, authenticating with the per-lease key AgentMesh generated and
+// authorized at rent time.
+//
+// HostKeyCallback is InsecureIgnoreHostKey deliberately: Tendril hands out a
+// fresh ephemeral host (bore.pub tunnels on rotating ports) whose host key we
+// have never seen and have no channel to pin. The connection is still
+// encrypted; what is not proven is the far end's identity. Revisit if Tendril
+// ever publishes host keys in the rent response.
+func (d *Deps) LeaseTerminal(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+	lease, err := d.Store.GetTendrilLease(r.Context(), chi.URLParam(r, "id"))
+	if err != nil || lease.UserID != userID || lease.Status != "active" {
+		respond.Error(w, http.StatusNotFound, "lease not found")
+		return
+	}
+	keyPEM, err := wallet.Decrypt(lease.SSHPrivateKeyEnc, d.EncryptionKey)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, "key unavailable")
+		return
+	}
+	signer, err := ssh.ParsePrivateKey([]byte(keyPEM))
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, "key unusable")
+		return
+	}
+
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		OriginPatterns: []string{originHost(d.FrontendURL)},
+	})
+	if err != nil {
+		return
+	}
+	defer conn.CloseNow()
+
+	auth := []ssh.AuthMethod{ssh.PublicKeys(signer)}
+	if lease.SSHPasswordEnc != "" {
+		if pw, derr := wallet.Decrypt(lease.SSHPasswordEnc, d.EncryptionKey); derr == nil {
+			auth = append(auth, ssh.Password(pw))
+		}
+	}
+	client, err := ssh.Dial("tcp",
+		fmt.Sprintf("%s:%d", lease.SSHHost, lease.SSHPort),
+		&ssh.ClientConfig{
+			User:            lease.SSHUsername,
+			Auth:            auth,
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         20 * time.Second,
+		})
+	if err != nil {
+		conn.Close(websocket.StatusInternalError, "ssh dial failed")
+		return
+	}
+	defer client.Close()
+
+	session, err := client.NewSession()
+	if err != nil {
+		conn.Close(websocket.StatusInternalError, "ssh session failed")
+		return
+	}
+	defer session.Close()
+
+	stdin, _ := session.StdinPipe()
+	stdout, _ := session.StdoutPipe()
+	stderr, _ := session.StderrPipe()
+	if err := session.RequestPty("xterm-256color", 24, 80, ssh.TerminalModes{
+		ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400,
+	}); err != nil {
+		conn.Close(websocket.StatusInternalError, "pty request failed")
+		return
+	}
+	if err := session.Shell(); err != nil {
+		conn.Close(websocket.StatusInternalError, "shell failed")
+		return
+	}
+
+	ctx := r.Context()
+	pump := func(src io.Reader) {
+		buf := make([]byte, 4096)
+		for {
+			n, err := src.Read(buf)
+			if n > 0 {
+				if werr := conn.Write(ctx, websocket.MessageBinary, buf[:n]); werr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+	go pump(stdout)
+	go pump(stderr)
+
+	for {
+		typ, data, err := conn.Read(ctx)
+		if err != nil {
+			return
+		}
+		if typ == websocket.MessageText {
+			var msg struct {
+				Type string `json:"type"`
+				Cols int    `json:"cols"`
+				Rows int    `json:"rows"`
+			}
+			if json.Unmarshal(data, &msg) == nil && msg.Type == "resize" {
+				session.WindowChange(msg.Rows, msg.Cols)
+				continue
+			}
+		}
+		if _, err := stdin.Write(data); err != nil {
+			return
+		}
+	}
+}
+
+// originHost extracts the host:port a browser will send as Origin, so the
+// WebSocket accept is not left origin-wildcarded.
+func originHost(frontendURL string) string {
+	if u, err := url.Parse(frontendURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return "localhost:3000"
 }

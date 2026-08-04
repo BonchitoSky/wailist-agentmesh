@@ -86,6 +86,7 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Get("/leases", d.ListLeases)
 		r.Post("/leases/{id}/release", d.ReleaseLease)
 		r.Get("/leases/{id}/key", d.DownloadLeaseKey)
+		r.Get("/leases/{id}/terminal", d.LeaseTerminal)
 	})
 
 	return r
