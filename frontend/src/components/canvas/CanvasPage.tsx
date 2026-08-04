@@ -20,6 +20,7 @@ import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
 import { LogDrawer } from "./LogDrawer";
 import { ResizeHandle } from "./ResizeHandle";
+import { LeasesPanel } from "@/components/leases/LeasesPanel";
 import {
   PALETTE,
   INSPECTOR,
@@ -417,6 +418,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
             running={running}
             attachedSummaries={attachedSummaries}
           />
+          <LeasesPanel />
           {/* key remounts the drawer per run, so logs/elapsed/done reset via
               initial state instead of a setState cascade inside its effect. */}
           <LogDrawer

@@ -124,16 +124,17 @@ func main() {
 		"mistral":   os.Getenv("PLATFORM_MISTRAL_API_KEY"),
 	})
 
+	var tendrilClient *tendril.Client
 	if registryURL := envOr("TENDRIL_REGISTRY_URL", "https://tendrilregister.007575.xyz"); registryURL != "" {
-		tc := tendril.NewClient(registryURL)
+		tendrilClient = tendril.NewClient(registryURL)
 		// Wallet 2 is what pays Tendril through the relay, so Wallet 2's
 		// address is the one Tendril keys the shared credit pool to — sign the
 		// session with its mnemonic, not Wallet 1's.
-		sess, err := tc.Session(ctx, walletSvc, platformWalletEncMnemonic)
+		sess, err := tendrilClient.Session(ctx, walletSvc, platformWalletEncMnemonic)
 		if err != nil {
 			log.Printf("tendril: registry session unavailable (%v) — tendril nodes will fail closed", err)
 		} else {
-			runner.SetTendril(tc, sess)
+			runner.SetTendril(tendrilClient, sess)
 			log.Printf("tendril: registry %s, pool wallet %s", registryURL, platformWalletAddr)
 		}
 	}
@@ -168,6 +169,7 @@ func main() {
 		RelayFeePayer:             relayFeePayer,
 		USDCSigner:                walletSvc,
 		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
+		TendrilClient:             tendrilClient,
 	}
 
 	r := api.NewRouter(deps)

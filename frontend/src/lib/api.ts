@@ -15,7 +15,7 @@ import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
 const _CONFIGURED = process.env.NEXT_PUBLIC_API_URL ?? "";
-const BASE =
+export const BASE =
   _CONFIGURED && typeof window !== "undefined" ? "/api" : _CONFIGURED;
 
 // -- Auth ------------------------------------------------------------------

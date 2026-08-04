@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+
+	"github.com/agentmesh/backend/internal/models"
 )
 
 func (s *Store) TendrilCreditBalance(ctx context.Context, userID string) (int64, error) {
@@ -10,6 +12,31 @@ func (s *Store) TendrilCreditBalance(ctx context.Context, userID string) (int64,
 	err := s.pool.QueryRow(ctx,
 		`SELECT tendril_credit_usd_micros FROM users WHERE id = $1`, userID).Scan(&bal)
 	return bal, err
+}
+
+// RecentTendrilCreditLedger is the current user's own movements only — never
+// the shared pool, which is every user's money and must never be shown to
+// one of them.
+func (s *Store) RecentTendrilCreditLedger(ctx context.Context, userID string, limit int) ([]models.TendrilCreditEntry, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, kind, amount_usd_micros, lease_id, tx_id, created_at
+		  FROM tendril_credit_ledger
+		 WHERE user_id = $1
+		 ORDER BY created_at DESC
+		 LIMIT $2`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TendrilCreditEntry
+	for rows.Next() {
+		var e models.TendrilCreditEntry
+		if err := rows.Scan(&e.ID, &e.UserID, &e.Kind, &e.AmountUSDMicros, &e.LeaseID, &e.TxID, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // ConvertCreditsToTendril moves value between the user's two balances in one

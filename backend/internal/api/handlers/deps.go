@@ -7,6 +7,7 @@ import (
 	"github.com/agentmesh/backend/internal/engine"
 	"github.com/agentmesh/backend/internal/payments"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/tendril"
 	"github.com/agentmesh/backend/internal/wallet"
 	"github.com/agentmesh/backend/internal/x402"
 )
@@ -80,4 +81,9 @@ type Deps struct {
 	// loss per call to a fixed ceiling regardless of facilitator behavior.
 	// Zero means no cap (not recommended for a production deployment).
 	MaxRelayOutboundUSDMicros int64
+
+	// TendrilClient is nil when TENDRIL_REGISTRY_URL is unset, in which case
+	// the Tendril-facing endpoints below fail closed with a clear error
+	// rather than a nil-pointer panic.
+	TendrilClient *tendril.Client
 }
