@@ -74,6 +74,12 @@ type TendrilStore interface {
 	GetTendrilLease(ctx context.Context, id string) (models.TendrilLease, error)
 	MarkTendrilLeaseReleased(ctx context.Context, id string, usedSeconds, chargedUSDMicros int64) error
 	LatestActiveLeaseForRun(ctx context.Context, runID string) (models.TendrilLease, error)
+	// LatestActiveLeaseForUser is resolveLease's fallback for the Tendril
+	// console's direct-action endpoints, where run/release each get a fresh
+	// run_id of their own — the same-run lookup above never matches — so the
+	// only thing left to resolve against is "whichever machine this user
+	// currently has open."
+	LatestActiveLeaseForUser(ctx context.Context, userID string) (models.TendrilLease, error)
 	// Credit sub-ledger (Task 6) — the authority on what THIS user may spend.
 	TendrilCreditBalance(ctx context.Context, userID string) (int64, error)
 	CreditBalance(ctx context.Context, userID string) (int64, error)
@@ -220,7 +226,7 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 	}
 	if userCredit < need {
 		return nil, fmt.Errorf(
-			"tendril: %v hour(s) on %s costs %s but your Tendril credit is %s — add a Topup node, or raise its amount, before this Rent node",
+			"tendril: %v hour(s) on %s costs %s but your Tendril credit is %s — add more Tendril credit first",
 			hours, machine.ID, formatUSDCAmount(need), formatUSDCAmount(userCredit))
 	}
 	if err := cfg.Store.ChargeTendrilCredit(ctx, cfg.UserID, "", "charge", need); err != nil {
@@ -426,7 +432,8 @@ func ReleaseLease(ctx context.Context, cfg TendrilConfig, lease models.TendrilLe
 		}
 		return tendril.ReleaseResult{}, fmt.Errorf("tendril: release: %w", err)
 	}
-	if err := cfg.Store.MarkTendrilLeaseReleased(ctx, lease.ID, res.UsedSeconds, res.ChargedAtomic); err != nil {
+	charged := int64(res.ChargedAtomic)
+	if err := cfg.Store.MarkTendrilLeaseReleased(ctx, lease.ID, res.UsedSeconds, charged); err != nil {
 		return res, err
 	}
 
@@ -436,7 +443,7 @@ func ReleaseLease(ctx context.Context, cfg TendrilConfig, lease models.TendrilLe
 	// credits instead would let a user cycle rent/release to convert Tendril
 	// credit back into general platform credit, which the pool cannot honour
 	// (the USDC is already sitting at Tendril).
-	if unused := lease.ReservedUSDMicros - res.ChargedAtomic; unused > 0 {
+	if unused := lease.ReservedUSDMicros - charged; unused > 0 {
 		if err := cfg.Store.ChargeTendrilCredit(ctx, lease.UserID, lease.ID, "refund", unused); err != nil {
 			// The lease is already closed and billed; a failed refund is a
 			// reconciliation problem, not a reason to report the release as
@@ -462,8 +469,8 @@ func executeTendrilRelease(ctx context.Context, node models.WorkflowNode, cfg Te
 		"agentMeshLeaseId": lease.ID,
 		"leaseId":          lease.LeaseID,
 		"usedSeconds":      res.UsedSeconds,
-		"charged":          formatUSDCAmount(res.ChargedAtomic),
-		"refunded":         formatUSDCAmount(max64(0, lease.ReservedUSDMicros-res.ChargedAtomic)),
+		"charged":          formatUSDCAmount(int64(res.ChargedAtomic)),
+		"refunded":         formatUSDCAmount(max64(0, lease.ReservedUSDMicros-int64(res.ChargedAtomic))),
 		// Deliberately NOT res.Balance: that is the shared pool, which is
 		// every user's money and must never be shown to one of them.
 		"tendrilCreditBalance": formatUSDCAmount(remaining),
@@ -484,9 +491,17 @@ func resolveLease(ctx context.Context, node models.WorkflowNode, cfg TendrilConf
 	if node.TendrilNodeID != "" {
 		return cfg.Store.GetTendrilLease(ctx, node.TendrilNodeID)
 	}
-	lease, err := cfg.Store.LatestActiveLeaseForRun(ctx, cfg.RunID)
+	if lease, err := cfg.Store.LatestActiveLeaseForRun(ctx, cfg.RunID); err == nil {
+		return lease, nil
+	}
+	// The Tendril console's Run/Release actions each execute under their own
+	// fresh run_id (they are not steps of the workflow that opened the
+	// lease), so the run-scoped lookup above never matches there — fall back
+	// to "whichever machine this user currently has open." Still scoped to
+	// one user, never the shared pool.
+	lease, err := cfg.Store.LatestActiveLeaseForUser(ctx, cfg.UserID)
 	if err != nil {
-		return models.TendrilLease{}, fmt.Errorf("tendril: no lease to act on — put a Rent node before this one: %w", err)
+		return models.TendrilLease{}, fmt.Errorf("tendril: no lease to act on — rent a machine first: %w", err)
 	}
 	return lease, nil
 }

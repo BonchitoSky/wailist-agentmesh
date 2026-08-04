@@ -55,6 +55,47 @@ func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models
 	return w, nil
 }
 
+// GetOrCreateSystemWorkflow returns this user's workflow row with the given
+// name, creating it if it doesn't exist yet. Backs direct-action UIs (the
+// Tendril console) that never show a canvas but still need a real
+// workflow_id/run_id pair for the engine's node executors and the FK
+// constraints on rows like tendril_leases.
+func (s *Store) GetOrCreateSystemWorkflow(ctx context.Context, userID, name string) (models.Workflow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
+		FROM workflows WHERE user_id = $1 AND name = $2 ORDER BY created_at ASC LIMIT 1
+	`, userID, name)
+	if err != nil {
+		return models.Workflow{}, err
+	}
+	var w models.Workflow
+	found := false
+	for rows.Next() {
+		var graphJSON []byte
+		var runEndpoint *string
+		if err := rows.Scan(
+			&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
+			&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
+		); err != nil {
+			rows.Close()
+			return models.Workflow{}, err
+		}
+		if runEndpoint != nil {
+			w.RunEndpoint = *runEndpoint
+		}
+		unmarshalGraph(graphJSON, &w)
+		found = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return models.Workflow{}, err
+	}
+	if found {
+		return w, nil
+	}
+	return s.CreateWorkflow(ctx, name, userID)
+}
+
 func (s *Store) GetWorkflow(ctx context.Context, id string) (models.Workflow, error) {
 	var w models.Workflow
 	var graphJSON []byte
@@ -1052,4 +1093,17 @@ func (s *Store) LatestActiveLeaseForRun(ctx context.Context, runID string) (mode
 		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
 		 WHERE run_id = $1 AND status = 'active'
 		 ORDER BY started_at DESC LIMIT 1`, runID))
+}
+
+// LatestActiveLeaseForUser is the fallback resolveLease reaches for once a
+// Run/Release step is split into its own standalone one-node workflow: its
+// own run_id never matches the Rent step's (that was a different run
+// entirely), so the only thing left to resolve against is "whichever
+// machine this user currently has open" — still scoped to one user, never
+// the shared pool, so it can never resolve to someone else's lease.
+func (s *Store) LatestActiveLeaseForUser(ctx context.Context, userID string) (models.TendrilLease, error) {
+	return scanTendrilLease(s.pool.QueryRow(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE user_id = $1 AND status = 'active'
+		 ORDER BY started_at DESC LIMIT 1`, userID))
 }

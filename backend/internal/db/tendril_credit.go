@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/agentmesh/backend/internal/models"
 )
@@ -24,6 +25,32 @@ func (s *Store) RecentTendrilCreditLedger(ctx context.Context, userID string, li
 		 WHERE user_id = $1
 		 ORDER BY created_at DESC
 		 LIMIT $2`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TendrilCreditEntry
+	for rows.Next() {
+		var e models.TendrilCreditEntry
+		if err := rows.Scan(&e.ID, &e.UserID, &e.Kind, &e.AmountUSDMicros, &e.LeaseID, &e.TxID, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// TendrilCreditLedgerSince is the current user's own ledger movements from a
+// given time on — the Usage page's window into Tendril activity, which lives
+// entirely in this table and never touches debit_ledger (see usage.go's own
+// doc comment: Tendril credit is a separate sub-ledger, not AgentMesh spend,
+// so it was invisible on that page until this existed).
+func (s *Store) TendrilCreditLedgerSince(ctx context.Context, userID string, since time.Time) ([]models.TendrilCreditEntry, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, kind, amount_usd_micros, lease_id, tx_id, created_at
+		  FROM tendril_credit_ledger
+		 WHERE user_id = $1 AND created_at >= $2
+		 ORDER BY created_at DESC`, userID, since)
 	if err != nil {
 		return nil, err
 	}

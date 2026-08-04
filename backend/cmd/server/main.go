@@ -125,6 +125,7 @@ func main() {
 	})
 
 	var tendrilClient *tendril.Client
+	var tendrilSession *tendril.Session
 	if registryURL := envOr("TENDRIL_REGISTRY_URL", "https://tendrilregister.007575.xyz"); registryURL != "" {
 		tendrilClient = tendril.NewClient(registryURL)
 		// Wallet 2 is what pays Tendril through the relay, so Wallet 2's
@@ -134,6 +135,7 @@ func main() {
 		if err != nil {
 			log.Printf("tendril: registry session unavailable (%v) — tendril nodes will fail closed", err)
 		} else {
+			tendrilSession = sess
 			runner.SetTendril(tendrilClient, sess)
 			log.Printf("tendril: registry %s, pool wallet %s", registryURL, platformWalletAddr)
 		}
@@ -148,6 +150,7 @@ func main() {
 		Wallet:        walletSvc,
 		Engine:        runner,
 		BaseURL:       envOr("BASE_URL", "http://localhost:8080"),
+		RelayBaseURL:  relayBaseURL,
 		JWTSecret:     mustEnv("JWT_SECRET"),
 		EncryptionKey: mustEnv("ENCRYPTION_KEY"),
 
@@ -161,15 +164,17 @@ func main() {
 		CashfreeAppID: cashfreeClient.AppID,
 		NOWPayments:   nowPaymentsClient,
 
-		PlatformWalletAddress:     platformWalletAddr,
-		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
-		FacilitatorClient:         facilitatorClient,
-		USDCAssetID:               usdcAssetID,
-		RelayNetwork:              relayNetwork,
-		RelayFeePayer:             relayFeePayer,
-		USDCSigner:                walletSvc,
-		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
-		TendrilClient:             tendrilClient,
+		PlatformWalletAddress:          platformWalletAddr,
+		PlatformWalletEncMnemonic:      platformWalletEncMnemonic,
+		PlatformSpendWalletEncMnemonic: platformSpendWalletEncMnemonic,
+		FacilitatorClient:              facilitatorClient,
+		USDCAssetID:                    usdcAssetID,
+		RelayNetwork:                   relayNetwork,
+		RelayFeePayer:                  relayFeePayer,
+		USDCSigner:                     walletSvc,
+		MaxRelayOutboundUSDMicros:      maxRelayOutboundUSDMicros,
+		TendrilClient:                  tendrilClient,
+		TendrilSession:                 tendrilSession,
 	}
 
 	r := api.NewRouter(deps)

@@ -12,9 +12,37 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// atomicAmount decodes an atomic USDC amount that Tendril sends as a JSON
+// *string* (its docs: `"chargedAtomic": "83334"`, `"balance": "916666"` —
+// kept as strings, like every other x402 amount field, so a large value
+// never risks silent float precision loss in a naive client). A plain
+// `int64` field here failed json.Unmarshal outright on every real release —
+// confirmed live 2026-08-04: the DELETE call to Tendril succeeded and
+// genuinely stopped the meter, but our own client couldn't parse the
+// response, so ReleaseLease returned an error and never recorded the
+// release, leaving the AgentMesh row stuck 'active' while Tendril's own
+// side had already closed it. Accepts a bare number too, defensively, in
+// case a future Tendril response ever sends one unquoted.
+type atomicAmount int64
+
+func (a *atomicAmount) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		*a = 0
+		return nil
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return fmt.Errorf("atomicAmount: %q: %w", s, err)
+	}
+	*a = atomicAmount(v)
+	return nil
+}
 
 type Asset struct {
 	ID       string `json:"id"`
@@ -56,9 +84,9 @@ type LeaseStatus struct {
 }
 
 type ReleaseResult struct {
-	UsedSeconds   int64 `json:"usedSeconds"`
-	ChargedAtomic int64 `json:"chargedAtomic"`
-	Balance       int64 `json:"balance"`
+	UsedSeconds   int64        `json:"usedSeconds"`
+	ChargedAtomic atomicAmount `json:"chargedAtomic"`
+	Balance       atomicAmount `json:"balance"`
 }
 
 type Client struct {

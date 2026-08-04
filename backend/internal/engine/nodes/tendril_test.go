@@ -167,6 +167,9 @@ func (f *fakeTendrilStore) MarkTendrilLeaseReleased(_ context.Context, id string
 func (f *fakeTendrilStore) LatestActiveLeaseForRun(_ context.Context, _ string) (models.TendrilLease, error) {
 	return models.TendrilLease{}, nil
 }
+func (f *fakeTendrilStore) LatestActiveLeaseForUser(_ context.Context, _ string) (models.TendrilLease, error) {
+	return models.TendrilLease{}, nil
+}
 func (f *fakeTendrilStore) TendrilCreditBalance(_ context.Context, _ string) (int64, error) {
 	return f.tendrilCredit, nil
 }

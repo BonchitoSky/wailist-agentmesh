@@ -44,11 +44,16 @@ type USDCSigner interface {
 var _ USDCSigner = (*wallet.Service)(nil)
 
 type Deps struct {
-	Store         *db.Store
-	Broker        *sse.Broker
-	Wallet        *wallet.Service
-	Engine        *engine.Runner
-	BaseURL       string
+	Store   *db.Store
+	Broker  *sse.Broker
+	Wallet  *wallet.Service
+	Engine  *engine.Runner
+	BaseURL string
+	// RelayBaseURL is where THIS instance's own /x402/relay is reached from
+	// (see main.go's relayBaseURL — distinct from BaseURL, which also signs
+	// auth cookies). Needed by the Tendril console's direct-action endpoints
+	// to build their own X402RelayConfig.
+	RelayBaseURL  string
 	JWTSecret     string
 	EncryptionKey string
 
@@ -58,18 +63,24 @@ type Deps struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 
-	Cashfree    CashfreeClient
+	Cashfree      CashfreeClient
 	CashfreeAppID string
 
 	NOWPayments NOWPaymentsClient
 
 	PlatformWalletAddress     string
 	PlatformWalletEncMnemonic string
-	FacilitatorClient         *x402.FacilitatorClient
-	USDCAssetID               uint64
-	RelayNetwork              string
-	RelayFeePayer             string
-	USDCSigner                USDCSigner
+	// PlatformSpendWalletEncMnemonic is Wallet 1 — the wallet that actually
+	// signs and sends every relayed outbound x402 payment. Needed here (not
+	// just inside engine.Runner) so the Tendril console's direct-action
+	// endpoints can build their own X402RelayConfig without going through a
+	// workflow run.
+	PlatformSpendWalletEncMnemonic string
+	FacilitatorClient              *x402.FacilitatorClient
+	USDCAssetID                    uint64
+	RelayNetwork                   string
+	RelayFeePayer                  string
+	USDCSigner                     USDCSigner
 	// MaxRelayOutboundUSDMicros caps a single outbound relay payment
 	// (Wallet 2 -> target). The relay fetches a target's price quote twice
 	// per cycle (once for the public challenge preview, once again at
@@ -86,4 +97,8 @@ type Deps struct {
 	// the Tendril-facing endpoints below fail closed with a clear error
 	// rather than a nil-pointer panic.
 	TendrilClient *tendril.Client
+	// TendrilSession is the same Wallet 2 session engine.Runner holds, shared
+	// here so the Tendril console's direct-action endpoints (topup/rent/run)
+	// can call nodes.ExecuteTendril without going through a workflow run.
+	TendrilSession *tendril.Session
 }

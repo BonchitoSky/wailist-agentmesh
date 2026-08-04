@@ -49,9 +49,18 @@ func (d *Deps) ReleaseLease(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusBadGateway, "release failed: "+err.Error())
 		return
 	}
+	// refunded is the gap between what rent reserved and what Tendril's own
+	// release response says was actually charged — the number that makes
+	// "you only pay for the minutes you used" visible instead of implicit.
+	charged := int64(res.ChargedAtomic)
+	refunded := lease.ReservedUSDMicros - charged
+	if refunded < 0 {
+		refunded = 0
+	}
 	respond.JSON(w, http.StatusOK, map[string]any{
 		"usedSeconds": res.UsedSeconds,
-		"charged":     res.ChargedAtomic,
+		"charged":     charged,
+		"refunded":    refunded,
 		// Deliberately NOT res.Balance: that is the shared pool, which is
 		// every user's money and must never be shown to one of them.
 	})

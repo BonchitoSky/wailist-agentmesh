@@ -83,6 +83,10 @@ func NewRouter(d *handlers.Deps) http.Handler {
 
 		r.Get("/tendril/machines", d.TendrilMachines)
 		r.Get("/tendril/credits", d.TendrilCredits)
+		r.Get("/tendril/console", d.TendrilConsoleWorkflow)
+		r.Post("/tendril/topup", d.TendrilConsoleTopup)
+		r.Post("/tendril/rent", d.TendrilConsoleRent)
+		r.Post("/tendril/run", d.TendrilConsoleRun)
 		r.Get("/leases", d.ListLeases)
 		r.Post("/leases/{id}/release", d.ReleaseLease)
 		r.Get("/leases/{id}/key", d.DownloadLeaseKey)

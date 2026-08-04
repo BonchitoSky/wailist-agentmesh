@@ -1218,8 +1218,25 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		Resource   map[string]any `json:"resource"`
 		Extensions map[string]any `json:"extensions"`
 	}
+	// A target that answers the quote GET with anything other than a real 402
+	// challenge (an expired auth token, a 5xx, a plain error body) used to
+	// collapse into one generic "invalid challenge response" with no way to
+	// tell those apart from a genuinely malformed challenge — a dead end for
+	// diagnosing e.g. an expired Tendril lease token hitting /x402/run.
+	// Surface what the target actually said instead: status plus a
+	// truncated body.
 	if json.Unmarshal(quoteBody, &relayChallenge) != nil || len(relayChallenge.Accepts) == 0 {
-		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: invalid challenge response")
+		snippet := string(quoteBody)
+		if len(snippet) > 300 {
+			snippet = snippet[:300]
+		}
+		if quoteResp.StatusCode != http.StatusPaymentRequired {
+			return Tool402PaymentResult{}, fmt.Errorf(
+				"x402 relay: target returned %s instead of a payment challenge: %s",
+				quoteResp.Status, snippet)
+		}
+		return Tool402PaymentResult{}, fmt.Errorf(
+			"x402 relay: target's 402 challenge has no accepts[]: %s", snippet)
 	}
 	accept := relayChallenge.Accepts[0]
 	payTo, _ := accept["payTo"].(string)

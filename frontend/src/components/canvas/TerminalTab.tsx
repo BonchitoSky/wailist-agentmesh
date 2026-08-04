@@ -61,8 +61,17 @@ export function TerminalTab({
           : new Uint8Array(ev.data as ArrayBuffer),
       );
     };
-    ws.onclose = () => {
-      term.writeln("\r\n\x1b[2m disconnected \x1b[0m");
+    // A close here is the SSH connection to the machine dropping (or never
+    // opening — LeaseTerminal accepts the WebSocket first, then dials SSH,
+    // so "connected" can print before a dial/auth failure closes it right
+    // after). It never touches the lease itself: releasing is only ever the
+    // explicit Release button or the lease's own funded-window reaper,
+    // neither of which this handler calls.
+    ws.onclose = (ev) => {
+      const reason = ev.reason ? ` — ${ev.reason}` : "";
+      term.writeln(
+        `\r\n\x1b[2m disconnected${reason} (the lease itself is unaffected — reopen the terminal or check "Online machines" if the box dropped) \x1b[0m`,
+      );
     };
 
     const keys = term.onData((data) => {
