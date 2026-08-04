@@ -16,6 +16,7 @@ import (
 	"github.com/agentmesh/backend/internal/engine"
 	"github.com/agentmesh/backend/internal/payments"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/tendril"
 	"github.com/agentmesh/backend/internal/wallet"
 	"github.com/agentmesh/backend/internal/x402"
 )
@@ -105,7 +106,7 @@ func main() {
 	relayBaseURL := envOr("RELAY_BASE_URL", envOr("BASE_URL", "http://localhost:8080"))
 	log.Printf("x402 relay base URL: %s", relayBaseURL)
 
-	runner := engine.NewRunner(store, broker, walletSvc, relayBaseURL, platformSpendWalletEncMnemonic, engine.X402Config{
+	runner := engine.NewRunner(store, broker, walletSvc, relayBaseURL, platformSpendWalletEncMnemonic, mustEnv("ENCRYPTION_KEY"), engine.X402Config{
 		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
 		USDCAssetID:               usdcAssetID,
 		FacilitatorClient:         facilitatorClient,
@@ -122,6 +123,20 @@ func main() {
 		"groq":      os.Getenv("PLATFORM_GROQ_API_KEY"),
 		"mistral":   os.Getenv("PLATFORM_MISTRAL_API_KEY"),
 	})
+
+	if registryURL := envOr("TENDRIL_REGISTRY_URL", "https://tendrilregister.007575.xyz"); registryURL != "" {
+		tc := tendril.NewClient(registryURL)
+		// Wallet 2 is what pays Tendril through the relay, so Wallet 2's
+		// address is the one Tendril keys the shared credit pool to — sign the
+		// session with its mnemonic, not Wallet 1's.
+		sess, err := tc.Session(ctx, walletSvc, platformWalletEncMnemonic)
+		if err != nil {
+			log.Printf("tendril: registry session unavailable (%v) — tendril nodes will fail closed", err)
+		} else {
+			runner.SetTendril(tc, sess)
+			log.Printf("tendril: registry %s, pool wallet %s", registryURL, platformWalletAddr)
+		}
+	}
 
 	go expireStalePendingTransactionsLoop(ctx, store)
 

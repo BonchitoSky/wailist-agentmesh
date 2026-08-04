@@ -13,6 +13,7 @@ const (
 	NodeTypeTool402  NodeType = "tool402"
 	NodeTypeAction   NodeType = "action"
 	NodeTypeEnd      NodeType = "end"
+	NodeTypeTendril  NodeType = "tendril"
 )
 
 const (

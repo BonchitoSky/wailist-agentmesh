@@ -582,6 +582,13 @@ func (s *Store) GetCreditBalance(ctx context.Context, userID string) (int64, err
 	return balance, err
 }
 
+// CreditBalance is a thin alias for GetCreditBalance, named to match
+// nodes.TendrilStore's method set (TendrilCreditBalance/CreditBalance read
+// as a pair there) without a second implementation of the same query.
+func (s *Store) CreditBalance(ctx context.Context, userID string) (int64, error) {
+	return s.GetCreditBalance(ctx, userID)
+}
+
 // --- Coupons ---
 
 // CouponAmountsUSDMicros is the fixed catalog of redeemable coupon codes. Each

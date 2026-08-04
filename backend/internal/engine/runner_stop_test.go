@@ -41,7 +41,7 @@ func newTestRunnerWithRelay(t *testing.T, relayBaseURL string) (*engine.Runner, 
 	}
 	t.Cleanup(store.Close)
 	broker := sse.NewBroker()
-	return engine.NewRunner(store, broker, &fakeRelaySigner{}, relayBaseURL, "platform-enc-mnemonic", engine.X402Config{USDCAssetID: 10458941}), store
+	return engine.NewRunner(store, broker, &fakeRelaySigner{}, relayBaseURL, "platform-enc-mnemonic", "", engine.X402Config{USDCAssetID: 10458941}), store
 }
 
 func newTestRunner(t *testing.T) (*engine.Runner, *db.Store) {
@@ -56,7 +56,7 @@ func newTestRunner(t *testing.T) (*engine.Runner, *db.Store) {
 	}
 	t.Cleanup(store.Close)
 	broker := sse.NewBroker()
-	return engine.NewRunner(store, broker, &noopSigner{}, "http://localhost:8080", "", engine.X402Config{USDCAssetID: 10458941}), store
+	return engine.NewRunner(store, broker, &noopSigner{}, "http://localhost:8080", "", "", engine.X402Config{USDCAssetID: 10458941}), store
 }
 
 // newTestRunnerWithRunFunding builds a Runner with the full run-level
@@ -79,7 +79,7 @@ func newTestRunnerWithRunFunding(t *testing.T, relayBaseURL, facilitatorURL stri
 	}
 	t.Cleanup(store.Close)
 	broker := sse.NewBroker()
-	return engine.NewRunner(store, broker, &fakeRelaySigner{}, relayBaseURL, "platform-spend-enc-mnemonic", engine.X402Config{
+	return engine.NewRunner(store, broker, &fakeRelaySigner{}, relayBaseURL, "platform-spend-enc-mnemonic", "", engine.X402Config{
 		USDCAssetID:               10458941,
 		PlatformWalletAddress:     "PLATFORMADDR",
 		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
