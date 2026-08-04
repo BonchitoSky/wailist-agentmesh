@@ -139,6 +139,7 @@ func main() {
 	}
 
 	go expireStalePendingTransactionsLoop(ctx, store)
+	runner.StartLeaseReaper(ctx, time.Minute)
 
 	deps := &handlers.Deps{
 		Store:         store,
