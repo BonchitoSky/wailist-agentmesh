@@ -47,6 +47,7 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Use(NewAuthMiddleware(d.JWTSecret))
 
 		r.Get("/auth/me", d.Me)
+		r.Patch("/auth/me", d.UpdateProfile)
 
 		r.Get("/workflows", d.ListWorkflows)
 		r.Post("/workflows", d.CreateWorkflow)
