@@ -14,6 +14,7 @@ import (
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine"
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/payments"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/tendril"
@@ -142,7 +143,7 @@ func main() {
 	}
 
 	go expireStalePendingTransactionsLoop(ctx, store)
-	runner.StartLeaseReaper(ctx, time.Minute)
+	runner.StartLeaseReaper(ctx, nodes.ReaperInterval)
 
 	deps := &handlers.Deps{
 		Store:         store,

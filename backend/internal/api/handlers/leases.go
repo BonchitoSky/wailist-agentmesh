@@ -54,21 +54,20 @@ func (d *Deps) ReleaseLease(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusConflict, "lease already released")
 		return
 	}
-	res, err := nodes.ReleaseLease(r.Context(), nodes.TendrilConfig{
+	res, refunded, err := nodes.ReleaseLease(r.Context(), nodes.TendrilConfig{
 		Client: d.TendrilClient, Store: d.Store, EncryptKey: d.EncryptionKey,
 	}, lease)
 	if err != nil {
 		respond.Error(w, http.StatusBadGateway, "release failed: "+err.Error())
 		return
 	}
-	// refunded is the gap between what rent reserved and what Tendril's own
-	// release response says was actually charged — the number that makes
-	// "you only pay for the minutes you used" visible instead of implicit.
+	// refunded is exactly what nodes.ReleaseLease actually credited back to
+	// the user's Tendril balance -- NOT reservedUSDMicros-charged
+	// recomputed here, which would be wrong on the 404 (no real charge
+	// data) and not-transitioned (this call refunded nothing; some other
+	// caller already handled it, or didn't) paths. See ReleaseLease's own
+	// doc comment.
 	charged := int64(res.ChargedAtomic)
-	refunded := lease.ReservedUSDMicros - charged
-	if refunded < 0 {
-		refunded = 0
-	}
 	respond.JSON(w, http.StatusOK, map[string]any{
 		"usedSeconds": res.UsedSeconds,
 		"charged":     charged,

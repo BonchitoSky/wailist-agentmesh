@@ -114,7 +114,7 @@ func TestReleaseLeasePersistsTendrilsOwnCharge(t *testing.T) {
 		t.Fatalf("Encrypt: %v", err)
 	}
 	store := &fakeTendrilStore{}
-	res, err := ReleaseLease(context.Background(), TendrilConfig{
+	res, _, err := ReleaseLease(context.Background(), TendrilConfig{
 		Client: tendril.NewClient(srv.URL), Store: store, EncryptKey: testEncKey,
 	}, models.TendrilLease{ID: "row1", LeaseID: "lease_9k2m", LeaseTokenEnc: enc})
 	if err != nil {
@@ -141,7 +141,7 @@ func TestReleaseLeaseIsIdempotentOnAlreadyReleased(t *testing.T) {
 
 	enc, _ := wallet.Encrypt("plain-token", testEncKey)
 	store := &fakeTendrilStore{}
-	if _, err := ReleaseLease(context.Background(), TendrilConfig{
+	if _, _, err := ReleaseLease(context.Background(), TendrilConfig{
 		Client: tendril.NewClient(srv.URL), Store: store, EncryptKey: testEncKey,
 	}, models.TendrilLease{ID: "row1", LeaseID: "gone", LeaseTokenEnc: enc}); err != nil {
 		t.Fatalf("ReleaseLease on a missing lease should not error: %v", err)
@@ -165,13 +165,17 @@ func TestReleaseRefundsUnusedReservationAsTendrilCredit(t *testing.T) {
 
 	enc, _ := wallet.Encrypt("plain-token", testEncKey)
 	store := &fakeTendrilStore{}
-	if _, err := ReleaseLease(context.Background(), TendrilConfig{
+	_, refunded, err := ReleaseLease(context.Background(), TendrilConfig{
 		Client: tendril.NewClient(srv.URL), Store: store, EncryptKey: testEncKey,
 	}, models.TendrilLease{
 		ID: "row1", UserID: "user1", LeaseID: "lease_9k2m", LeaseTokenEnc: enc,
 		ReservedUSDMicros: 12_010_000,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("ReleaseLease: %v", err)
+	}
+	if refunded != 9_010_000 {
+		t.Errorf("ReleaseLease's own refunded return = %d, want 9010000", refunded)
 	}
 	if store.refunded != 9_010_000 {
 		t.Errorf("refunded = %d, want 9010000", store.refunded)
@@ -194,7 +198,7 @@ func TestReleaseDoesNotRefundOnOverrun(t *testing.T) {
 
 	enc, _ := wallet.Encrypt("plain-token", testEncKey)
 	store := &fakeTendrilStore{}
-	res, err := ReleaseLease(context.Background(), TendrilConfig{
+	res, refunded, err := ReleaseLease(context.Background(), TendrilConfig{
 		Client: tendril.NewClient(srv.URL), Store: store, EncryptKey: testEncKey,
 	}, models.TendrilLease{
 		ID: "row1", UserID: "user1", LeaseID: "lease_overrun", LeaseTokenEnc: enc,
@@ -205,6 +209,9 @@ func TestReleaseDoesNotRefundOnOverrun(t *testing.T) {
 	}
 	if res.ChargedAtomic != 5_000_000 {
 		t.Errorf("charged = %v, want 5000000 (the release must still report Tendril's real charge)", res.ChargedAtomic)
+	}
+	if refunded != 0 {
+		t.Errorf("ReleaseLease's own refunded return = %d, want 0 -- an overrun is not an unused reservation", refunded)
 	}
 	if store.refunded != 0 {
 		t.Errorf("refunded = %d, want 0 -- an overrun is not an unused reservation", store.refunded)
@@ -233,8 +240,12 @@ func TestReleaseIsNotDoubleRefundedOnConcurrentCalls(t *testing.T) {
 	}
 	cfg := TendrilConfig{Client: tendril.NewClient(srv.URL), Store: store, EncryptKey: testEncKey}
 
-	if _, err := ReleaseLease(context.Background(), cfg, lease); err != nil {
+	_, refunded1, err := ReleaseLease(context.Background(), cfg, lease)
+	if err != nil {
 		t.Fatalf("first ReleaseLease: %v", err)
+	}
+	if refunded1 != 9_010_000 {
+		t.Fatalf("first ReleaseLease's own refunded return = %d, want 9010000", refunded1)
 	}
 	if store.refunded != 9_010_000 {
 		t.Fatalf("refunded after first release = %d, want 9010000", store.refunded)
@@ -242,8 +253,12 @@ func TestReleaseIsNotDoubleRefundedOnConcurrentCalls(t *testing.T) {
 	// Simulates the race: a second caller's Tendril DELETE also succeeds
 	// (real Tendril behavior when the target isn't idempotent-safe against
 	// a lease that's already fully released) with the SAME real charge.
-	if _, err := ReleaseLease(context.Background(), cfg, lease); err != nil {
+	_, refunded2, err := ReleaseLease(context.Background(), cfg, lease)
+	if err != nil {
 		t.Fatalf("second ReleaseLease: %v", err)
+	}
+	if refunded2 != 0 {
+		t.Errorf("second (racing) ReleaseLease's own refunded return = %d, want 0 -- must not double-refund", refunded2)
 	}
 	if store.refunded != 9_010_000 {
 		t.Errorf("refunded after second (racing) release = %d, want 9010000 unchanged -- must not double-refund", store.refunded)

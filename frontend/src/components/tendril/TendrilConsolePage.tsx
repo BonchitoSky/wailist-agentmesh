@@ -7,6 +7,7 @@ import { TerminalTab } from "@/components/canvas/TerminalTab";
 import {
   tendril as tendrilApi,
   estimateLeaseCostUSD,
+  estimateLeaseHoursCostUSD,
   TendrilMachine,
   TendrilLeaseSummary,
   TendrilReleaseResult,
@@ -512,7 +513,14 @@ export function TendrilConsolePage() {
             )}
             {machines.map((m) => {
               const cost = estimateLeaseCostUSD(m.pricePerHourUsd, hours);
-              const overBudget = credit != null && cost > credit;
+              // Affordability is checked against the Tendril-credit-only
+              // portion (hours, no gate fee) -- the gate fee is billed
+              // separately in AgentMesh credit, not drawn from `credit`.
+              const hoursCost = estimateLeaseHoursCostUSD(
+                m.pricePerHourUsd,
+                hours,
+              );
+              const overBudget = credit != null && hoursCost > credit;
               const busy = rentBusy === m.id;
               return (
                 <Panel

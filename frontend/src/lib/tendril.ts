@@ -18,13 +18,27 @@ export interface TendrilMachine {
 // reserved from the user's Tendril credit, while the flat gate fee is a
 // separate real x402 payment billed directly in AgentMesh credit (see the
 // backend's tendrilRentGateFeeAtomic doc comment for why the two are no
-// longer folded into one reservation). Display-only -- the backend
-// recomputes each half independently and is the source of truth for both.
+// longer folded into one reservation). Display-only, for showing the
+// all-in price tag next to a machine -- do NOT compare this against the
+// Tendril credit balance to decide affordability, since part of it isn't
+// drawn from that balance at all; use estimateLeaseHoursCostUSD for that.
 export function estimateLeaseCostUSD(
   pricePerHourUsd: number,
   hours: number,
 ): number {
   return pricePerHourUsd * hours + TENDRIL_RENT_GATE_FEE_USD;
+}
+
+// What a rental actually reserves from the user's TENDRIL credit balance --
+// the metered hours only, matching the backend's RequiredCreditAtomic
+// exactly (no gate fee folded in, see that function's doc comment). Use
+// this, not estimateLeaseCostUSD, for any "can this user afford to rent"
+// check against their Tendril credit balance.
+export function estimateLeaseHoursCostUSD(
+  pricePerHourUsd: number,
+  hours: number,
+): number {
+  return pricePerHourUsd * hours;
 }
 
 export interface TendrilLeaseSummary {

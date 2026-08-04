@@ -70,9 +70,9 @@ func (s *Store) TendrilCreditLedgerSince(ctx context.Context, userID string, sin
 // topup payment has already settled. It is credit-ONLY: it does NOT also
 // debit credit_balance_usd_micros. The AgentMesh-credit side of a topup is
 // already charged exactly once, by the x402 relay's own Reserve/Commit
-// inside payTendril (the same reserve/commit path any other real x402 call
-// goes through) — that debit covers the real vendor amount (this same
-// amountUSDMicros) plus the platform's markup, and settles the matching
+// inside payTendril (the console's ledger, newConsolePaymentLedger, reserves/
+// commits exactly the settled amount, no markup) -- that debit covers the
+// real vendor amount (this same amountUSDMicros) and settles the matching
 // USDC into the shared Wallet 2 pool. A second debit here, of the same
 // amountUSDMicros, used to double-charge the user for one purchase: it
 // would drain their AgentMesh balance twice over for a single topup, and

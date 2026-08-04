@@ -18,7 +18,7 @@ import { BrandLogo } from "./nodes/brandLogos";
 import { tools as toolsApi } from "@/lib/api";
 import {
   tendril as tendrilApi,
-  estimateLeaseCostUSD,
+  estimateLeaseHoursCostUSD,
   TendrilMachine,
 } from "@/lib/tendril";
 
@@ -2507,8 +2507,11 @@ function TendrilInspector({
   const selectedMachine =
     machines.find((m) => m.id === node.tendrilNodeId) ?? machines[0];
   const hours = parseFloat(node.tendrilHours || "1") || 1;
+  // Tendril-credit-only (hours, no gate fee) -- matches the "of Tendril
+  // credit" label below exactly. The gate fee is a separate real charge
+  // billed in AgentMesh credit, not drawn from this balance.
   const cost = selectedMachine
-    ? estimateLeaseCostUSD(selectedMachine.pricePerHourUsd, hours)
+    ? estimateLeaseHoursCostUSD(selectedMachine.pricePerHourUsd, hours)
     : null;
   const creditVal = credit ?? 0;
   const topupAmount = parseFloat(node.tendrilAmount || "0") || 0;

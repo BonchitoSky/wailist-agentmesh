@@ -38,7 +38,7 @@ func (r *Runner) ReapExpiredLeases(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	return r.reapWith(ctx, r.store, func(ctx context.Context, lease models.TendrilLease) error {
-		_, err := nodes.ReleaseLease(ctx, nodes.TendrilConfig{
+		_, _, err := nodes.ReleaseLease(ctx, nodes.TendrilConfig{
 			Client: r.tendrilClient, Store: r.store, EncryptKey: r.encryptionKey,
 		}, lease)
 		return err
