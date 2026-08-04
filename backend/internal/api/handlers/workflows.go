@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -89,6 +90,15 @@ func (d *Deps) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.Store.DeleteWorkflow(r.Context(), id); err != nil {
+		// tendril_leases.workflow_id is ON DELETE RESTRICT, not CASCADE
+		// (migration 000018) -- a workflow with lease history (active or
+		// released) can't be silently destroyed along with the only copy
+		// of an active lease's encrypted credentials. Surface that as a
+		// clear 409, not the raw Postgres constraint-violation message.
+		if strings.Contains(err.Error(), "tendril_leases_workflow_id_fkey") {
+			respond.Error(w, http.StatusConflict, "this workflow has Tendril machine lease history and can't be deleted")
+			return
+		}
 		respond.Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -5,14 +5,6 @@ import { BASE } from "@/lib/api";
 // tendrilRentGateFeeAtomic.
 export const TENDRIL_RENT_GATE_FEE_USD = 0.01;
 
-// The fixed name every "Load Tendril workflow" click creates a fresh row
-// under — same pattern the other demo buttons (x402, CANIX402) use for their
-// own fixed names. WorkflowRoute matches on this name to open the direct
-// Tendril console instead of the canvas editor: there is no node graph to
-// show, so any workflow row with this exact name is a shortcut into the
-// console, not a distinct workflow definition.
-export const TENDRIL_WORKFLOW_NAME = "Tendril — Rent a Machine";
-
 export interface TendrilMachine {
   id: string;
   label: string;
@@ -22,6 +14,12 @@ export interface TendrilMachine {
   pricePerHourUsd: number;
 }
 
+// Total real-world cost of a rental across BOTH ledgers: the hourly rate is
+// reserved from the user's Tendril credit, while the flat gate fee is a
+// separate real x402 payment billed directly in AgentMesh credit (see the
+// backend's tendrilRentGateFeeAtomic doc comment for why the two are no
+// longer folded into one reservation). Display-only -- the backend
+// recomputes each half independently and is the source of truth for both.
 export function estimateLeaseCostUSD(
   pricePerHourUsd: number,
   hours: number,
@@ -48,9 +46,11 @@ export interface TendrilLeaseSummary {
   // as "your window" — fundedUntil is a platform-side implementation detail.
   fundedUntil: string;
   hoursPurchased: number;
-  // What renting this lease reserved from the user's Tendril credit —
-  // gate fee plus the requested hours at this machine's rate. Releasing
-  // early refunds whatever of this Tendril never actually billed.
+  // What renting this lease reserved from the user's Tendril credit — the
+  // requested hours at this machine's rate ONLY. The flat gate fee is a
+  // separate real payment billed in AgentMesh credit, not part of this
+  // reservation (see estimateLeaseCostUSD's doc comment). Releasing early
+  // refunds whatever of this Tendril reservation never actually billed.
   reservedUsdMicros: number;
 }
 
@@ -91,6 +91,39 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
 }
 
 export const tendril = {
+  // Finds-or-creates the ONE hidden workflow row that backs this user's
+  // console (backend: GetOrCreateSystemWorkflow, keyed on a fixed name) so
+  // every "Load Tendril workflow" click opens the same row instead of
+  // minting a fresh duplicate one every time -- workflowsApi.create would
+  // do the latter, since it always inserts.
+  async console(): Promise<string> {
+    const res = await fetch(`${BASE}/tendril/console`, {
+      credentials: "include",
+    });
+    if (!res.ok) throw new Error(`console: ${res.status}`);
+    const body = (await res.json()) as { workflowId: string };
+    return body.workflowId;
+  },
+
+  // Read-only counterpart to console() above: reports the console
+  // workflow's id WITHOUT creating one if it doesn't exist yet. Use this
+  // (not console()) for "is this workflow id the console" checks --
+  // WorkflowRoute calls it once per workflow-page visit, and console()'s
+  // create-on-first-call behavior would otherwise mint a hidden console
+  // row for every user the instant they open any of their own, entirely
+  // unrelated workflows.
+  async consoleWorkflowIdIfExists(): Promise<string | null> {
+    const res = await fetch(`${BASE}/tendril/console/exists`, {
+      credentials: "include",
+    });
+    if (!res.ok) throw new Error(`console/exists: ${res.status}`);
+    const body = (await res.json()) as {
+      exists: boolean;
+      workflowId?: string;
+    };
+    return body.exists && body.workflowId ? body.workflowId : null;
+  },
+
   async machines(): Promise<TendrilMachine[]> {
     const res = await fetch(`${BASE}/tendril/machines`, {
       credentials: "include",

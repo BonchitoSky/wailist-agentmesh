@@ -13,9 +13,11 @@ import (
 
 const testEncKey = "0123456789abcdef0123456789abcdef"
 
-// Renting is a flat 1¢ gate fee; hours are bought by holding credit. So "2
-// hours on a $6/hr box" costs the user $12.00 of their own Tendril credit,
-// plus the 1¢ gate fee for the rent call itself.
+// RequiredCreditAtomic reserves ONLY the metered hourly time from the user's
+// Tendril credit. The flat 1¢ gate fee for the rent call itself is a
+// separate real payment billed directly in AgentMesh credit by the relay
+// (see tendrilRentGateFeeAtomic's doc comment) -- folding it in here used to
+// double-charge the user for the same gate fee in two different ledgers.
 func TestRequiredCreditAtomic(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -23,9 +25,9 @@ func TestRequiredCreditAtomic(t *testing.T) {
 		hours float64
 		want  int64
 	}{
-		{"two hours at six dollars", 6_000_000, 2, 12_010_000},
-		{"one hour at six dollars", 6_000_000, 1, 6_010_000},
-		{"half hour at one fifty", 1_500_000, 0.5, 760_000},
+		{"two hours at six dollars", 6_000_000, 2, 12_000_000},
+		{"one hour at six dollars", 6_000_000, 1, 6_000_000},
+		{"half hour at one fifty", 1_500_000, 0.5, 750_000},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,6 +56,41 @@ func TestParseHours(t *testing.T) {
 		if _, err := parseHours(bad); err == nil {
 			t.Errorf("parseHours(%q) should have errored", bad)
 		}
+	}
+}
+
+// executeTendrilTopup must refuse to mint Tendril credit when the underlying
+// x402 call didn't actually settle a real payment -- ExecuteTool402V2
+// returns a "successful" Tool402PaymentResult with SettledUSDMicros == 0
+// whenever the target answers with anything other than a 402 (an outage, a
+// maintenance page, a misconfigured platform spend wallet). Before this
+// guard, that shape looked identical to a real settlement and
+// ConvertCreditsToTendril was called anyway, minting Tendril credit backed
+// by nothing.
+func TestTopupRefusesToCreditWithoutRealSettlement(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/platform":
+			w.Write([]byte(`{}`))
+		default:
+			// A 200, not a 402 -- e.g. Tendril mid-outage answering every
+			// path the same way, or a misconfigured proxy. No payment
+			// challenge was ever issued, so no payment could have settled.
+			w.Write([]byte(`{"status":"degraded"}`))
+		}
+	}))
+	defer srv.Close()
+
+	store := &fakeTendrilStore{agentMeshCredit: 10_000_000}
+	_, err := executeTendrilTopup(context.Background(), models.WorkflowNode{TendrilAmount: "5"}, TendrilConfig{
+		Client: tendril.NewClient(srv.URL), Store: store, UserID: "user1",
+	})
+	if err == nil {
+		t.Fatal("want an error when the topup call never actually settled a payment")
+	}
+	if store.tendrilCredit != 0 {
+		t.Errorf("tendril credit = %d, want 0 -- must not mint credit without a real settlement", store.tendrilCredit)
 	}
 }
 
@@ -141,6 +178,116 @@ func TestReleaseRefundsUnusedReservationAsTendrilCredit(t *testing.T) {
 	}
 }
 
+// When Tendril charges MORE than a lease's own reservation, ReleaseLease
+// must not refund anything (there is no unused amount) and must not silently
+// absorb the overrun with no record of it -- see the alert.Notify call in
+// the else-if branch this test exercises. This test only pins the refund
+// side (nothing refunded, no panic/error on an overrun); the alert fires on
+// a detached goroutine and isn't observable from here.
+func TestReleaseDoesNotRefundOnOverrun(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Reserved $3.00, but Tendril reports $5.00 charged -- a $2.00 overrun.
+		w.Write([]byte(`{"usedSeconds":3000,"chargedAtomic":5000000,"balance":0}`))
+	}))
+	defer srv.Close()
+
+	enc, _ := wallet.Encrypt("plain-token", testEncKey)
+	store := &fakeTendrilStore{}
+	res, err := ReleaseLease(context.Background(), TendrilConfig{
+		Client: tendril.NewClient(srv.URL), Store: store, EncryptKey: testEncKey,
+	}, models.TendrilLease{
+		ID: "row1", UserID: "user1", LeaseID: "lease_overrun", LeaseTokenEnc: enc,
+		ReservedUSDMicros: 3_000_000,
+	})
+	if err != nil {
+		t.Fatalf("ReleaseLease: %v", err)
+	}
+	if res.ChargedAtomic != 5_000_000 {
+		t.Errorf("charged = %v, want 5000000 (the release must still report Tendril's real charge)", res.ChargedAtomic)
+	}
+	if store.refunded != 0 {
+		t.Errorf("refunded = %d, want 0 -- an overrun is not an unused reservation", store.refunded)
+	}
+}
+
+// Two concurrent ReleaseLease calls against the same lease (a double-click,
+// or the reaper racing a user) must refund exactly once, not twice. The
+// fake store's MarkTendrilLeaseReleased returns transitioned = false on the
+// second call, mirroring the real Store's WHERE status = 'active' guard --
+// ReleaseLease must skip its refund/overrun accounting entirely when that
+// happens, since the first caller already ran it against the same charge.
+func TestReleaseIsNotDoubleRefundedOnConcurrentCalls(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Reserved $12.01; used 30 min = $3.00 -- $9.01 unused.
+		w.Write([]byte(`{"usedSeconds":1800,"chargedAtomic":3000000,"balance":0}`))
+	}))
+	defer srv.Close()
+
+	enc, _ := wallet.Encrypt("plain-token", testEncKey)
+	store := &fakeTendrilStore{}
+	lease := models.TendrilLease{
+		ID: "row1", UserID: "user1", LeaseID: "lease_race", LeaseTokenEnc: enc,
+		ReservedUSDMicros: 12_010_000,
+	}
+	cfg := TendrilConfig{Client: tendril.NewClient(srv.URL), Store: store, EncryptKey: testEncKey}
+
+	if _, err := ReleaseLease(context.Background(), cfg, lease); err != nil {
+		t.Fatalf("first ReleaseLease: %v", err)
+	}
+	if store.refunded != 9_010_000 {
+		t.Fatalf("refunded after first release = %d, want 9010000", store.refunded)
+	}
+	// Simulates the race: a second caller's Tendril DELETE also succeeds
+	// (real Tendril behavior when the target isn't idempotent-safe against
+	// a lease that's already fully released) with the SAME real charge.
+	if _, err := ReleaseLease(context.Background(), cfg, lease); err != nil {
+		t.Fatalf("second ReleaseLease: %v", err)
+	}
+	if store.refunded != 9_010_000 {
+		t.Errorf("refunded after second (racing) release = %d, want 9010000 unchanged -- must not double-refund", store.refunded)
+	}
+}
+
+// resolveLease's node.TendrilNodeID path must not let a run/release node
+// act on another user's lease. node.TendrilNodeID is an AgentMesh lease row
+// id set via PUT /workflows/{id}, accepted verbatim -- not restricted to
+// what the Inspector's own machine picker would produce -- so this is a real
+// cross-tenant boundary, not just defense in depth.
+func TestResolveLeaseRejectsAnotherUsersLease(t *testing.T) {
+	store := &fakeTendrilStore{
+		byID: map[string]models.TendrilLease{
+			"row_victim": {ID: "row_victim", UserID: "victim", LeaseID: "lease_victim", Status: "active"},
+		},
+	}
+	_, err := resolveLease(context.Background(),
+		models.WorkflowNode{TendrilNodeID: "row_victim"},
+		TendrilConfig{Store: store, UserID: "attacker"})
+	if err == nil {
+		t.Fatal("want an error resolving another user's lease id, got nil")
+	}
+}
+
+// The legitimate case: a node.TendrilNodeID naming the CALLING user's own
+// lease must still resolve normally.
+func TestResolveLeaseAllowsOwnLease(t *testing.T) {
+	store := &fakeTendrilStore{
+		byID: map[string]models.TendrilLease{
+			"row_mine": {ID: "row_mine", UserID: "me", LeaseID: "lease_mine", Status: "active"},
+		},
+	}
+	lease, err := resolveLease(context.Background(),
+		models.WorkflowNode{TendrilNodeID: "row_mine"},
+		TendrilConfig{Store: store, UserID: "me"})
+	if err != nil {
+		t.Fatalf("resolveLease: %v", err)
+	}
+	if lease.ID != "row_mine" {
+		t.Errorf("resolved lease id = %q, want row_mine", lease.ID)
+	}
+}
+
 type fakeTendrilStore struct {
 	tendrilCredit   int64
 	agentMeshCredit int64
@@ -150,6 +297,12 @@ type fakeTendrilStore struct {
 	releasedCharged int64
 	inserted        models.TendrilLease
 	byID            map[string]models.TendrilLease
+	// alreadyReleased tracks every id MarkTendrilLeaseReleased has already
+	// transitioned, so a second call against the same id can return
+	// transitioned = false -- mirroring the real Store's
+	// WHERE status = 'active' guard, needed to test ReleaseLease's
+	// concurrent/double-release handling without a real database.
+	alreadyReleased map[string]bool
 }
 
 func (f *fakeTendrilStore) InsertTendrilLease(_ context.Context, l models.TendrilLease) (models.TendrilLease, error) {
@@ -160,9 +313,16 @@ func (f *fakeTendrilStore) InsertTendrilLease(_ context.Context, l models.Tendri
 func (f *fakeTendrilStore) GetTendrilLease(_ context.Context, id string) (models.TendrilLease, error) {
 	return f.byID[id], nil
 }
-func (f *fakeTendrilStore) MarkTendrilLeaseReleased(_ context.Context, id string, used, charged int64) error {
+func (f *fakeTendrilStore) MarkTendrilLeaseReleased(_ context.Context, id string, used, charged int64) (bool, error) {
+	if f.alreadyReleased == nil {
+		f.alreadyReleased = map[string]bool{}
+	}
+	if f.alreadyReleased[id] {
+		return false, nil
+	}
+	f.alreadyReleased[id] = true
 	f.releasedID, f.releasedSeconds, f.releasedCharged = id, used, charged
-	return nil
+	return true, nil
 }
 func (f *fakeTendrilStore) LatestActiveLeaseForRun(_ context.Context, _ string) (models.TendrilLease, error) {
 	return models.TendrilLease{}, nil
@@ -176,8 +336,13 @@ func (f *fakeTendrilStore) TendrilCreditBalance(_ context.Context, _ string) (in
 func (f *fakeTendrilStore) CreditBalance(_ context.Context, _ string) (int64, error) {
 	return f.agentMeshCredit, nil
 }
+
+// Credit-only, matching the real Store.ConvertCreditsToTendril: the caller's
+// x402 relay call already billed AgentMesh credit for the real settlement
+// before this is ever invoked, so this must not also touch agentMeshCredit
+// (see that function's doc comment for the double-debit bug this mirrors
+// the fix for).
 func (f *fakeTendrilStore) ConvertCreditsToTendril(_ context.Context, _ string, amount int64, _ string) (int64, error) {
-	f.agentMeshCredit -= amount
 	f.tendrilCredit += amount
 	return f.tendrilCredit, nil
 }

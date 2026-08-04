@@ -66,11 +66,21 @@ func (s *Store) TendrilCreditLedgerSince(ctx context.Context, userID string, sin
 	return out, rows.Err()
 }
 
-// ConvertCreditsToTendril moves value between the user's two balances in one
-// transaction. Both the debit and the credit are guarded by CHECK constraints,
-// so a concurrent spend that would overdraw either side aborts the whole
-// transfer rather than leaving the user credited on one side and not debited
-// on the other.
+// ConvertCreditsToTendril credits the user's Tendril sub-ledger after a real
+// topup payment has already settled. It is credit-ONLY: it does NOT also
+// debit credit_balance_usd_micros. The AgentMesh-credit side of a topup is
+// already charged exactly once, by the x402 relay's own Reserve/Commit
+// inside payTendril (the same reserve/commit path any other real x402 call
+// goes through) — that debit covers the real vendor amount (this same
+// amountUSDMicros) plus the platform's markup, and settles the matching
+// USDC into the shared Wallet 2 pool. A second debit here, of the same
+// amountUSDMicros, used to double-charge the user for one purchase: it
+// would drain their AgentMesh balance twice over for a single topup, and
+// deterministically fail (crediting nothing) for anyone topping up their
+// exact full balance, since the relay's debit alone already reduced it to
+// zero. Guarded by the credit_balance_non_negative-adjacent invariant on
+// the OTHER side (tendril_credit_non_negative doesn't apply to a pure add,
+// but see ChargeTendrilCredit for the debit-side guard that DOES need it).
 //
 // txID is the on-chain id of the topup settlement that put the matching USDC
 // into the shared Wallet 2 pool — recorded so a user's Tendril credit is
@@ -84,14 +94,6 @@ func (s *Store) ConvertCreditsToTendril(ctx context.Context, userID string, amou
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-
-	var agentMeshBalance int64
-	if err := tx.QueryRow(ctx, `
-		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros - $2
-		 WHERE id = $1 RETURNING credit_balance_usd_micros`,
-		userID, amountUSDMicros).Scan(&agentMeshBalance); err != nil {
-		return 0, fmt.Errorf("insufficient AgentMesh credits for a %d micro Tendril topup: %w", amountUSDMicros, err)
-	}
 
 	var tendrilBalance int64
 	if err := tx.QueryRow(ctx, `

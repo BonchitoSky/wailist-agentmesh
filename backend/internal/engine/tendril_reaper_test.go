@@ -16,9 +16,9 @@ type reaperStore struct {
 func (s *reaperStore) ListExpiredTendrilLeases(_ context.Context, _ time.Time) ([]models.TendrilLease, error) {
 	return s.expired, nil
 }
-func (s *reaperStore) MarkTendrilLeaseReleased(_ context.Context, id string, _, _ int64) error {
+func (s *reaperStore) MarkTendrilLeaseReleased(_ context.Context, id string, _, _ int64) (bool, error) {
 	s.released = append(s.released, id)
-	return nil
+	return true, nil
 }
 
 // An expired lease is a meter still running against the shared pool. One

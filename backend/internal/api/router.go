@@ -84,6 +84,7 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Get("/tendril/machines", d.TendrilMachines)
 		r.Get("/tendril/credits", d.TendrilCredits)
 		r.Get("/tendril/console", d.TendrilConsoleWorkflow)
+		r.Get("/tendril/console/exists", d.TendrilConsoleWorkflowExists)
 		r.Post("/tendril/topup", d.TendrilConsoleTopup)
 		r.Post("/tendril/rent", d.TendrilConsoleRent)
 		r.Post("/tendril/run", d.TendrilConsoleRun)

@@ -55,21 +55,27 @@ func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models
 	return w, nil
 }
 
-// GetOrCreateSystemWorkflow returns this user's workflow row with the given
-// name, creating it if it doesn't exist yet. Backs direct-action UIs (the
-// Tendril console) that never show a canvas but still need a real
-// workflow_id/run_id pair for the engine's node executors and the FK
-// constraints on rows like tendril_leases.
-func (s *Store) GetOrCreateSystemWorkflow(ctx context.Context, userID, name string) (models.Workflow, error) {
+// FindSystemWorkflow is GetOrCreateSystemWorkflow's read-only half: looks
+// up this user's workflow row with the given name WITHOUT creating one if
+// it's missing. found is false, with a zero Workflow, when there's nothing
+// to find yet -- that is a normal, expected outcome for a user who has
+// never triggered the system workflow's creation, not an error condition.
+//
+// Exists specifically for callers that need to know "is THIS id the system
+// workflow" (e.g. WorkflowRoute deciding whether to render the Tendril
+// console instead of the canvas for a given workflowId) without the side
+// effect of silently creating a hidden row the moment they check -- every
+// workflow-page visit calling GetOrCreateSystemWorkflow instead would mint
+// an empty "Tendril Console" row for every user who has never touched
+// Tendril, the instant they open ANY of their own workflows.
+func (s *Store) FindSystemWorkflow(ctx context.Context, userID, name string) (w models.Workflow, found bool, err error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
 		FROM workflows WHERE user_id = $1 AND name = $2 ORDER BY created_at ASC LIMIT 1
 	`, userID, name)
 	if err != nil {
-		return models.Workflow{}, err
+		return models.Workflow{}, false, err
 	}
-	var w models.Workflow
-	found := false
 	for rows.Next() {
 		var graphJSON []byte
 		var runEndpoint *string
@@ -78,7 +84,7 @@ func (s *Store) GetOrCreateSystemWorkflow(ctx context.Context, userID, name stri
 			&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
 		); err != nil {
 			rows.Close()
-			return models.Workflow{}, err
+			return models.Workflow{}, false, err
 		}
 		if runEndpoint != nil {
 			w.RunEndpoint = *runEndpoint
@@ -88,6 +94,20 @@ func (s *Store) GetOrCreateSystemWorkflow(ctx context.Context, userID, name stri
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
+		return models.Workflow{}, false, err
+	}
+	return w, found, nil
+}
+
+// GetOrCreateSystemWorkflow returns this user's workflow row with the given
+// name, creating it if it doesn't exist yet. Backs direct-action UIs (the
+// Tendril console) that never show a canvas but still need a real
+// workflow_id/run_id pair for the engine's node executors and the FK
+// constraints on rows like tendril_leases. Use FindSystemWorkflow instead
+// when a missing row should mean "not found", not "create one now".
+func (s *Store) GetOrCreateSystemWorkflow(ctx context.Context, userID, name string) (models.Workflow, error) {
+	w, found, err := s.FindSystemWorkflow(ctx, userID, name)
+	if err != nil {
 		return models.Workflow{}, err
 	}
 	if found {
@@ -1056,12 +1076,22 @@ func (s *Store) ListActiveTendrilLeases(ctx context.Context, userID string) ([]m
 	return out, rows.Err()
 }
 
-// ListExpiredTendrilLeases feeds the reaper. An active lease past its funded
-// window is a meter still running against the shared pool with nobody watching.
+// ListExpiredTendrilLeases feeds the reaper. Reaps on started_at +
+// hours_purchased -- the window THIS renter actually paid for -- not
+// funded_until, which reflects how long Tendril's shared pool wallet (every
+// AgentMesh user's topups combined) could fund the machine at its rate.
+// funded_until is almost always far more than any one user bought (confirmed
+// live: a 1-hour rent showed a ~2-hour funded_until), so reaping on it let a
+// renter keep metering against the shared pool, for free, well past their
+// own paid window -- worse the healthier the pool's balance, since that's
+// exactly what stretches funded_until further from what was actually paid
+// for. hours_purchased is fractional (a 0.5-hour rent is valid), hence the
+// interval multiplication rather than an integer add.
 func (s *Store) ListExpiredTendrilLeases(ctx context.Context, now time.Time) ([]models.TendrilLease, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
-		 WHERE status = 'active' AND funded_until <= $1 ORDER BY funded_until`, now)
+		 WHERE status = 'active' AND started_at + (hours_purchased * interval '1 hour') <= $1
+		 ORDER BY started_at + (hours_purchased * interval '1 hour')`, now)
 	if err != nil {
 		return nil, err
 	}
@@ -1077,13 +1107,24 @@ func (s *Store) ListExpiredTendrilLeases(ctx context.Context, now time.Time) ([]
 	return out, rows.Err()
 }
 
-func (s *Store) MarkTendrilLeaseReleased(ctx context.Context, id string, usedSeconds, chargedUSDMicros int64) error {
-	_, err := s.pool.Exec(ctx, `
+// MarkTendrilLeaseReleased transitions a lease from active to released, and
+// reports via the bool whether THIS call performed a genuine transition (as
+// opposed to a no-op update against a row some other caller already closed
+// -- concurrent release attempts, or the reaper racing a user's own click).
+// A caller that refunded an unused reservation without checking this bool
+// used to double-refund on that race, or report a refund that never
+// happened when Tendril's own watchdog closed the lease first (a 404 from
+// Tendril has no charged amount for us to reconcile against).
+func (s *Store) MarkTendrilLeaseReleased(ctx context.Context, id string, usedSeconds, chargedUSDMicros int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
 		UPDATE tendril_leases
 		   SET status = 'released', released_at = NOW(),
 		       used_seconds = $2, charged_usd_micros = $3
 		 WHERE id = $1 AND status = 'active'`, id, usedSeconds, chargedUSDMicros)
-	return err
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // LatestActiveLeaseForRun is how a run/release node finds the lease its own

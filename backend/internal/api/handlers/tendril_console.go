@@ -75,6 +75,27 @@ func (d *Deps) TendrilConsoleWorkflow(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"workflowId": wf.ID})
 }
 
+// TendrilConsoleWorkflowExists is TendrilConsoleWorkflow's read-only
+// counterpart: reports whether this user's console workflow already exists,
+// WITHOUT creating one. WorkflowRoute calls this (not the endpoint above)
+// to decide whether the workflow id it's rendering is the Tendril console --
+// every workflow-page visit hitting the create-on-first-call endpoint above
+// instead would mint a hidden "Tendril Console" row for every user the
+// instant they open any of their OWN, entirely unrelated workflows.
+func (d *Deps) TendrilConsoleWorkflowExists(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+	wf, found, err := d.Store.FindSystemWorkflow(r.Context(), userID, tendrilConsoleWorkflowName)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, "failed to check the tendril console")
+		return
+	}
+	if !found {
+		respond.JSON(w, http.StatusOK, map[string]any{"exists": false})
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"exists": true, "workflowId": wf.ID})
+}
+
 // consoleRunContext satisfies nodes.RunContexter for the console's
 // synthesized action nodes, whose input is always request-body fields, never
 // a run's free-text trigger message — Message/UserInput only ever answer

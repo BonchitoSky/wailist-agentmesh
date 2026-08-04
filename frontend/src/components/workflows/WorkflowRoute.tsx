@@ -2,15 +2,23 @@
 import { useEffect, useState } from "react";
 import { CanvasPage } from "@/components/canvas/CanvasPage";
 import { TendrilConsolePage } from "@/components/tendril/TendrilConsolePage";
-import { workflows as workflowsApi } from "@/lib/api";
-import { TENDRIL_WORKFLOW_NAME } from "@/lib/tendril";
+import { tendril } from "@/lib/tendril";
 
-// Most workflow ids open the normal canvas. Any row named exactly
-// TENDRIL_WORKFLOW_NAME (every "Load Tendril workflow" click creates a fresh
-// one, same as the other demo buttons) opens the Tendril console instead:
-// renting real hardware is a lookup-and-press-buttons task, not something
-// that benefits from a node graph, so those rows never show the editor —
-// there's nothing on their canvas to show in the first place.
+// Most workflow ids open the normal canvas. The one id that is this user's
+// Tendril console (backend: GetOrCreateSystemWorkflow, one hidden row per
+// user, matched here by id -- never by name, since the backend's real row
+// name has no fixed relationship to any frontend constant) opens the
+// console instead: renting real hardware is a lookup-and-press-buttons
+// task, not something that benefits from a node graph, so that row never
+// shows the editor -- there's nothing on its canvas to show in the first
+// place.
+//
+// Uses consoleWorkflowIdIfExists(), NOT console() -- the latter creates the
+// console row on first call, which here would mean every workflow-page
+// visit silently minting a hidden "Tendril Console" row for users who have
+// never touched Tendril at all, just from opening one of their own,
+// unrelated workflows. A "not found yet" answer trivially resolves to
+// "this isn't the console" without ever needing to create it.
 export function WorkflowRoute({ workflowId }: { workflowId: string }) {
   const [isTendrilConsole, setIsTendrilConsole] = useState<boolean | null>(
     () => (workflowId === "new" ? false : null),
@@ -19,10 +27,10 @@ export function WorkflowRoute({ workflowId }: { workflowId: string }) {
   useEffect(() => {
     if (workflowId === "new") return;
     let stale = false;
-    workflowsApi
-      .get(workflowId)
-      .then((wf) => {
-        if (!stale) setIsTendrilConsole(wf.name === TENDRIL_WORKFLOW_NAME);
+    tendril
+      .consoleWorkflowIdIfExists()
+      .then((consoleWorkflowId) => {
+        if (!stale) setIsTendrilConsole(workflowId === consoleWorkflowId);
       })
       .catch(() => {
         if (!stale) setIsTendrilConsole(false);

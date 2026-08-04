@@ -8,6 +8,7 @@ import (
 
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine"
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/x402"
@@ -28,6 +29,21 @@ type fakeRelaySigner struct{ noopSigner }
 func (f *fakeRelaySigner) SignUSDCPaymentGroup(_ context.Context, _, _ string, _, _ uint64, _ string) ([]string, int, error) {
 	return []string{"g0", "g1"}, 0, nil
 }
+
+// SignUSDCPaymentSingle must also be implemented -- without it, the
+// nodes.USDCGroupSigner type assertion in reserveAndFundRun silently fails
+// (a nil interface satisfies neither branch of a type switch cleanly), and
+// every test using this fake degrades to the no-fund path instead of
+// exercising the real run-funded flow it exists to test.
+func (f *fakeRelaySigner) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
+	return []string{"g0"}, 0, nil
+}
+
+// Compile-time check that fakeRelaySigner really satisfies the interface
+// reserveAndFundRun asserts against -- a future edit that drops one of the
+// two methods above now fails to build instead of silently degrading every
+// test using this fake, exactly the bug the doc comments above describe.
+var _ nodes.USDCGroupSigner = (*fakeRelaySigner)(nil)
 
 func newTestRunnerWithRelay(t *testing.T, relayBaseURL string) (*engine.Runner, *db.Store) {
 	t.Helper()

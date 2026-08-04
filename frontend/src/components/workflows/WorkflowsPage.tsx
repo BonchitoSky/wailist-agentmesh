@@ -12,7 +12,7 @@ import {
 import { Topbar } from "@/components/Topbar";
 import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
-import { TENDRIL_WORKFLOW_NAME } from "@/lib/tendril";
+import { tendril } from "@/lib/tendril";
 
 export function WorkflowsPage() {
   const router = useRouter();
@@ -55,14 +55,17 @@ export function WorkflowsPage() {
   }, [creating, router]);
 
   // No node graph here at all — this row is a shortcut into the direct
-  // Tendril console (WorkflowRoute matches on its fixed name), not a
-  // workflow you build on canvas.
+  // Tendril console (WorkflowRoute matches on its id), not a workflow you
+  // build on canvas. tendril.console() finds-or-creates the ONE hidden
+  // workflow that backs every user's console, so repeated clicks always
+  // open the same row instead of workflowsApi.create minting a fresh
+  // duplicate one every time.
   const handleLoadTendrilWorkflow = useCallback(async () => {
     if (creatingTendril) return;
     setCreatingTendril(true);
     try {
-      const wf = await workflowsApi.create(TENDRIL_WORKFLOW_NAME);
-      router.push(`/workflows/${wf.id}`);
+      const workflowId = await tendril.console();
+      router.push(`/workflows/${workflowId}`);
     } catch {
       setCreatingTendril(false);
     }

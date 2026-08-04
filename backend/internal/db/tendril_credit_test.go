@@ -25,9 +25,13 @@ func setupUserWithCredits(t *testing.T, micros int64) (store *db.Store, userID s
 	return store, user.ID
 }
 
-// The topup is a transfer, not a grant: AgentMesh credits go down by exactly
-// what Tendril credits go up by, in one transaction.
-func TestConvertCreditsToTendrilIsAtomicTransfer(t *testing.T) {
+// ConvertCreditsToTendril is credit-only: it must NOT also debit AgentMesh
+// credits. The AgentMesh-credit side of a topup is already charged exactly
+// once, by the x402 relay's own Reserve/Commit inside payTendril, before
+// this function is ever called -- see ConvertCreditsToTendril's doc comment
+// for the double-debit bug this test pins as fixed (a topup used to drain
+// the user's AgentMesh balance twice over for one purchase).
+func TestConvertCreditsToTendrilDoesNotTouchAgentMeshBalance(t *testing.T) {
 	store, userID := setupUserWithCredits(t, 20_000_000) // $20 AgentMesh credits
 	ctx := context.Background()
 
@@ -42,24 +46,30 @@ func TestConvertCreditsToTendrilIsAtomicTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCreditBalance: %v", err)
 	}
-	if agentMesh != 8_000_000 {
-		t.Errorf("agentmesh balance = %d, want 8000000", agentMesh)
+	if agentMesh != 20_000_000 {
+		t.Errorf("agentmesh balance = %d, want 20000000 (untouched -- the relay already billed this, not this function)", agentMesh)
 	}
 }
 
-// A user cannot buy Tendril credit they cannot afford, and a failed conversion
-// must leave BOTH balances untouched.
-func TestConvertCreditsToTendrilRejectsOverdraftAtomically(t *testing.T) {
+// A conversion for more than the AgentMesh balance holds is NOT this
+// function's job to reject (see the doc comment -- it no longer checks or
+// touches AgentMesh credit at all); the caller's pre-flight check against
+// the relay's real cost is what refuses an unaffordable topup before any
+// money moves. This function only ever rejects a non-positive amount.
+func TestConvertCreditsToTendrilRejectsNonPositiveAmount(t *testing.T) {
 	store, userID := setupUserWithCredits(t, 5_000_000)
 	ctx := context.Background()
 
-	if _, err := store.ConvertCreditsToTendril(ctx, userID, 12_000_000, "TXID1"); err == nil {
-		t.Fatal("expected an error converting more than the AgentMesh balance")
+	if _, err := store.ConvertCreditsToTendril(ctx, userID, 0, "TXID1"); err == nil {
+		t.Fatal("expected an error converting a zero amount")
+	}
+	if _, err := store.ConvertCreditsToTendril(ctx, userID, -1, "TXID1"); err == nil {
+		t.Fatal("expected an error converting a negative amount")
 	}
 	agentMesh, _ := store.GetCreditBalance(ctx, userID)
 	tendril, _ := store.TendrilCreditBalance(ctx, userID)
 	if agentMesh != 5_000_000 || tendril != 0 {
-		t.Errorf("balances moved on a failed conversion: agentmesh=%d tendril=%d", agentMesh, tendril)
+		t.Errorf("balances moved on a rejected conversion: agentmesh=%d tendril=%d", agentMesh, tendril)
 	}
 }
 
@@ -103,9 +113,12 @@ func TestRefundReturnsCreditToTheSameUser(t *testing.T) {
 		t.Errorf("balance after refund = %d, want 9000000", bal)
 	}
 	// The refund must not touch AgentMesh credits — the user still holds
-	// Tendril hours, they did not get their money back.
+	// Tendril hours, they did not get their money back. Nor did the earlier
+	// ConvertCreditsToTendril call: it's credit-only (see its doc comment),
+	// so the AgentMesh balance stays at its original funded amount
+	// throughout this whole sequence.
 	agentMesh, _ := store.GetCreditBalance(ctx, userID)
-	if agentMesh != 8_000_000 {
-		t.Errorf("agentmesh balance = %d, want 8000000 (untouched by a tendril refund)", agentMesh)
+	if agentMesh != 20_000_000 {
+		t.Errorf("agentmesh balance = %d, want 20000000 (untouched by convert or refund)", agentMesh)
 	}
 }

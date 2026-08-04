@@ -31,7 +31,7 @@ func TestTerminalRejectsNonOwner(t *testing.T) {
 
 func TestTerminalRejectsReleasedLease(t *testing.T) {
 	d, leaseID, owner, _ := leaseFixture(t)
-	if err := d.Store.MarkTendrilLeaseReleased(context.Background(), leaseID, 60, 100); err != nil {
+	if _, err := d.Store.MarkTendrilLeaseReleased(context.Background(), leaseID, 60, 100); err != nil {
 		t.Fatalf("MarkTendrilLeaseReleased: %v", err)
 	}
 

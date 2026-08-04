@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentmesh/backend/internal/alert"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sshkeys"
 	"github.com/agentmesh/backend/internal/tendril"
@@ -20,6 +21,16 @@ import (
 // live 2026-08-04 in the /x402/rent challenge (amount "10000", 6 decimals).
 // Renting does NOT buy time — time meters from the paying address's credit
 // balance, which is why RequiredCreditAtomic adds hours on top.
+//
+// This is a REAL on-chain payment, made through payTendril -> the x402
+// relay -> Wallet 1 -> Wallet 2 -> Tendril, exactly like every other paid
+// Tendril call -- the relay's own Reserve/Commit already bills it against
+// the user's AgentMesh credit (real vendor cost + the platform's markup),
+// the same way any other real x402 tool call is billed. It must NOT also be
+// folded into RequiredCreditAtomic's Tendril-credit reservation below: doing
+// so double-charged the user for the same $0.01 in two different ledgers.
+// RequiredCreditAtomic now only reserves the metered hourly time, which is
+// the one thing genuinely drawn from the user's own Tendril credit.
 const tendrilRentGateFeeAtomic int64 = 10_000
 
 // maxTendrilHours caps a single rent. At $6/hr a fat-fingered "100" would
@@ -27,11 +38,13 @@ const tendrilRentGateFeeAtomic int64 = 10_000
 const maxTendrilHours = 24.0
 
 // RequiredCreditAtomic is how much of THIS USER's Tendril credit a rent
-// reserves. Not the pool's balance — the pool is a shared custodial float that
-// holds every user's topups at once, so it can never be the thing a rent is
-// authorized against.
+// reserves for metered hourly time. Not the pool's balance — the pool is a
+// shared custodial float that holds every user's topups at once, so it can
+// never be the thing a rent is authorized against. Does NOT include
+// tendrilRentGateFeeAtomic -- see that constant's doc comment for why the
+// gate fee is billed separately, in AgentMesh credit, by the relay.
 func RequiredCreditAtomic(rateUSDMicrosPerHour int64, hours float64) int64 {
-	return int64(float64(rateUSDMicrosPerHour)*hours+0.5) + tendrilRentGateFeeAtomic
+	return int64(float64(rateUSDMicrosPerHour)*hours + 0.5)
 }
 
 func parseHours(raw string) (float64, error) {
@@ -72,7 +85,10 @@ func parseTopupUSD(raw string) (float64, error) {
 type TendrilStore interface {
 	InsertTendrilLease(ctx context.Context, l models.TendrilLease) (models.TendrilLease, error)
 	GetTendrilLease(ctx context.Context, id string) (models.TendrilLease, error)
-	MarkTendrilLeaseReleased(ctx context.Context, id string, usedSeconds, chargedUSDMicros int64) error
+	// MarkTendrilLeaseReleased's bool reports whether THIS call performed a
+	// genuine active->released transition -- see the Store implementation's
+	// doc comment for why ReleaseLease's refund logic depends on it.
+	MarkTendrilLeaseReleased(ctx context.Context, id string, usedSeconds, chargedUSDMicros int64) (bool, error)
 	LatestActiveLeaseForRun(ctx context.Context, runID string) (models.TendrilLease, error)
 	// LatestActiveLeaseForUser is resolveLease's fallback for the Tendril
 	// console's direct-action endpoints, where run/release each get a fresh
@@ -141,7 +157,12 @@ func executeTendrilTopup(ctx context.Context, node models.WorkflowNode, cfg Tend
 
 	// Refuse before paying if the user cannot afford it. Settling first and
 	// discovering the shortfall afterwards would put real USDC in the pool
-	// with no user entitled to spend it.
+	// with no user entitled to spend it. The relay debits atomic PLUS the
+	// platform's markup (see payTendril's doc comment), so the real cost to
+	// the user's AgentMesh balance is more than the topup amount itself --
+	// checking against atomic alone would let this pass, then have the
+	// relay's own Reserve fail partway through paying.
+	realCost := atomic + models.X402PlatformFeeUSDMicros
 	balance, err := cfg.Store.TendrilCreditBalance(ctx, cfg.UserID)
 	if err != nil {
 		return nil, err
@@ -150,19 +171,30 @@ func executeTendrilTopup(ctx context.Context, node models.WorkflowNode, cfg Tend
 	if err != nil {
 		return nil, err
 	}
-	if agentMeshBalance < atomic {
-		return nil, fmt.Errorf("tendril: topup of %s needs %s in AgentMesh credits, you have %s",
-			formatUSDCAmount(atomic), formatUSDCAmount(atomic), formatUSDCAmount(agentMeshBalance))
+	if agentMeshBalance < realCost {
+		return nil, fmt.Errorf("tendril: topup of %s needs %s in AgentMesh credits (including the platform fee), you have %s",
+			formatUSDCAmount(atomic), formatUSDCAmount(realCost), formatUSDCAmount(agentMeshBalance))
 	}
 
 	receipt, err := payTendril(ctx, cfg, fmt.Sprintf("/topup?amount=%d", atomic), nil, "")
 	if err != nil {
 		return nil, err
 	}
+	// ExecuteTool402V2 returns a "successful" result with ZERO money moved
+	// whenever the target answers with anything other than a 402 (a
+	// Tendril-side outage, maintenance page, or misconfigured platform spend
+	// wallet all take this path) -- require positive proof a real payment
+	// settled before minting any Tendril credit. See payTendril's doc
+	// comment for the unbacked-credit bug this closes.
+	if receipt.SettledUSDMicros <= 0 {
+		return nil, fmt.Errorf("tendril: topup did not settle (no payment confirmed) -- nothing was charged, try again")
+	}
 
-	txID := ""
-	if m, ok := receipt.(map[string]any); ok {
-		txID, _ = m["txId"].(string)
+	txID := receipt.TxID
+	if txID == "" {
+		if m, ok := receipt.Response.(map[string]any); ok {
+			txID, _ = m["txId"].(string)
+		}
 	}
 	newBalance, err := cfg.Store.ConvertCreditsToTendril(ctx, cfg.UserID, atomic, txID)
 	if err != nil {
@@ -178,7 +210,7 @@ func executeTendrilTopup(ctx context.Context, node models.WorkflowNode, cfg Tend
 		"previousBalance":      formatUSDCAmount(balance),
 		"note":                 "Tendril credit is separate from your AgentMesh credits and can only be spent on Tendril machine time.",
 	}
-	if m, ok := receipt.(map[string]any); ok {
+	if m, ok := receipt.Response.(map[string]any); ok {
 		for _, k := range []string{"txId", "explorerURL", "outboundTxId", "outboundExplorerURL"} {
 			if v, ok := m[k]; ok {
 				out[k] = v
@@ -229,6 +261,20 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 			"tendril: %v hour(s) on %s costs %s but your Tendril credit is %s — add more Tendril credit first",
 			hours, machine.ID, formatUSDCAmount(need), formatUSDCAmount(userCredit))
 	}
+	// The gate fee below is a separate real charge, billed in AgentMesh
+	// credit by the relay (see tendrilRentGateFeeAtomic's doc comment) --
+	// refuse before paying if the user can't cover it, same rationale as
+	// executeTendrilTopup's pre-check.
+	gateFeeRealCost := tendrilRentGateFeeAtomic + models.X402PlatformFeeUSDMicros
+	agentMeshBalance, err := cfg.Store.CreditBalance(ctx, cfg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if agentMeshBalance < gateFeeRealCost {
+		return nil, fmt.Errorf(
+			"tendril: opening a lease needs %s in AgentMesh credits for the gate fee, you have %s",
+			formatUSDCAmount(gateFeeRealCost), formatUSDCAmount(agentMeshBalance))
+	}
 	if err := cfg.Store.ChargeTendrilCredit(ctx, cfg.UserID, "", "charge", need); err != nil {
 		return nil, fmt.Errorf("tendril: reserve credit: %w", err)
 	}
@@ -260,11 +306,43 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 	if err != nil {
 		return nil, err
 	}
+	// Same proof-of-settlement requirement as executeTendrilTopup: a
+	// non-402 response from Tendril (outage, maintenance page, proxy
+	// error) otherwise looks like a successful call with nothing paid --
+	// refuse to persist a lease and spend the reservation on one.
+	if raw.SettledUSDMicros <= 0 {
+		return nil, fmt.Errorf("tendril: rent did not settle (no payment confirmed) -- nothing was charged, try again")
+	}
 
-	lease, err := decodeRentResponse(raw)
+	lease, err := decodeRentResponse(raw.Response)
 	if err != nil {
 		return nil, err
 	}
+
+	// From here on we hold a real, known lease id and token: the machine is
+	// live and metering at Tendril regardless of what happens in the rest
+	// of this function. A failure below (encrypting a credential, or
+	// persisting the row) used to just return an error -- the deferred
+	// refund above hands the user's Tendril credit back, but the machine
+	// itself keeps running with no local row for the reaper to ever find,
+	// metering against the shared pool indefinitely with nobody watching.
+	// persisted tracks whether InsertTendrilLease below actually succeeded;
+	// if it didn't, attempt a compensating Release before returning so the
+	// meter actually stops, and alert if even that fails -- matching this
+	// codebase's convention for other "real money moved, cleanup itself
+	// failed" situations (see reserveAndFundRun's own CRITICAL alerts).
+	persisted := false
+	defer func() {
+		if persisted {
+			return
+		}
+		if _, relErr := cfg.Client.Release(context.Background(), lease.LeaseID, lease.LeaseToken); relErr != nil {
+			msg := fmt.Sprintf("CRITICAL: tendril rent for user %s paid and opened lease %s, but persisting it locally failed and the compensating Release ALSO failed (%v) -- machine is live and metering with no local row, reconcile by hand",
+				cfg.UserID, lease.LeaseID, relErr)
+			log.Print(msg)
+			go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+		}
+	}()
 
 	tokenEnc, err := wallet.Encrypt(lease.LeaseToken, cfg.EncryptKey)
 	if err != nil {
@@ -301,8 +379,10 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 	if err != nil {
 		return nil, fmt.Errorf("tendril: persist lease: %w", err)
 	}
-	// The lease exists and is metering — the reservation is now legitimately
-	// spent, so stop the deferred refund from clawing it back.
+	// The lease is durably recorded -- stop the compensating Release above
+	// from firing, and stop the deferred refund from clawing back a
+	// reservation that's now legitimately spent.
+	persisted = true
 	reserved = false
 
 	remaining, _ := cfg.Store.TendrilCreditBalance(ctx, cfg.UserID)
@@ -321,7 +401,7 @@ func executeTendrilRent(ctx context.Context, node models.WorkflowNode, cfg Tendr
 		// shows them, and the only balance that governs what they may rent.
 		"tendrilCreditBalance": formatUSDCAmount(remaining),
 	}
-	if m, ok := raw.(map[string]any); ok {
+	if m, ok := raw.Response.(map[string]any); ok {
 		for _, k := range []string{"txId", "explorerURL", "outboundTxId", "outboundExplorerURL"} {
 			if v, ok := m[k]; ok {
 				out[k] = v
@@ -378,7 +458,17 @@ func truncateJSON(b []byte) string {
 // bearer, when set, is the Tendril lease token the TARGET needs (for /x402/run
 // against a machine the user already holds). It is not auth for our own relay
 // — see the X-Relay-Auth passthrough added in Task 10.
-func payTendril(ctx context.Context, cfg TendrilConfig, path string, body []byte, bearer string) (any, error) {
+//
+// Returns the full Tool402PaymentResult, not just its Response body:
+// ExecuteTool402V2 returns (response, nil) -- a "successful" call with ZERO
+// money moved -- whenever the target answers with anything other than a 402
+// (a Tendril-side outage, maintenance page, proxy error, or misconfigured
+// platform spend wallet all take this path). A caller that credits the user
+// based on the response body alone, without checking SettledUSDMicros, mints
+// value backed by nothing. Callers that mutate a balance based on this call
+// MUST check SettledUSDMicros > 0 (proof a real payment settled) before
+// doing so -- see executeTendrilTopup and executeTendrilRent.
+func payTendril(ctx context.Context, cfg TendrilConfig, path string, body []byte, bearer string) (Tool402PaymentResult, error) {
 	node := models.WorkflowNode{
 		ID:       "tendril:" + path,
 		Type:     models.NodeTypeTool402,
@@ -394,9 +484,9 @@ func payTendril(ctx context.Context, cfg TendrilConfig, path string, body []byte
 	}
 	res, err := ExecuteTool402V2(ctx, node, emptyRunContext{}, models.AgentWallet{}, nil, cfg.Relay)
 	if err != nil {
-		return nil, fmt.Errorf("tendril %s: %w", path, err)
+		return Tool402PaymentResult{}, fmt.Errorf("tendril %s: %w", path, err)
 	}
-	return res.Response, nil
+	return res, nil
 }
 
 // emptyRunContext satisfies RunContexter for the synthesized nodes above,
@@ -425,16 +515,45 @@ func ReleaseLease(ctx context.Context, cfg TendrilConfig, lease models.TendrilLe
 		// that as a failure would leave our row 'active' forever and have the
 		// reaper retry it on every tick.
 		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
-			if merr := cfg.Store.MarkTendrilLeaseReleased(ctx, lease.ID, 0, 0); merr != nil {
+			transitioned, merr := cfg.Store.MarkTendrilLeaseReleased(ctx, lease.ID, 0, 0)
+			if merr != nil {
 				return tendril.ReleaseResult{}, merr
 			}
+			// A 404 carries no charged amount for us to reconcile against --
+			// unlike a normal release, there's no reservation math to do
+			// here at all. If THIS call is the one that closed the row
+			// locally (transitioned == true), the lease's real fate at
+			// Tendril is unknown: it may have used the full reservation, or
+			// none of it. Refunding anything here -- as this used to do
+			// unconditionally -- reported a phantom "fully refunded" for
+			// money whose real disposition nobody actually confirmed.
+			// Alert so it gets reconciled by hand instead of guessing.
+			if transitioned {
+				msg := fmt.Sprintf("tendril lease %s (user %s, reserved %d micros) closed via 404 from Tendril (its own watchdog beat us to it) -- real usage unknown, nothing refunded, reconcile by hand",
+					lease.LeaseID, lease.UserID, lease.ReservedUSDMicros)
+				log.Print(msg)
+				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+			}
+			// !transitioned means some other caller (a concurrent release
+			// click, or the reaper) already closed this row -- that caller
+			// owns whatever reconciliation was possible; doing it again
+			// here would double up.
 			return tendril.ReleaseResult{}, nil
 		}
 		return tendril.ReleaseResult{}, fmt.Errorf("tendril: release: %w", err)
 	}
 	charged := int64(res.ChargedAtomic)
-	if err := cfg.Store.MarkTendrilLeaseReleased(ctx, lease.ID, res.UsedSeconds, charged); err != nil {
+	transitioned, err := cfg.Store.MarkTendrilLeaseReleased(ctx, lease.ID, res.UsedSeconds, charged)
+	if err != nil {
 		return res, err
+	}
+	// Tendril's own DELETE just succeeded with real charge data, but our row
+	// was already 'released' by someone else (a concurrent release click, or
+	// the reaper beating this call to it) -- that caller already ran the
+	// refund/overrun accounting below once; running it again here on the
+	// same underlying charge would double-refund or double-alert.
+	if !transitioned {
+		return res, nil
 	}
 
 	// Return the unused part of the reservation as Tendril credit — not as
@@ -451,6 +570,22 @@ func ReleaseLease(ctx context.Context, cfg TendrilConfig, lease models.TendrilLe
 			log.Printf("tendril: lease %s released but refunding %d micros to user %s failed: %v",
 				lease.LeaseID, unused, lease.UserID, err)
 		}
+	} else if overrun := charged - lease.ReservedUSDMicros; overrun > 0 {
+		// Tendril charged MORE than this lease's own upfront reservation --
+		// a platform-cost overrun (the reap window closing later than the
+		// user's paid time, a rate mismatch, or a bug at Tendril's end).
+		// Silently doing nothing here would absorb the difference: the
+		// user's Tendril credit was never debited for it, so the platform
+		// ate the cost with no record of it having happened. Not
+		// auto-charging the user more (that could fail if they lack the
+		// credit, or surprise them for compute they didn't ask to keep
+		// paying for) -- alert loudly instead so it gets reconciled by
+		// hand, matching this codebase's convention for other "real money
+		// moved, the accounting doesn't line up" situations.
+		msg := fmt.Sprintf("CRITICAL: tendril lease %s (user %s) charged %d micros against a %d micro reservation -- %d micro overrun absorbed by the platform, not billed to the user",
+			lease.LeaseID, lease.UserID, charged, lease.ReservedUSDMicros, overrun)
+		log.Print(msg)
+		go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 	}
 	return res, nil
 }
@@ -498,7 +633,20 @@ func max64(a, b int64) int64 {
 // opened, which is what the trigger -> rent -> run -> release workflow wants.
 func resolveLease(ctx context.Context, node models.WorkflowNode, cfg TendrilConfig) (models.TendrilLease, error) {
 	if node.TendrilNodeID != "" {
-		return cfg.Store.GetTendrilLease(ctx, node.TendrilNodeID)
+		lease, err := cfg.Store.GetTendrilLease(ctx, node.TendrilNodeID)
+		// Ownership check, matching every REST handler in handlers/leases.go
+		// (GetTendrilLease itself is a bare WHERE id = $1, no user scoping).
+		// node.TendrilNodeID here is an AgentMesh lease row id set via
+		// PUT /workflows/{id}, accepted verbatim -- not restricted to values
+		// the Inspector's own machine picker would ever produce. Without
+		// this check, a run/release node pointing at another user's lease
+		// id would decrypt and act on that user's SSH machine. 404, not
+		// 403, so this can't be used to confirm another user's lease id is
+		// valid.
+		if err != nil || lease.UserID != cfg.UserID {
+			return models.TendrilLease{}, fmt.Errorf("tendril: lease %q not found", node.TendrilNodeID)
+		}
+		return lease, nil
 	}
 	if lease, err := cfg.Store.LatestActiveLeaseForRun(ctx, cfg.RunID); err == nil {
 		return lease, nil
@@ -536,5 +684,9 @@ func executeTendrilRun(ctx context.Context, node models.WorkflowNode, rc RunCont
 			leaseToken = tok
 		}
 	}
-	return payTendril(ctx, cfg, "/x402/run", body, leaseToken)
+	res, err := payTendril(ctx, cfg, "/x402/run", body, leaseToken)
+	if err != nil {
+		return nil, err
+	}
+	return res.Response, nil
 }
