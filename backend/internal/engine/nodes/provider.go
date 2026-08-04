@@ -272,8 +272,9 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			if paymentResult.SettledUSDMicros > 0 {
 				payment = &ToolPaymentInfo{
 					NodeID: toolNode.ID, NodeName: toolNode.Name,
-					SettledUSDMicros: paymentResult.SettledUSDMicros,
-					DebitKind:        paymentResult.DebitKind,
+					SettledUSDMicros:     paymentResult.SettledUSDMicros,
+					DebitKind:            paymentResult.DebitKind,
+					PlatformFeeUSDMicros: paymentResult.PlatformFeeUSDMicros,
 				}
 				if m, ok := paymentResult.Response.(map[string]any); ok {
 					payment.TxID, _ = m["txId"].(string)
@@ -333,12 +334,15 @@ const maxToolIterations = 15
 // ToolPaymentInfo carries what an agent-attached tool402 call actually
 // charged, so the agent loop can bill the real settled amount (relay
 // dialect) or the flat fee (legacy dialect) instead of assuming a fixed
-// amount from the tool result's shape.
+// amount from the tool result's shape. SettledUSDMicros + PlatformFeeUSDMicros
+// is the TOTAL debited from the user's credits for a v2 call -- neither
+// field alone is the total charge (see Tool402PaymentResult's doc comment).
 type ToolPaymentInfo struct {
-	NodeID           string
-	NodeName         string
-	SettledUSDMicros int64
-	DebitKind        string
+	NodeID               string
+	NodeName             string
+	SettledUSDMicros     int64
+	DebitKind            string
+	PlatformFeeUSDMicros int64
 	// TxID/ExplorerURL are populated only for the legacy direct-pay dialect
 	// (its result map already carries them); relay-dialect payments settle
 	// through the facilitator with no single client-visible txid to surface
@@ -348,16 +352,23 @@ type ToolPaymentInfo struct {
 }
 
 // paymentReceipt turns a ToolPaymentInfo into the map shape surfaced in an
-// agent's "x402Payments" output field. txId/explorerURL keys are included
-// only when populated (legacy dialect), keeping the existing frontend
-// contract for those fields unchanged while adding the new
-// settledUsdMicros/debitKind fields runner.go needs for correct billing.
+// agent's "x402Payments" output field, consumed only for the run console's
+// SSE display (runner.go) -- never re-billed from here, billing already
+// happened via the ledger Commit calls inside ExecuteTool402V2. txId/
+// explorerURL keys are included only when populated (legacy dialect).
+// platformFeeUsdMicros is a NEW additive key (zero/omitted for legacy
+// calls, which have no separate markup component): settledUsdMicros alone
+// is NOT the total charged for a v2 call, see ToolPaymentInfo's doc
+// comment -- a consumer that wants the real total must add both fields.
 func paymentReceipt(p *ToolPaymentInfo) map[string]any {
 	receipt := map[string]any{
 		"nodeId":           p.NodeID,
 		"nodeName":         p.NodeName,
 		"settledUsdMicros": p.SettledUSDMicros,
 		"debitKind":        p.DebitKind,
+	}
+	if p.PlatformFeeUSDMicros > 0 {
+		receipt["platformFeeUsdMicros"] = p.PlatformFeeUSDMicros
 	}
 	if p.TxID != "" {
 		receipt["txId"] = p.TxID

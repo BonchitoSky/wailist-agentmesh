@@ -924,12 +924,13 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 800000 so that even after reserveAndFundRun's upfront
-	// ReserveCredits(250000), the remaining live DB balance (550000) still
-	// clears executeFunctionCall's unrelated, pre-existing floor guard
-	// (models.X402ProbeFloorUSDMicros) that runs before every attached
-	// tool402 call not covered by run funding.
-	fundUser(t, store, user.ID, 800_000)
+	// 3000000: covers the agent's own flat fee, reserveAndFundRun's upfront
+	// credit reservation for this run (250000 real vendor cost + the
+	// platform's flat markup, models.X402PlatformFeeUSDMicros), with
+	// headroom to spare above executeFunctionCall's pre-existing floor
+	// guard (models.X402ProbeFloorUSDMicros) for any attached tool402 call
+	// not covered by run funding.
+	fundUser(t, store, user.ID, 3_000_000)
 
 	wf, err := store.CreateWorkflow(ctx, "Relay Inbound Settled Test", user.ID)
 	if err != nil {
@@ -971,9 +972,10 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Agent's own flat fee + the real 250000 run-funded cost, billed
-	// despite the target's 500 response to the paid request.
-	wantBalance := int64(800_000 - models.ByokFlatFeeUSDMicros - 250_000)
+	// Agent's own flat fee + the real 250000 run-funded vendor cost + the
+	// platform's flat markup, billed despite the target's 500 response to
+	// the paid request.
+	wantBalance := int64(3_000_000 - models.ByokFlatFeeUSDMicros - 250_000 - models.X402PlatformFeeUSDMicros)
 	if balance != wantBalance {
 		t.Fatalf("want balance %d (billed for the signed outbound payment despite the target's failure), got %d", wantBalance, balance)
 	}
@@ -982,7 +984,7 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sawRelayCost bool
+	var sawRelayCost, sawMarkup bool
 	for _, e := range entries {
 		if e.Kind == models.DebitKindX402RelayCost {
 			sawRelayCost = true
@@ -990,9 +992,18 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 				t.Fatalf("want relay cost entry of 250000, got %d", e.AmountUSDMicros)
 			}
 		}
+		if e.Kind == models.DebitKindX402PlatformFee {
+			sawMarkup = true
+			if e.AmountUSDMicros != models.X402PlatformFeeUSDMicros {
+				t.Fatalf("want platform fee entry of %d, got %d", models.X402PlatformFeeUSDMicros, e.AmountUSDMicros)
+			}
+		}
 	}
 	if !sawRelayCost {
 		t.Fatalf("want an %s ledger entry, got %+v", models.DebitKindX402RelayCost, entries)
+	}
+	if !sawMarkup {
+		t.Fatalf("want an %s ledger entry, got %+v", models.DebitKindX402PlatformFee, entries)
 	}
 
 	fundings, err := store.ListX402RunFundingsByRun(ctx, run.ID)
@@ -1100,12 +1111,14 @@ func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 800000 so that even after reserveAndFundRun's upfront
-	// ReserveCredits(250000), the remaining live DB balance (550000) still
-	// clears executeFunctionCall's pre-existing floor guard
-	// (models.X402ProbeFloorUSDMicros) on both attempts (that guard is
-	// unaffected by the run-level pool).
-	fundUser(t, store, user.ID, 800_000)
+	// 3000000: covers the agent's own flat fee and reserveAndFundRun's
+	// upfront credit reservation (250000 real vendor cost + the platform's
+	// flat markup) with headroom to spare. The pool itself is still sized
+	// for exactly one call's worth of total (vendor cost + markup), so it's
+	// still exhausted after the first real payment -- markup scales pool
+	// size and per-call reserve together, it doesn't change the
+	// pool-exhaustion-after-one-call behavior this test is pinning.
+	fundUser(t, store, user.ID, 3_000_000)
 
 	wf, err := store.CreateWorkflow(ctx, "Relay Sequential Overspend Test", user.ID)
 	if err != nil {
@@ -1154,23 +1167,29 @@ func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantBalance := int64(800_000 - models.ByokFlatFeeUSDMicros - 250_000)
+	wantBalance := int64(3_000_000 - models.ByokFlatFeeUSDMicros - 250_000 - models.X402PlatformFeeUSDMicros)
 	if balance != wantBalance {
-		t.Fatalf("want balance %d (exactly one payment + the agent's own fee, no overspend), got %d", wantBalance, balance)
+		t.Fatalf("want balance %d (exactly one payment + its markup + the agent's own fee, no overspend), got %d", wantBalance, balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	relayEntries := 0
+	relayEntries, markupEntries := 0, 0
 	for _, e := range entries {
 		if e.Kind == models.DebitKindX402RelayCost {
 			relayEntries++
 		}
+		if e.Kind == models.DebitKindX402PlatformFee {
+			markupEntries++
+		}
 	}
 	if relayEntries != 1 {
 		t.Fatalf("want exactly 1 x402_relay_cost ledger entry, got %d (entries: %+v)", relayEntries, entries)
+	}
+	if markupEntries != 1 {
+		t.Fatalf("want exactly 1 x402_platform_fee ledger entry, got %d (entries: %+v)", markupEntries, entries)
 	}
 
 	fundings, err := store.ListX402RunFundingsByRun(ctx, run.ID)
@@ -1197,14 +1216,15 @@ func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 // ReserveCredits' atomic SELECT...FOR UPDATE, both goroutines could read the
 // same pre-decrement balance and both pay -- this proves only one can.
 //
-// Cost (400000) and starting balance (600000) are deliberately chosen so
-// both goroutines' cheap upfront floor preflight (X402ProbeFloorUSDMicros)
-// can plausibly pass before either has reserved anything -- both read the
-// same original 600000 balance, since the floor check happens before
-// either node's outbound HTTP round trip to the relay, well before either
-// Reserve call. That leaves ReserveCredits' atomicity, not the floor gate,
-// as what actually has to block the second payment: 600000 covers one
-// 400000 reservation but not two.
+// Cost (400000 real vendor cost + the platform's flat markup = 1900000
+// total reserved per call) and starting balance (2500000) are deliberately
+// chosen so both goroutines' cheap upfront floor preflight
+// (X402ProbeFloorUSDMicros) can plausibly pass before either has reserved
+// anything -- both read the same original 2500000 balance, since the floor
+// check happens before either node's outbound HTTP round trip to the
+// relay, well before either Reserve call. That leaves ReserveCredits'
+// atomicity, not the floor gate, as what actually has to block the second
+// payment: 2500000 covers one 1900000 reservation but not two.
 func TestConcurrentTool402NodesCannotOverspend(t *testing.T) {
 	ctx := context.Background()
 
@@ -1234,9 +1254,10 @@ func TestConcurrentTool402NodesCannotOverspend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Covers one 400000 relay payment (plus the cheap floor preflight, read
-	// before either reservation happens) but not two concurrent ones.
-	fundUser(t, store, user.ID, 600_000)
+	// Covers one 1900000 total (400000 vendor cost + markup) reservation
+	// (plus the cheap floor preflight, read before either reservation
+	// happens) but not two concurrent ones.
+	fundUser(t, store, user.ID, 2_500_000)
 
 	wf, err := store.CreateWorkflow(ctx, "Relay Concurrent Overspend Test", user.ID)
 	if err != nil {
@@ -1285,22 +1306,29 @@ func TestConcurrentTool402NodesCannotOverspend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance != 200_000 {
-		t.Fatalf("want balance 200000 (exactly one 400000 payment against a 600000 balance, no overspend), got %d", balance)
+	wantBalance := int64(2_500_000 - 400_000 - models.X402PlatformFeeUSDMicros)
+	if balance != wantBalance {
+		t.Fatalf("want balance %d (exactly one 400000+markup payment against a 2500000 balance, no overspend), got %d", wantBalance, balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	relayEntries := 0
+	relayEntries, markupEntries := 0, 0
 	for _, e := range entries {
 		if e.Kind == models.DebitKindX402RelayCost {
 			relayEntries++
 		}
+		if e.Kind == models.DebitKindX402PlatformFee {
+			markupEntries++
+		}
 	}
 	if relayEntries != 1 {
 		t.Fatalf("want exactly 1 x402_relay_cost ledger entry, got %d (entries: %+v)", relayEntries, entries)
+	}
+	if markupEntries != 1 {
+		t.Fatalf("want exactly 1 x402_platform_fee ledger entry, got %d (entries: %+v)", markupEntries, entries)
 	}
 }
 
@@ -1316,19 +1344,23 @@ func TestConcurrentTool402NodesCannotOverspend(t *testing.T) {
 // price drift between "estimate" and "actual settle", which is exactly what
 // executeTool402RunLevel's fresh re-probe-before-paying is there to handle.
 // tool_b's price (350000) never drifts. This lets the test also prove the
-// leftover pool (the 50000 difference between the 750000 estimate and the
-// 700000 actually spent) gets released back to the user's balance once the
-// agent's turn ends, instead of being stranded.
+// leftover pool (the 50000 difference between the 750000 vendor-cost
+// estimate and the 700000 actually spent) gets released back to the user's
+// balance once the agent's turn ends, instead of being stranded -- the
+// platform markup component of the pool (one flat fee per funded tool,
+// baked into creditReserve alongside the vendor-cost estimate) doesn't
+// drift at all, since both tools are real v2 calls that each pay the
+// exact same flat markup whether their vendor price moved or not, so it
+// contributes nothing extra to the leftover.
 //
-// The starting balance (1300000) is chosen so that even after
-// reserveAndFundRun's upfront ReserveCredits(750000) reservation, the
-// user's real DB balance (550000) still comfortably clears
-// executeFunctionCall's pre-existing, unrelated cheap conservative floor
-// guard (checkBalance against models.X402ProbeFloorUSDMicros) that
-// runs before every attached tool402 call not covered by run funding --
-// that guard is untouched by Task 5 and checks the live DB balance, not
-// the run-level pool, so it must independently keep passing for both
-// calls in the same turn.
+// Both toolA and toolB are run-funded (toolIsRunFunded true for both), so
+// neither takes executeFunctionCall's live-DB floor-guard branch at all --
+// that guard is specific to calls NOT covered by run funding, so this test
+// doesn't need extra balance headroom for it. The starting balance
+// (5000000) just needs to comfortably clear the agent's own flat fee
+// preflight (checked before reserveAndFundRun even runs) and
+// reserveAndFundRun's upfront credit reservation (750000 vendor-cost
+// estimate + one flat markup per funded tool, two tools here).
 func TestAgentBranchingBetweenTwoPricedToolsDoesNotBlockMidRun(t *testing.T) {
 	ctx := context.Background()
 
@@ -1399,7 +1431,7 @@ func TestAgentBranchingBetweenTwoPricedToolsDoesNotBlockMidRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fundUser(t, store, user.ID, 1_300_000)
+	fundUser(t, store, user.ID, 5_000_000)
 
 	wf, err := store.CreateWorkflow(ctx, "Run Fund Branch Test", user.ID)
 	if err != nil {
@@ -1464,11 +1496,14 @@ func TestAgentBranchingBetweenTwoPricedToolsDoesNotBlockMidRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 1300000 - 750000 (reserved+funded for the run, sum of both estimated
-	// prices) - agent's own flat fee + 50000 (unused pool released:
-	// estimated 400000+350000=750000, actually paid 350000+350000=700000
-	// because tool_a's price drifted down between estimate and settle time).
-	wantBalance := int64(1_300_000 - 750_000 - models.ByokFlatFeeUSDMicros + 50_000)
+	// 5000000 - creditReserve (750000 vendor-cost estimate + 2 funded tools'
+	// worth of markup) - agent's own flat fee + 50000 (unused pool
+	// released: vendor-cost estimate 400000+350000=750000, actually paid
+	// 350000+350000=700000 because tool_a's price drifted down between
+	// estimate and settle time; the markup component of the pool doesn't
+	// drift, so this 50000 gap is exactly the same as the no-markup case).
+	creditReserve := int64(750_000 + 2*models.X402PlatformFeeUSDMicros)
+	wantBalance := int64(5_000_000) - creditReserve - models.ByokFlatFeeUSDMicros + 50_000
 	if balance != wantBalance {
 		t.Fatalf("want balance %d, got %d", wantBalance, balance)
 	}
@@ -1493,12 +1528,14 @@ func TestAgentBranchingBetweenTwoPricedToolsDoesNotBlockMidRun(t *testing.T) {
 // TestAgentBlocksAttachedX402CallWhenBalanceInsufficientForFee's identical
 // reasoning), so it can no longer be used to construct this case.
 //
-// Funding: the agent's own economy fee (30000) plus the sum of both
-// attached tools' real quotes (100000 + 100000 = 200000) = 230000. Once
-// reserveAndFundRun reserves the 200000 estimate up front, live DB balance
-// left for the rest of the run is exactly 30000 -- BELOW the 50000 floor.
-// Without the RunFundingID skip at nodes/provider.go's executeFunctionCall,
-// the un-skipped floor check would reject both attached calls with
+// Funding: the agent's own economy fee (30000) plus reserveAndFundRun's
+// upfront credit reservation -- the sum of both attached tools' real vendor
+// quotes (100000 + 100000 = 200000) plus one flat platform markup per
+// funded tool (2 tools here) -- all reserved before the agent's turn
+// starts. Once that reservation lands, live DB balance left for the rest
+// of the run is exactly 30000 -- BELOW the 50000 floor. Without the
+// RunFundingID skip at nodes/provider.go's executeFunctionCall, the
+// un-skipped floor check would reject both attached calls with
 // *nodes.ErrBalanceBlocked. With the skip (RunFundingID != "", since
 // reserveAndFundRun's upfront ReserveCredits already satisfied it once),
 // both calls proceed and the run succeeds -- so this test only goes green
@@ -1580,13 +1617,14 @@ func TestExactBalanceRunLevelAttachedCallsNotBlockedByFloorGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Exactly enough: the agent's own economy-tier fee (30000) + 200000
-	// (sum of both tools' real quotes) -- no headroom above the estimate,
-	// so the live DB balance after reserveAndFundRun's upfront reservation
-	// is only 30000, BELOW models.X402ProbeFloorUSDMicros (50000). Both
+	// (sum of both tools' real vendor quotes) + one flat platform markup
+	// per funded tool (2 tools) -- no headroom above the reservation, so
+	// the live DB balance after reserveAndFundRun's upfront reservation is
+	// only 30000, BELOW models.X402ProbeFloorUSDMicros (50000). Both
 	// attached calls are run-funded here, so they take the RunFundingID
 	// skip branch -- and this time that's the only reason they aren't
 	// blocked, since the un-skipped floor check against 30000 would fail.
-	fundUser(t, store, user.ID, models.PlatformKeyEconomyFeeUSDMicros+200_000)
+	fundUser(t, store, user.ID, models.PlatformKeyEconomyFeeUSDMicros+200_000+2*models.X402PlatformFeeUSDMicros)
 
 	wf, err := store.CreateWorkflow(ctx, "Run Fund Exact Balance Test", user.ID)
 	if err != nil {
@@ -1630,23 +1668,28 @@ func TestExactBalanceRunLevelAttachedCallsNotBlockedByFloorGuard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantBalance := int64(models.PlatformKeyEconomyFeeUSDMicros + 200_000 - models.PlatformKeyEconomyFeeUSDMicros - 100_000 - 100_000)
-	if balance != wantBalance {
-		t.Fatalf("want balance %d, got %d", wantBalance, balance)
+	if balance != 0 {
+		t.Fatalf("want balance 0 (funded exactly enough, nothing left over), got %d", balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	relayEntries := 0
+	relayEntries, markupEntries := 0, 0
 	for _, e := range entries {
 		if e.Kind == models.DebitKindX402RelayCost {
 			relayEntries++
 		}
+		if e.Kind == models.DebitKindX402PlatformFee {
+			markupEntries++
+		}
 	}
 	if relayEntries != 2 {
 		t.Fatalf("want exactly 2 x402_relay_cost ledger entries (both tools billed), got %d (entries: %+v)", relayEntries, entries)
+	}
+	if markupEntries != 2 {
+		t.Fatalf("want exactly 2 x402_platform_fee ledger entries (one per tool), got %d (entries: %+v)", markupEntries, entries)
 	}
 }
 
@@ -1709,9 +1752,12 @@ func TestAgentBranchingBetweenTwoPricedToolsBlocksUpfrontWhenBalanceInsufficient
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Covers neither tool's real quote sum (750000), though it would cover
-	// either one alone.
-	fundUser(t, store, user.ID, 600_000)
+	// Covers neither tool's real quote+markup sum (750000 + 2*1,500,000 =
+	// 3,750,000), but comfortably covers a single tool's own quote+markup
+	// (e.g. toolA's 400000+1,500,000 = 1,900,000) -- so this specifically
+	// catches a regression where reserveAndFundRun only reserves one
+	// tool's cost instead of the sum of all attached tools.
+	fundUser(t, store, user.ID, 2_000_000)
 
 	wf, err := store.CreateWorkflow(ctx, "Run Fund Block Upfront Test", user.ID)
 	if err != nil {
@@ -1768,8 +1814,8 @@ func TestAgentBranchingBetweenTwoPricedToolsBlocksUpfrontWhenBalanceInsufficient
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance != 600_000 {
-		t.Fatalf("want balance unchanged at 600000 (ReserveCredits is atomic, fails without partial deduction), got %d", balance)
+	if balance != 2_000_000 {
+		t.Fatalf("want balance unchanged at 2000000 (ReserveCredits is atomic, fails without partial deduction), got %d", balance)
 	}
 
 	fundings, err := store.ListX402RunFundingsByRun(ctx, run.ID)
@@ -1850,7 +1896,10 @@ func TestRunLevelPathNeverCallsPublicRelayEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fundUser(t, store, user.ID, 1_000_000)
+	// Covers the agent's own flat fee plus reserveAndFundRun's upfront
+	// credit reservation (300000 real vendor cost + one flat platform
+	// markup for this run's single funded tool).
+	fundUser(t, store, user.ID, 2_500_000)
 
 	wf, err := store.CreateWorkflow(ctx, "Run Level No Relay Test", user.ID)
 	if err != nil {
@@ -1978,7 +2027,10 @@ func TestRunFailsAndNeverCallsPublicRelayWhenRunFundingRecordFails(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fundUser(t, store, user.ID, 1_000_000)
+	// Covers reserveAndFundRun's upfront credit reservation (300000 real
+	// vendor cost + one flat platform markup for this run's single funded
+	// tool) with headroom to spare.
+	fundUser(t, store, user.ID, 2_500_000)
 
 	wf, err := store.CreateWorkflow(ctx, "Run Funding Record Fail Test", user.ID)
 	if err != nil {
@@ -2027,8 +2079,9 @@ func TestRunFailsAndNeverCallsPublicRelayWhenRunFundingRecordFails(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance != 700_000 {
-		t.Fatalf("want the 300000 reservation to remain deducted, NOT released (real money already settled on-chain), got balance %d (started at 1000000)", balance)
+	wantBalance := int64(2_500_000 - 300_000 - models.X402PlatformFeeUSDMicros)
+	if balance != wantBalance {
+		t.Fatalf("want the 300000+markup reservation to remain deducted, NOT released (real money already settled on-chain), got balance %d (want %d, started at 2500000)", balance, wantBalance)
 	}
 
 	fundings, err := store.ListX402RunFundingsByRun(ctx, run.ID)
@@ -2229,13 +2282,15 @@ func TestLegacyToolAttachedAlongsideRunFundedV2ToolBillsIdenticallyToStandalone(
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 2_500_000: enough to cover the agent's own flat fee,
-	// reserveAndFundRun's up-front v2 estimate (300000), AND the legacy
-	// tool's real flat platform fee (models.X402PlatformFeeUSDMicros) --
-	// this is exactly the assertion this test pins: the legacy call's
-	// floor guard and billing run against the live DB balance, unaffected
-	// by the run-level pool.
-	fundUser(t, store, user.ID, 2_500_000)
+	// 4_500_000: enough to cover the agent's own flat fee,
+	// reserveAndFundRun's up-front v2 credit reservation (300000 real
+	// vendor cost + one flat platform markup for the funded v2 tool), AND
+	// the legacy tool's own real flat platform fee (models.X402PlatformFeeUSDMicros,
+	// billed separately against the live DB balance) -- this is exactly
+	// the assertion this test pins: the legacy call's floor guard and
+	// billing run against the live DB balance, unaffected by the run-level
+	// pool.
+	fundUser(t, store, user.ID, 4_500_000)
 
 	// aw is required for the legacy dialect's direct-pay branch (it signs
 	// from the agent's own wallet, not Wallet 1/2) -- create and attach a
@@ -2288,24 +2343,26 @@ func TestLegacyToolAttachedAlongsideRunFundedV2ToolBillsIdenticallyToStandalone(
 		t.Fatalf("want success got %s", final.Status)
 	}
 
-	// Final balance: 2500000 - agent's own flat fee - 300000 (v2 run-level
-	// pool, real settled amount) - legacy flat fee (models.X402PlatformFeeUSDMicros)
-	// = 200000. A wrong balance here would mean the legacy fee was billed
-	// against the wrong ledger (or not billed / double-billed).
-	wantBalance := int64(2_500_000 - models.ByokFlatFeeUSDMicros - 300_000 - models.X402PlatformFeeUSDMicros)
+	// Final balance: 4500000 - agent's own flat fee - 300000 (v2 run-level
+	// pool, real settled amount) - v2's platform markup - legacy flat fee
+	// (models.X402PlatformFeeUSDMicros, a separate charge from the v2
+	// markup despite sharing the same debit kind). A wrong balance here
+	// would mean the legacy fee was billed against the wrong ledger (or
+	// not billed / double-billed), or the v2 markup was skipped/duplicated.
+	wantBalance := int64(4_500_000 - models.ByokFlatFeeUSDMicros - 300_000 - models.X402PlatformFeeUSDMicros - models.X402PlatformFeeUSDMicros)
 	balance, err := store.GetCreditBalance(ctx, user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if balance != wantBalance {
-		t.Fatalf("want final balance %d (2500000 - agent fee - 300000 v2 - legacy fee), got %d -- legacy tool billing was not identical to the no-v2-attached case", wantBalance, balance)
+		t.Fatalf("want final balance %d (4500000 - agent fee - 300000 v2 - v2 markup - legacy fee), got %d -- legacy tool billing was not identical to the no-v2-attached case", wantBalance, balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var sawLegacyFee, sawV2Cost bool
+	var sawLegacyFee, sawV2Cost, sawV2Markup bool
 	for _, e := range entries {
 		if e.NodeID == "x2" && e.Kind == models.DebitKindX402PlatformFee && e.AmountUSDMicros == models.X402PlatformFeeUSDMicros {
 			sawLegacyFee = true
@@ -2313,12 +2370,18 @@ func TestLegacyToolAttachedAlongsideRunFundedV2ToolBillsIdenticallyToStandalone(
 		if e.NodeID == "x1" && e.Kind == models.DebitKindX402RelayCost && e.AmountUSDMicros == 300000 {
 			sawV2Cost = true
 		}
+		if e.NodeID == "x1" && e.Kind == models.DebitKindX402PlatformFee && e.AmountUSDMicros == models.X402PlatformFeeUSDMicros {
+			sawV2Markup = true
+		}
 	}
 	if !sawLegacyFee {
 		t.Fatalf("want a debit_ledger row for the legacy tool (x2) billed at the flat platform fee, got %+v", entries)
 	}
 	if !sawV2Cost {
 		t.Fatalf("want a debit_ledger row for the v2 tool (x1) billed at its real settled amount, got %+v", entries)
+	}
+	if !sawV2Markup {
+		t.Fatalf("want a debit_ledger row for the v2 tool (x1) billed at the platform markup too, got %+v", entries)
 	}
 
 	fundings, err := store.ListX402RunFundingsByRun(ctx, run.ID)

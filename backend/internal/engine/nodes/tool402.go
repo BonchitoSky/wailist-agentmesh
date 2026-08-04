@@ -200,6 +200,20 @@ type X402RelayConfig struct {
 	// legacy-dialect branch below must never read this field directly; see
 	// LegacyLedger.
 	Ledger RunLedger
+	// MarkupLedger is the platform-flat-markup counterpart to Ledger, read
+	// only by executeTool402RunLevel. Kept as a SEPARATE pool rather than
+	// folded into Ledger's own budget: reserveAndFundRun sizes Ledger to
+	// `estimate` (the exact amount actually moved on-chain Wallet 1 ->
+	// Wallet 2 for this run) and MarkupLedger to `markupTotal` (pure
+	// credits-side margin, no on-chain leg). If markup were added into
+	// Ledger's own pool instead, a single call's real vendor amount could
+	// exceed `estimate` by borrowing unused markup headroom left over from
+	// other funded-but-never-called tools, letting Wallet 2 pay out real
+	// USDC this run never actually funded on-chain. Unused for the
+	// per-call relay path (executeTool402V2Relay), which reserves its own
+	// amount+markup total from one DB-backed ledger per call — there's no
+	// upfront padded pool to protect against in that path.
+	MarkupLedger RunLedger
 	// LegacyLedger is the original per-call, DB-backed ledger (always
 	// r.newPaymentLedger(wf, run), never the run-level in-memory pool) —
 	// what the legacy flat-quote dialect's direct-pay branch reserves/
@@ -272,9 +286,22 @@ func (cfg X402RelayConfig) toolIsRunFunded(toolID string) bool {
 // was configured, or a reservation was taken but released because the
 // payment never actually settled).
 type Tool402PaymentResult struct {
-	Response         any
+	Response any
+	// SettledUSDMicros is the real vendor/on-chain component only -- for a
+	// v2 call this is strictly less than the total actually debited from
+	// the user's credits, since PlatformFeeUSDMicros below is committed as
+	// a second, separate debit_ledger row on top of it. Kept vendor-cost-
+	// only (not the sum) so this field's meaning matches its DebitKind tag
+	// and existing callers reading it for on-chain/audit purposes aren't
+	// silently handed a blended number.
 	SettledUSDMicros int64
 	DebitKind        string
+	// PlatformFeeUSDMicros is the flat markup committed alongside
+	// SettledUSDMicros for a v2 call (models.X402PlatformFeeUSDMicros,
+	// DebitKind models.DebitKindX402PlatformFee) -- zero for the legacy
+	// dialect, whose SettledUSDMicros already IS the flat markup with no
+	// separate vendor-cost component to add it to.
+	PlatformFeeUSDMicros int64
 }
 
 // ChallengeAcceptsFromHeader extracts a v2 challenge's accepts[] from a
@@ -449,7 +476,13 @@ func ParseMaxAmountRequiredAsMicros(v any) (int64, bool) {
 	switch t := v.(type) {
 	case string:
 		n, err := strconv.ParseInt(t, 10, 64)
-		if err != nil || n < 0 {
+		// Same 1e15-micros ($1B/call) ceiling as the float64 branch below --
+		// without it a target quoting a huge numeric string (e.g. close to
+		// MaxInt64) parses "successfully" and downstream callers that add
+		// models.X402PlatformFeeUSDMicros to this value (executeTool402RunLevel,
+		// reserveAndFundRun's markup sizing) can overflow int64 into a negative
+		// amount, which store.ReserveCredits then reads as a credit INCREASE.
+		if err != nil || n < 0 || n > 1e15 {
 			return 0, false
 		}
 		return n, true
@@ -719,12 +752,18 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: unexpected asset id %d, want %d", assetID, expectedAssetID)
 	}
 	amount, err := strconv.ParseUint(amountStr, 10, 64)
-	if err != nil || amount == 0 || amount > math.MaxInt64 {
+	if err != nil || amount == 0 || amount > uint64(models.MaxSingleX402QuoteUSDMicros) {
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: invalid settlement amount %q", amountStr)
 	}
 
 	// USDC's 6 decimals match credit_balance_usd_micros' scale exactly —
 	// the relay's asset base-unit amount converts to USD micros 1:1.
+	//
+	// total is amount (the real vendor cost, what actually leaves Wallet 2)
+	// plus the platform's flat markup -- see executeTool402RunLevel's
+	// identical total/amount split for the run-funded path; both real x402
+	// dispatch paths bill the same way.
+	total := int64(amount) + models.X402PlatformFeeUSDMicros
 	//
 	// Reserve (atomically decrement) the exact amount now, before signing —
 	// not just check it — so a second call racing this one (another
@@ -733,7 +772,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	// and cause the platform to pay out more than the user can cover in
 	// aggregate.
 	if reserve := ledger.Reserve; reserve != nil {
-		if err := reserve(ctx, int64(amount)); err != nil {
+		if err := reserve(ctx, total); err != nil {
 			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 		}
 	}
@@ -746,14 +785,14 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	defer func() {
 		if !settled {
 			if release := ledger.Release; release != nil {
-				release(ctx, int64(amount))
+				release(ctx, total)
 			}
 		}
 	}()
 	releaseReservation := func() {
 		settled = true
 		if release := ledger.Release; release != nil {
-			release(ctx, int64(amount))
+			release(ctx, total)
 		}
 	}
 
@@ -806,9 +845,11 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	if payResp.Header.Get("X-Inbound-Settled") == "true" {
 		out.SettledUSDMicros = int64(amount)
 		out.DebitKind = models.DebitKindX402RelayCost
+		out.PlatformFeeUSDMicros = models.X402PlatformFeeUSDMicros
 		settled = true
 		if commit := ledger.Commit; commit != nil {
 			commit(ctx, node.ID, int64(amount), models.DebitKindX402RelayCost)
+			commit(ctx, node.ID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
 		}
 		// Surfaces the real, already-settled inbound tx id in the node's own
 		// output (rather than only the DB audit trail) so a run's console log
@@ -892,13 +933,36 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	// time gap exists there (the agent's tool-calling loop runs between
 	// that dispatch and its own pay attempt).
 
+	// Every real x402 call -- v2 or legacy, run-funded or per-call -- bills
+	// the platform's flat markup on top of the real vendor amount, not just
+	// the vendor amount alone. amount and markup are reserved/committed
+	// against two SEPARATE pools here, not summed into one: cfg.Ledger is
+	// sized to `estimate` by reserveAndFundRun -- the exact amount actually
+	// moved on-chain Wallet 1 -> Wallet 2 for this run -- so it correctly
+	// gates the real PayTargetFromWallet2 call below at what this run's
+	// on-chain leg actually funded. cfg.MarkupLedger is a second pool sized
+	// to markupTotal (pure credits bookkeeping, no on-chain leg of its
+	// own). Reserving amount+markup from ONE pool sized estimate+markupTotal
+	// would let a single call's real amount exceed `estimate` by borrowing
+	// unused markup headroom from other funded-but-uncalled tools, causing
+	// Wallet 2 to pay out real USDC this run never backed on-chain.
+	markup := int64(models.X402PlatformFeeUSDMicros)
+
 	// Nil-safe like every other ledger call site in this file, even though
-	// this path is only ever reached with a fully-populated cfg.Ledger
-	// today (only from ExecuteTool402V2 once toolIsRunFunded is true) -- so
-	// a future caller that forgets to wire it up fails loudly instead of
-	// panicking on a nil func call.
+	// this path is only ever reached with fully-populated cfg.Ledger/
+	// cfg.MarkupLedger today (only from ExecuteTool402V2 once
+	// toolIsRunFunded is true) -- so a future caller that forgets to wire
+	// them up fails loudly instead of panicking on a nil func call.
 	if reserve := cfg.Ledger.Reserve; reserve != nil {
 		if err := reserve(ctx, amount); err != nil {
+			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
+		}
+	}
+	if reserve := cfg.MarkupLedger.Reserve; reserve != nil {
+		if err := reserve(ctx, markup); err != nil {
+			if release := cfg.Ledger.Release; release != nil {
+				release(ctx, amount)
+			}
 			return Tool402PaymentResult{}, &ErrBalanceBlocked{Err: err}
 		}
 	}
@@ -919,9 +983,12 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	if payErr != nil && !result.Signed {
 		// Money never moved (asset mismatch, over-cap, or a failure signing
 		// the payment group, all checked/attempted before any real payment
-		// was sent) -- release the reservation, nothing was ever spent.
+		// was sent) -- release both reservations, nothing was ever spent.
 		if release := cfg.Ledger.Release; release != nil {
 			release(ctx, amount)
+		}
+		if release := cfg.MarkupLedger.Release; release != nil {
+			release(ctx, markup)
 		}
 		return Tool402PaymentResult{}, payErr
 	}
@@ -950,8 +1017,17 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 	}
 
+	// Two separate debit_ledger rows for one call, each committed against
+	// the pool it was reserved from above: the real vendor cost (what
+	// Wallet 2 actually paid out, cfg.Ledger) and the platform's flat
+	// markup on top of it (pure margin, no corresponding on-chain leg,
+	// cfg.MarkupLedger). Commit only ever writes the audit row, it never
+	// touches either pool's remaining balance.
 	if commit := cfg.Ledger.Commit; commit != nil {
 		commit(ctx, node.ID, amount, models.DebitKindX402RelayCost)
+	}
+	if commit := cfg.MarkupLedger.Commit; commit != nil {
+		commit(ctx, node.ID, markup, models.DebitKindX402PlatformFee)
 	}
 
 	if payErr != nil {
@@ -980,7 +1056,7 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		if len(snippet) > errSnippetLimit {
 			snippet = snippet[:errSnippetLimit]
 		}
-		return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost},
+		return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost, PlatformFeeUSDMicros: markup},
 			fmt.Errorf("x402 run-level: target rejected the paid request (status %d): %s", result.StatusCode, snippet)
 	}
 
@@ -995,5 +1071,5 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		}
 	}
 
-	return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost}, nil
+	return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost, PlatformFeeUSDMicros: markup}, nil
 }

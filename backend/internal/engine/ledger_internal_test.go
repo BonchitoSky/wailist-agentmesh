@@ -254,8 +254,13 @@ func TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFa
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 2500000 micros: comfortably covers the credit reservation this test
+	// needs to get past (300000 real vendor cost + the platform's flat
+	// markup, models.X402PlatformFeeUSDMicros) so reserveAndFundRun reaches
+	// FundRunReserve/RecordRunFunding -- the actual thing under test -- and
+	// doesn't just fail earlier at ReserveCredits from being underfunded.
 	orderID := fmt.Sprintf("fund_%s_%d", user.ID, time.Now().UnixNano())
-	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
+	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 250, 1.0); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_"+orderID); err != nil {
@@ -300,8 +305,9 @@ func TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFa
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance != 700000 {
-		t.Fatalf("want the 300000 reservation to remain deducted, NOT released (real money already settled on-chain), got balance %d (started at 1000000)", balance)
+	wantBalance := int64(2_500_000 - 300_000 - models.X402PlatformFeeUSDMicros)
+	if balance != wantBalance {
+		t.Fatalf("want the 300000+markup reservation to remain deducted, NOT released (real money already settled on-chain), got balance %d (want %d, started at 2500000)", balance, wantBalance)
 	}
 }
 
@@ -551,8 +557,12 @@ func TestReserveAndFundRunHoldsReservationOnIndeterminateSettle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 2500000 micros: comfortably covers the credit reservation this test
+	// needs to get past (300000 real vendor cost + the platform's flat
+	// markup) so reserveAndFundRun reaches FundRunReserve -- see the
+	// identical comment in TestReserveAndFundRunFailsRatherThan... above.
 	orderID := fmt.Sprintf("fund_%s_%d", user.ID, time.Now().UnixNano())
-	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 100, 1.0); err != nil {
+	if _, err := store.CreateCreditTransaction(context.Background(), user.ID, orderID, 250, 1.0); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.CompleteCreditTransaction(context.Background(), "cashfree", orderID, "pay_"+orderID); err != nil {
@@ -593,8 +603,9 @@ func TestReserveAndFundRunHoldsReservationOnIndeterminateSettle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance != 700000 {
-		t.Fatalf("want the 300000 reservation to remain deducted, NOT released (settlement's fate is unknown, not confirmed failed), got balance %d (started at 1000000)", balance)
+	wantBalance := int64(2_500_000 - 300_000 - models.X402PlatformFeeUSDMicros)
+	if balance != wantBalance {
+		t.Fatalf("want the 300000+markup reservation to remain deducted, NOT released (settlement's fate is unknown, not confirmed failed), got balance %d (want %d, started at 2500000)", balance, wantBalance)
 	}
 }
 
