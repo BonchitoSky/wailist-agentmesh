@@ -98,6 +98,10 @@ func ExecuteTendril(ctx context.Context, node models.WorkflowNode, rc RunContext
 		return executeTendrilRent(ctx, node, cfg)
 	case "topup":
 		return executeTendrilTopup(ctx, node, cfg)
+	case "run":
+		return executeTendrilRun(ctx, node, rc, cfg)
+	case "release":
+		return executeTendrilRelease(ctx, node, cfg)
 	default:
 		return nil, fmt.Errorf("tendril: unknown action %q", node.TendrilAction)
 	}
@@ -399,3 +403,114 @@ func (emptyRunContext) UserInput() string           { return "" }
 func (emptyRunContext) ToolOutputs() map[string]any { return nil }
 func (emptyRunContext) Set(string, any)             {}
 func (emptyRunContext) Get(string) (any, bool)      { return nil, false }
+
+// ReleaseLease stops the meter and records what Tendril actually charged.
+// Shared by the release node, the REST endpoint, and the reaper so all three
+// bill identically.
+func ReleaseLease(ctx context.Context, cfg TendrilConfig, lease models.TendrilLease) (tendril.ReleaseResult, error) {
+	token, err := wallet.Decrypt(lease.LeaseTokenEnc, cfg.EncryptKey)
+	if err != nil {
+		return tendril.ReleaseResult{}, fmt.Errorf("tendril: decrypt lease token: %w", err)
+	}
+	res, err := cfg.Client.Release(ctx, lease.LeaseID, token)
+	if err != nil {
+		// Tendril's own watchdog reaps abandoned leases, so a lease it no
+		// longer knows about is already stopped and already billed. Treating
+		// that as a failure would leave our row 'active' forever and have the
+		// reaper retry it on every tick.
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+			if merr := cfg.Store.MarkTendrilLeaseReleased(ctx, lease.ID, 0, 0); merr != nil {
+				return tendril.ReleaseResult{}, merr
+			}
+			return tendril.ReleaseResult{}, nil
+		}
+		return tendril.ReleaseResult{}, fmt.Errorf("tendril: release: %w", err)
+	}
+	if err := cfg.Store.MarkTendrilLeaseReleased(ctx, lease.ID, res.UsedSeconds, res.ChargedAtomic); err != nil {
+		return res, err
+	}
+
+	// Return the unused part of the reservation as Tendril credit — not as
+	// AgentMesh credit. The user bought hours; releasing early means they
+	// still hold those hours, just not on this machine. Refunding to AgentMesh
+	// credits instead would let a user cycle rent/release to convert Tendril
+	// credit back into general platform credit, which the pool cannot honour
+	// (the USDC is already sitting at Tendril).
+	if unused := lease.ReservedUSDMicros - res.ChargedAtomic; unused > 0 {
+		if err := cfg.Store.ChargeTendrilCredit(ctx, lease.UserID, lease.ID, "refund", unused); err != nil {
+			// The lease is already closed and billed; a failed refund is a
+			// reconciliation problem, not a reason to report the release as
+			// failed and have the reaper retry a DELETE that already ran.
+			log.Printf("tendril: lease %s released but refunding %d micros to user %s failed: %v",
+				lease.LeaseID, unused, lease.UserID, err)
+		}
+	}
+	return res, nil
+}
+
+func executeTendrilRelease(ctx context.Context, node models.WorkflowNode, cfg TendrilConfig) (any, error) {
+	lease, err := resolveLease(ctx, node, cfg)
+	if err != nil {
+		return nil, err
+	}
+	res, err := ReleaseLease(ctx, cfg, lease)
+	if err != nil {
+		return nil, err
+	}
+	remaining, _ := cfg.Store.TendrilCreditBalance(ctx, lease.UserID)
+	return map[string]any{
+		"agentMeshLeaseId": lease.ID,
+		"leaseId":          lease.LeaseID,
+		"usedSeconds":      res.UsedSeconds,
+		"charged":          formatUSDCAmount(res.ChargedAtomic),
+		"refunded":         formatUSDCAmount(max64(0, lease.ReservedUSDMicros-res.ChargedAtomic)),
+		// Deliberately NOT res.Balance: that is the shared pool, which is
+		// every user's money and must never be shown to one of them.
+		"tendrilCreditBalance": formatUSDCAmount(remaining),
+	}, nil
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// resolveLease finds which lease a run/release node acts on. A node may name
+// one explicitly via TendrilNodeID; otherwise it takes the lease this run
+// opened, which is what the trigger -> rent -> run -> release workflow wants.
+func resolveLease(ctx context.Context, node models.WorkflowNode, cfg TendrilConfig) (models.TendrilLease, error) {
+	if node.TendrilNodeID != "" {
+		return cfg.Store.GetTendrilLease(ctx, node.TendrilNodeID)
+	}
+	lease, err := cfg.Store.LatestActiveLeaseForRun(ctx, cfg.RunID)
+	if err != nil {
+		return models.TendrilLease{}, fmt.Errorf("tendril: no lease to act on — put a Rent node before this one: %w", err)
+	}
+	return lease, nil
+}
+
+func executeTendrilRun(ctx context.Context, node models.WorkflowNode, rc RunContexter, cfg TendrilConfig) (any, error) {
+	payload := strings.TrimSpace(rc.Message())
+	for _, p := range node.CustomParams {
+		if p.Name == "payload" && strings.TrimSpace(p.Value) != "" {
+			payload = p.Value
+		}
+	}
+	if payload == "" {
+		return nil, fmt.Errorf("tendril: run needs a payload — set one on the node or pass it as the run's input")
+	}
+
+	// A lease is optional: with one, the job runs inside the machine the user
+	// is already paying for; without one, Tendril picks an idle machine and
+	// bills the seconds. Both are the same paid endpoint.
+	body, _ := json.Marshal(map[string]string{"payload": payload})
+	var leaseToken string
+	if lease, err := resolveLease(ctx, node, cfg); err == nil && lease.LeaseTokenEnc != "" {
+		if tok, derr := wallet.Decrypt(lease.LeaseTokenEnc, cfg.EncryptKey); derr == nil {
+			leaseToken = tok
+		}
+	}
+	return payTendril(ctx, cfg, "/x402/run", body, leaseToken)
+}

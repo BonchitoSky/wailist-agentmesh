@@ -1033,7 +1033,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 			}
 			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired, method, payBody)
 		}
-		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.Ledger), method, payBody, paramContentType)
+		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.Ledger), method, payBody, paramContentType, node.TendrilLeaseToken)
 	}
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing,
@@ -1107,7 +1107,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 // far more (net/http's default MaxHeaderBytes is 1MB). Same base64-in-
 // header pattern this file/x402relay.go already use for X-Payment and
 // Payment-Required.
-func setRelayTargetHeaders(req *http.Request, method string, body []byte, contentType string) {
+func setRelayTargetHeaders(req *http.Request, method string, body []byte, contentType, targetAuth string) {
 	if method != "" && method != http.MethodGet {
 		req.Header.Set("X-Relay-Method", method)
 	}
@@ -1122,6 +1122,12 @@ func setRelayTargetHeaders(req *http.Request, method string, body []byte, conten
 	// exists in this header.
 	if contentType != "" {
 		req.Header.Set("X-Relay-Content-Type", contentType)
+	}
+	// A bearer the TARGET requires (Tendril's lease token). Named X-Relay-Auth
+	// rather than Authorization so it can never be confused with auth for the
+	// relay itself, which is a different trust boundary entirely.
+	if targetAuth != "" {
+		req.Header.Set("X-Relay-Auth", targetAuth)
 	}
 }
 
@@ -1151,13 +1157,13 @@ const relayHeaderBodyLimit = 8 << 10
 // The relay route accepts any method (router.go registers it with Handle,
 // not Get), and neither side treats the method used to reach the relay as
 // the method for the target -- that has always been X-Relay-Method's job.
-func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetBody []byte, targetContentType string) (*http.Request, error) {
+func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetBody []byte, targetContentType, targetAuth string) (*http.Request, error) {
 	if len(targetBody) == 0 {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, relayURL, nil)
 		if err != nil {
 			return nil, err
 		}
-		setRelayTargetHeaders(req, targetMethod, nil, targetContentType)
+		setRelayTargetHeaders(req, targetMethod, nil, targetContentType, targetAuth)
 		return req, nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, relayURL, bytes.NewReader(targetBody))
@@ -1168,7 +1174,7 @@ func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetB
 	// not something the relay should parse. The encoding the TARGET needs
 	// travels separately in X-Relay-Content-Type.
 	req.Header.Set("Content-Type", "application/octet-stream")
-	setRelayTargetHeaders(req, targetMethod, targetBody, targetContentType)
+	setRelayTargetHeaders(req, targetMethod, targetBody, targetContentType, targetAuth)
 	return req, nil
 }
 
@@ -1178,14 +1184,14 @@ func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetB
 // target on the relay's own end, same "method/body only matter for the
 // downstream target, never for talking to the relay" split PayTargetFromWallet2
 // and probeTool402Endpoint already follow).
-func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger, targetMethod string, targetBody []byte, targetContentType string) (Tool402PaymentResult, error) {
+func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger, targetMethod string, targetBody []byte, targetContentType, targetAuth string) (Tool402PaymentResult, error) {
 	if platformSpendEncMnemonic == "" || usdcSigner == nil {
 		return Tool402PaymentResult{Response: map[string]any{"error": "payment required but no platform spend wallet configured"}}, nil
 	}
 
 	relayURL := relayBaseURL + "/x402/relay?target=" + url.QueryEscape(node.Endpoint)
 
-	quoteReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType)
+	quoteReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType, targetAuth)
 	if err != nil {
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: building the quote request failed: %w", err)
 	}
@@ -1293,7 +1299,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 	}
 	xPayment, _ := json.Marshal(xPaymentFields)
 
-	payReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType)
+	payReq, err := newRelayRequest(ctx, relayURL, targetMethod, targetBody, targetContentType, targetAuth)
 	if err != nil {
 		releaseReservation()
 		return Tool402PaymentResult{}, fmt.Errorf("x402 relay: building the payment request failed: %w", err)
