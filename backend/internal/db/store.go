@@ -950,3 +950,90 @@ func (s *Store) ListX402RelaySettlementsByRunFunding(ctx context.Context, runFun
 	}
 	return out, rows.Err()
 }
+
+const tendrilLeaseCols = `id, user_id, workflow_id, run_id, node_id, lease_id,
+	lease_token_enc, tendril_node_id, tendril_node_label, ssh_host, ssh_port,
+	ssh_username, ssh_command, ssh_public_key, ssh_private_key_enc,
+	ssh_password_enc, rate_usd_micros_per_hour, hours_purchased,
+	reserved_usd_micros, charged_usd_micros, used_seconds, status, started_at,
+	funded_until, released_at`
+
+func scanTendrilLease(row pgx.Row) (models.TendrilLease, error) {
+	var l models.TendrilLease
+	err := row.Scan(&l.ID, &l.UserID, &l.WorkflowID, &l.RunID, &l.NodeID, &l.LeaseID,
+		&l.LeaseTokenEnc, &l.TendrilNodeID, &l.TendrilNodeLabel, &l.SSHHost, &l.SSHPort,
+		&l.SSHUsername, &l.SSHCommand, &l.SSHPublicKey, &l.SSHPrivateKeyEnc,
+		&l.SSHPasswordEnc, &l.RateUSDMicrosPerHour, &l.HoursPurchased,
+		&l.ReservedUSDMicros, &l.ChargedUSDMicros, &l.UsedSeconds, &l.Status,
+		&l.StartedAt, &l.FundedUntil, &l.ReleasedAt)
+	return l, err
+}
+
+func (s *Store) InsertTendrilLease(ctx context.Context, l models.TendrilLease) (models.TendrilLease, error) {
+	return scanTendrilLease(s.pool.QueryRow(ctx, `
+		INSERT INTO tendril_leases (user_id, workflow_id, run_id, node_id, lease_id,
+			lease_token_enc, tendril_node_id, tendril_node_label, ssh_host, ssh_port,
+			ssh_username, ssh_command, ssh_public_key, ssh_private_key_enc,
+			ssh_password_enc, rate_usd_micros_per_hour, hours_purchased,
+			reserved_usd_micros, funded_until)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		RETURNING `+tendrilLeaseCols,
+		l.UserID, l.WorkflowID, l.RunID, l.NodeID, l.LeaseID, l.LeaseTokenEnc,
+		l.TendrilNodeID, l.TendrilNodeLabel, l.SSHHost, l.SSHPort, l.SSHUsername,
+		l.SSHCommand, l.SSHPublicKey, l.SSHPrivateKeyEnc, l.SSHPasswordEnc,
+		l.RateUSDMicrosPerHour, l.HoursPurchased, l.ReservedUSDMicros, l.FundedUntil))
+}
+
+func (s *Store) GetTendrilLease(ctx context.Context, id string) (models.TendrilLease, error) {
+	return scanTendrilLease(s.pool.QueryRow(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases WHERE id = $1`, id))
+}
+
+func (s *Store) ListActiveTendrilLeases(ctx context.Context, userID string) ([]models.TendrilLease, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE user_id = $1 AND status = 'active' ORDER BY started_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TendrilLease
+	for rows.Next() {
+		l, err := scanTendrilLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// ListExpiredTendrilLeases feeds the reaper. An active lease past its funded
+// window is a meter still running against the shared pool with nobody watching.
+func (s *Store) ListExpiredTendrilLeases(ctx context.Context, now time.Time) ([]models.TendrilLease, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE status = 'active' AND funded_until <= $1 ORDER BY funded_until`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TendrilLease
+	for rows.Next() {
+		l, err := scanTendrilLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MarkTendrilLeaseReleased(ctx context.Context, id string, usedSeconds, chargedUSDMicros int64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tendril_leases
+		   SET status = 'released', released_at = NOW(),
+		       used_seconds = $2, charged_usd_micros = $3
+		 WHERE id = $1 AND status = 'active'`, id, usedSeconds, chargedUSDMicros)
+	return err
+}

@@ -280,7 +280,43 @@ const (
 	DebitKindX402PlatformFee   = "x402_platform_fee"
 	DebitKindX402RelayCost     = "x402_relay_cost"
 	DebitKindPlatformKeyLLMFee = "platform_key_llm_fee"
+	DebitKindTendrilLease      = "tendril_lease"
 )
+
+// TendrilLease is one rented Tendril machine. A lease deliberately outlives
+// the run that opened it: a workflow run finishes in seconds while the machine
+// meters for hours, so this is a first-class AgentMesh resource with its own
+// release lifecycle rather than run-scoped state.
+type TendrilLease struct {
+	ID         string `json:"id"`
+	UserID     string `json:"userId"`
+	WorkflowID string `json:"workflowId"`
+	RunID      string `json:"runId"`
+	NodeID     string `json:"nodeId"`
+
+	LeaseID          string `json:"leaseId"`
+	LeaseTokenEnc    string `json:"-"`
+	TendrilNodeID    string `json:"tendrilNodeId"`
+	TendrilNodeLabel string `json:"tendrilNodeLabel"`
+
+	SSHHost          string `json:"sshHost"`
+	SSHPort          int    `json:"sshPort"`
+	SSHUsername      string `json:"sshUsername"`
+	SSHCommand       string `json:"sshCommand"`
+	SSHPublicKey     string `json:"sshPublicKey"`
+	SSHPrivateKeyEnc string `json:"-"`
+	SSHPasswordEnc   string `json:"-"`
+
+	RateUSDMicrosPerHour int64      `json:"rateUsdMicrosPerHour"`
+	HoursPurchased       float64    `json:"hoursPurchased"`
+	ReservedUSDMicros    int64      `json:"reservedUsdMicros"`
+	ChargedUSDMicros     *int64     `json:"chargedUsdMicros,omitempty"`
+	UsedSeconds          *int64     `json:"usedSeconds,omitempty"`
+	Status               string     `json:"status"`
+	StartedAt            time.Time  `json:"startedAt"`
+	FundedUntil          time.Time  `json:"fundedUntil"`
+	ReleasedAt           *time.Time `json:"releasedAt,omitempty"`
+}
 
 const (
 	ByokFlatFeeUSDMicros     int64 = 10_000  // $0.01
