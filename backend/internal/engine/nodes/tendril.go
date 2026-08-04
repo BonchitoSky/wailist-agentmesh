@@ -460,6 +460,15 @@ func executeTendrilRelease(ctx context.Context, node models.WorkflowNode, cfg Te
 	if err != nil {
 		return nil, err
 	}
+	// Same guard as the REST /leases/:id/release handler and for the same
+	// reason: an already-released lease falls into ReleaseLease's 404
+	// fallback (a zero-valued result, no error), which would otherwise
+	// report the full reservation as "refunded" a second time — a phantom
+	// refund for money that was already accounted for (or, if Tendril's own
+	// watchdog closed the lease independently, never refunded at all).
+	if lease.Status != "active" {
+		return nil, fmt.Errorf("tendril: lease %s is already released", lease.LeaseID)
+	}
 	res, err := ReleaseLease(ctx, cfg, lease)
 	if err != nil {
 		return nil, err

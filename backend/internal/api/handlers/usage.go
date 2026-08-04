@@ -91,6 +91,18 @@ func (d *Deps) tendrilUsageWindow(ctx context.Context, userID string, since time
 			}
 		}
 	}
+	// A refund can legitimately land inside the window while its paired
+	// charge (written at rent time, potentially hours earlier) falls
+	// outside it — an early release right after a window boundary is
+	// ordinary usage, not an edge case. Unclamped, that goes negative and
+	// corrupts three call sites: UsageSummary's totalAlgo (renders as
+	// negative dollars) and deltaPct, and UsageByEndpoint's shared
+	// denominator (inflating every other row's pctOfSpend, sometimes past
+	// 100%). Same clamp the release handler already applies to `refunded`
+	// in leases.go.
+	if out.NetSpentUSDMicros < 0 {
+		out.NetSpentUSDMicros = 0
+	}
 	return out, nil
 }
 
@@ -304,8 +316,11 @@ func (d *Deps) UsageSettlements(w http.ResponseWriter, r *http.Request) {
 	limit := 20
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		v, err := strconv.Atoi(raw)
-		if err != nil {
-			respond.Error(w, http.StatusBadRequest, "limit must be a number")
+		// A negative value passes Atoi (it's a valid number) but panics
+		// make([]T, 0, v) below with "makeslice: cap out of range" — caught
+		// by chi.Recoverer as a 500 instead of the 400 this guard intends.
+		if err != nil || v < 1 {
+			respond.Error(w, http.StatusBadRequest, "limit must be a positive number")
 			return
 		}
 		limit = v

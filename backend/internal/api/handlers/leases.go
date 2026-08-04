@@ -42,6 +42,18 @@ func (d *Deps) ReleaseLease(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusServiceUnavailable, "tendril is not configured on this server")
 		return
 	}
+	// Without this, a lease already released (double-click, the reaper
+	// beating this request, or Tendril's own watchdog closing it
+	// independently of our row) falls into nodes.ReleaseLease's 404
+	// fallback, which returns a zero-valued ReleaseResult with no error —
+	// so charged/refunded below would compute a phantom "refunded $X.XX"
+	// for a release that already happened (and was already correctly
+	// refunded) or, worse, never got refunded at all if Tendril's watchdog
+	// closed it independently. Confirmed via ultrareview 2026-08-05.
+	if lease.Status != "active" {
+		respond.Error(w, http.StatusConflict, "lease already released")
+		return
+	}
 	res, err := nodes.ReleaseLease(r.Context(), nodes.TendrilConfig{
 		Client: d.TendrilClient, Store: d.Store, EncryptKey: d.EncryptionKey,
 	}, lease)
