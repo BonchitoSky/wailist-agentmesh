@@ -1037,3 +1037,12 @@ func (s *Store) MarkTendrilLeaseReleased(ctx context.Context, id string, usedSec
 		 WHERE id = $1 AND status = 'active'`, id, usedSeconds, chargedUSDMicros)
 	return err
 }
+
+// LatestActiveLeaseForRun is how a run/release node finds the lease its own
+// run opened, without the canvas having to thread an id between nodes.
+func (s *Store) LatestActiveLeaseForRun(ctx context.Context, runID string) (models.TendrilLease, error) {
+	return scanTendrilLease(s.pool.QueryRow(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE run_id = $1 AND status = 'active'
+		 ORDER BY started_at DESC LIMIT 1`, runID))
+}

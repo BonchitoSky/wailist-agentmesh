@@ -73,6 +73,8 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
+func (c *Client) BaseURL() string { return c.baseURL }
+
 func (c *Client) do(ctx context.Context, method, path, bearer string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
 	if err != nil {

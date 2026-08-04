@@ -115,7 +115,7 @@ type WorkflowNode struct {
 	// referenced from here rather than uploaded separately, since the whole
 	// point of this mode is bodies where a file is one field among others.
 	BodyTemplate string `json:"bodyTemplate,omitempty"`
-	Description  string        `json:"description,omitempty"`
+	Description  string `json:"description,omitempty"`
 	// Secrets holds per-connector credential values for connectors added after the
 	// original dedicated fields (APIKey, EmailAPIKey, ...). Each value is encrypted
 	// independently, exactly like EmailAPIKey, via encryptNodes/maskNodes/decryptNodes.
@@ -123,6 +123,20 @@ type WorkflowNode struct {
 	// Config holds per-connector non-secret settings (list IDs, project keys, channel
 	// names, etc.) for the same connectors. Never encrypted.
 	Config map[string]string `json:"config,omitempty"`
+	// Tendril node fields. TendrilAction is "topup" | "rent" | "run" | "release";
+	// TendrilHours is how many hours of credit to guarantee before renting,
+	// as a decimal string ("1", "2", "0.5") — a string, like every other
+	// canvas-entered value on this struct.
+	TendrilAction string `json:"tendrilAction,omitempty"`
+	TendrilNodeID string `json:"tendrilNodeId,omitempty"`
+	TendrilHours  string `json:"tendrilHours,omitempty"`
+	// TendrilAmount is USD of AgentMesh credit to convert into Tendril
+	// credit, on a topup node.
+	TendrilAmount string `json:"tendrilAmount,omitempty"`
+	// TendrilLeaseToken is a bearer the TARGET needs, carried to the relay
+	// out of band. Never persisted on a saved workflow — it is only ever set
+	// on the synthesized nodes payTendril builds at call time.
+	TendrilLeaseToken string `json:"-"`
 }
 
 type WorkflowEdge struct {
@@ -317,6 +331,25 @@ type TendrilLease struct {
 	FundedUntil          time.Time  `json:"fundedUntil"`
 	ReleasedAt           *time.Time `json:"releasedAt,omitempty"`
 }
+
+// TendrilCreditEntry is one row of the append-only tendril_credit_ledger
+// table — a movement of a single user's Tendril credit sub-ledger, distinct
+// from and never checked against the shared Wallet 2 pool balance.
+type TendrilCreditEntry struct {
+	ID              string    `json:"id"`
+	UserID          string    `json:"userId"`
+	Kind            string    `json:"kind"`
+	AmountUSDMicros int64     `json:"amountUsdMicros"`
+	LeaseID         *string   `json:"leaseId,omitempty"`
+	TxID            *string   `json:"txId,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
+const (
+	TendrilCreditKindTopup  = "topup"  // AgentMesh credits -> Tendril credits
+	TendrilCreditKindCharge = "charge" // Tendril credits -> compute
+	TendrilCreditKindRefund = "refund" // unused reservation returned
+)
 
 const (
 	ByokFlatFeeUSDMicros     int64 = 10_000  // $0.01

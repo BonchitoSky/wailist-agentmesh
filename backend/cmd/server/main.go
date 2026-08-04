@@ -82,7 +82,10 @@ func main() {
 		nowPaymentsClient.UseSandbox()
 	}
 
-	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000) // $5.00 default
+	// $20.00 default, up from $5.00: Tendril's cheapest online machine is
+	// $6.00/hour and a 2-hour rent tops the shared pool up by $12.00 in one
+	// call, which the old ceiling rejected outright.
+	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 20_000_000)
 
 	// Which /x402/relay a per-call paid tool402 request is routed through.
 	// Defaults to BASE_URL, since in a real deployment the same instance
