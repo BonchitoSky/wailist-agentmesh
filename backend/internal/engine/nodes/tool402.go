@@ -238,6 +238,18 @@ type X402RelayConfig struct {
 	// be the real settled amount — RecordRunFundedSettlement takes it at
 	// INSERT time since there is no later call that backfills it.
 	RecordSettlement func(ctx context.Context, target string, amountUSDMicros int64, settled bool) error
+	// FlatFeeLedger reserves/commits/releases credits for an agent-attached
+	// billable flat-fee node (BillableFlatFee -- an attached "http" Tool or
+	// any Action/connector node), atomically per call, exactly like
+	// LegacyLedger does for the legacy x402 dialect. Deliberately NOT a
+	// batched-at-turn-end debit: checking balance without reserving and only
+	// debiting once the whole agent turn ends would let every iteration of
+	// the tool-calling loop check the same stale balance and collectively
+	// overspend past what the user can cover (identical hazard to the one
+	// newPaymentLedger's doc comment describes for x402 payments -- see
+	// runner.go). A nil Reserve/Commit/Release is a no-op, matching the
+	// pre-existing nil-checker convention elsewhere in this package.
+	FlatFeeLedger CallLedger
 }
 
 // toolIsRunFunded reports whether toolID's real cost is already covered by

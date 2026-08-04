@@ -627,6 +627,15 @@ func (r *Runner) executeNode(
 				MaxRelayOutboundUSDMicros: r.x402.MaxRelayOutboundUSDMicros,
 			},
 			RecordSettlement: r.newRecordSettlement(wf, run, rf.FundingID),
+			// FlatFeeLedger reserves/commits/releases each attached billable
+			// flat-fee call (http Tool or Action/connector node) atomically,
+			// the moment it happens inside ExecuteAgent's tool-calling loop —
+			// same DB-backed, per-call ledger as LegacyLedger above, reused
+			// here since both need the identical atomic-decrement semantics.
+			// NOT batched until the turn ends: see FlatFeeLedger's doc
+			// comment for why that would let every loop iteration check the
+			// same stale balance and collectively overspend.
+			FlatFeeLedger: nodes.CallLedger(r.newPaymentLedger(wf, run)),
 		}
 		result, err := nodes.ExecuteAgent(ctx, node, attach, aw, r.walletSvc, rc, checkBalance, r.platformKeys, relayCfg)
 		if err != nil {
@@ -650,21 +659,6 @@ func (r *Runner) executeNode(
 			}
 		}
 		r.debitAgentFee(ctx, wf, run, node.ID, agentFeeUSDMicros, platformMode, resolvedModel, tokensIn, tokensOut)
-		if m, ok := result.(map[string]any); ok {
-			// x402Payments entries are already reserved+committed via
-			// relayCfg.Ledger from inside ExecuteAgent's tool-calling loop, at
-			// the moment each payment settled — not batched here. Batching the
-			// debit until after the whole agent turn completes would let every
-			// iteration of the loop check the same stale balance and
-			// collectively overspend past what the user can cover; see
-			// newPaymentLedger. This entry is retained in the result only so
-			// Run() can still publish a log/SSE event per payment below.
-			if nodeIDs, ok := m["billedFlatFeeNodeIds"].([]string); ok {
-				for _, nodeID := range nodeIDs {
-					r.debitOrLog(ctx, wf, run, nodeID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
-				}
-			}
-		}
 		return result, nil
 	case models.NodeTypeProvider:
 		return rc.Message(), nil

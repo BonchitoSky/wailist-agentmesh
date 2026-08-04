@@ -203,44 +203,50 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			continue
 		}
 		toolNode := t
-		if checkBalance != nil {
+		// billableFlatFee nodes (an attached "http" Tool, or any Action/
+		// connector node) are billed via an atomic per-call Reserve/Commit/
+		// Release below, NOT the read-only checkBalance floor guard tool402
+		// nodes use -- see X402RelayConfig.FlatFeeLedger's doc comment for
+		// why: checkBalance alone would let every iteration of the agent's
+		// tool-calling loop pass against the same stale, undecremented
+		// balance and collectively overspend.
+		billableFlatFee := toolNode.Type != models.NodeTypeTool402 && BillableFlatFee(toolNode.Type, toolNode.Template)
+		if checkBalance != nil && toolNode.Type == models.NodeTypeTool402 {
 			// Cheap, conservative guard before any network call to the tool's
 			// endpoint: reject outright if the balance can't even cover the
-			// worst-case flat-fee floor, so an unfunded caller can't drive
-			// unbounded outbound HTTP requests (SSRF/DoS-amplification risk)
-			// merely by attaching tool nodes it can never pay for. The real,
-			// exact-amount gate for tool402 relay-dialect payments still runs
+			// worst-case floor, so an unfunded caller can't drive unbounded
+			// outbound HTTP requests (SSRF/DoS-amplification risk) merely by
+			// attaching tool nodes it can never pay for. The real, exact-
+			// amount gate for tool402 relay-dialect payments still runs
 			// separately inside ExecuteTool402V2 once the true cost is known
 			// (which can be less than this floor) — this is a floor, not the
 			// final word.
-			var feeAmount int64
-			switch {
-			case toolNode.Type == models.NodeTypeTool402:
-				// The run-level path (toolIsRunFunded true for THIS tool)
-				// already reserved this run's full estimated tool402 cost
-				// from the live DB balance up front, in reserveAndFundRun's
-				// ReserveCredits call, before the agent's loop ever started
-				// -- and gates each attached call's real amount against the
-				// run-level in-memory pool inside executeTool402RunLevel via
-				// cfg.Ledger.Reserve. Re-checking the live DB balance here
-				// would double-count that up-front reservation. A tool NOT
-				// covered by the up-front estimate (its probe failed during
-				// reserveAndFundRun, or it's a legacy-dialect tool attached
-				// to the same run-funded agent) still needs this floor
-				// check exactly as before -- it bills against the live DB
-				// balance via the per-call path (relayCfg.Ledger or
-				// relayCfg.LegacyLedger, depending on dialect) inside
-				// ExecuteTool402V2, so skipping this check for it would let
-				// an unfunded caller drive unbounded outbound requests
-				// through it.
-				if !relayCfg.toolIsRunFunded(toolNode.ID) {
-					feeAmount = models.X402ProbeFloorUSDMicros
+			//
+			// The run-level path (toolIsRunFunded true for THIS tool)
+			// already reserved this run's full estimated tool402 cost from
+			// the live DB balance up front, in reserveAndFundRun's
+			// ReserveCredits call, before the agent's loop ever started --
+			// and gates each attached call's real amount against the
+			// run-level in-memory pool inside executeTool402RunLevel via
+			// cfg.Ledger.Reserve. Re-checking the live DB balance here would
+			// double-count that up-front reservation. A tool NOT covered by
+			// the up-front estimate (its probe failed during
+			// reserveAndFundRun, or it's a legacy-dialect tool attached to
+			// the same run-funded agent) still needs this floor check
+			// exactly as before -- it bills against the live DB balance via
+			// the per-call path (relayCfg.Ledger or relayCfg.LegacyLedger,
+			// depending on dialect) inside ExecuteTool402V2, so skipping
+			// this check for it would let an unfunded caller drive
+			// unbounded outbound requests through it.
+			if !relayCfg.toolIsRunFunded(toolNode.ID) {
+				if err := checkBalance(ctx, models.X402ProbeFloorUSDMicros); err != nil {
+					return nil, toolNode, nil, &ErrBalanceBlocked{Err: err}
 				}
-			case BillableFlatFee(toolNode.Type, toolNode.Template):
-				feeAmount = models.ByokFlatFeeUSDMicros
 			}
-			if feeAmount > 0 {
-				if err := checkBalance(ctx, feeAmount); err != nil {
+		}
+		if billableFlatFee {
+			if reserve := relayCfg.FlatFeeLedger.Reserve; reserve != nil {
+				if err := reserve(ctx, models.ByokFlatFeeUSDMicros); err != nil {
 					return nil, toolNode, nil, &ErrBalanceBlocked{Err: err}
 				}
 			}
@@ -277,6 +283,15 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			return paymentResult.Response, toolNode, payment, nil
 		}
 		result, err := ExecuteTool(ctx, toolNode, rc)
+		if billableFlatFee {
+			if err != nil {
+				if release := relayCfg.FlatFeeLedger.Release; release != nil {
+					release(ctx, models.ByokFlatFeeUSDMicros)
+				}
+			} else if commit := relayCfg.FlatFeeLedger.Commit; commit != nil {
+				commit(ctx, toolNode.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
+			}
+		}
 		return result, toolNode, nil, err
 	}
 	return nil, models.WorkflowNode{}, nil, fmt.Errorf("tool %q not found in attached tools", funcName)
@@ -380,7 +395,6 @@ func callGemini(ctx context.Context, agent models.WorkflowNode, provider models.
 	}
 
 	var x402Payments []map[string]any
-	var billedFlatFeeNodeIds []string
 	var tokensIn, tokensOut int
 
 	// Agentic loop — keep calling until the model returns text (no function call).
@@ -411,20 +425,10 @@ func callGemini(ctx context.Context, agent models.WorkflowNode, provider models.
 				if len(x402Payments) > 0 {
 					extra["x402Payments"] = x402Payments
 				}
-				if len(billedFlatFeeNodeIds) > 0 {
-					extra["billedFlatFeeNodeIds"] = billedFlatFeeNodeIds
-				}
 				return platformKeyUsageResult(provider, model, tokensIn, tokensOut, extra), nil
 			}
-			if len(x402Payments) > 0 || len(billedFlatFeeNodeIds) > 0 {
-				out := map[string]any{"message": text}
-				if len(x402Payments) > 0 {
-					out["x402Payments"] = x402Payments
-				}
-				if len(billedFlatFeeNodeIds) > 0 {
-					out["billedFlatFeeNodeIds"] = billedFlatFeeNodeIds
-				}
-				return out, nil
+			if len(x402Payments) > 0 {
+				return map[string]any{"message": text, "x402Payments": x402Payments}, nil
 			}
 			return text, nil
 		}
@@ -436,10 +440,13 @@ func callGemini(ctx context.Context, agent models.WorkflowNode, provider models.
 		}
 		contents = append(contents, map[string]any{"role": "model", "parts": modelParts})
 
-		// Execute every requested function call and collect responses
+		// Execute every requested function call and collect responses.
+		// Billable flat-fee nodes are reserved/committed/released atomically,
+		// per call, inside executeFunctionCall itself -- not batched here.
+		// See X402RelayConfig.FlatFeeLedger's doc comment.
 		responseParts := make([]map[string]any, 0, len(calls))
 		for _, c := range calls {
-			result, toolNode, payment, execErr := executeFunctionCall(ctx, c.name, c.args, tools, aw, signer, rc, checkBalance, relayCfg)
+			result, _, payment, execErr := executeFunctionCall(ctx, c.name, c.args, tools, aw, signer, rc, checkBalance, relayCfg)
 			if execErr != nil {
 				var blocked *ErrBalanceBlocked
 				if errors.As(execErr, &blocked) {
@@ -452,9 +459,6 @@ func callGemini(ctx context.Context, agent models.WorkflowNode, provider models.
 			} else {
 				if payment != nil {
 					x402Payments = append(x402Payments, paymentReceipt(payment))
-				}
-				if BillableFlatFee(toolNode.Type, toolNode.Template) {
-					billedFlatFeeNodeIds = append(billedFlatFeeNodeIds, toolNode.ID)
 				}
 				b, _ := json.Marshal(result)
 				resultStr = string(b)
@@ -561,7 +565,6 @@ func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider m
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
 
 	var x402Payments []map[string]any
-	var billedFlatFeeNodeIds []string
 	var tokensIn, tokensOut int
 
 	// Agentic loop — repeat until the model returns content with no tool calls.
@@ -596,20 +599,10 @@ func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider m
 				if len(x402Payments) > 0 {
 					extra["x402Payments"] = x402Payments
 				}
-				if len(billedFlatFeeNodeIds) > 0 {
-					extra["billedFlatFeeNodeIds"] = billedFlatFeeNodeIds
-				}
 				return platformKeyUsageResult(provider, model, tokensIn, tokensOut, extra), nil
 			}
-			if len(x402Payments) > 0 || len(billedFlatFeeNodeIds) > 0 {
-				out := map[string]any{"message": content}
-				if len(x402Payments) > 0 {
-					out["x402Payments"] = x402Payments
-				}
-				if len(billedFlatFeeNodeIds) > 0 {
-					out["billedFlatFeeNodeIds"] = billedFlatFeeNodeIds
-				}
-				return out, nil
+			if len(x402Payments) > 0 {
+				return map[string]any{"message": content, "x402Payments": x402Payments}, nil
 			}
 			return content, nil
 		}
@@ -621,7 +614,10 @@ func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider m
 		}
 		messages = append(messages, assistantMsg)
 
-		// Execute every tool call and append results
+		// Execute every tool call and append results. Billable flat-fee nodes
+		// are reserved/committed/released atomically, per call, inside
+		// executeFunctionCall itself -- not batched here. See
+		// X402RelayConfig.FlatFeeLedger's doc comment.
 		for _, raw := range toolCalls {
 			tc, _ := raw.(map[string]any)
 			tcFunc, _ := tc["function"].(map[string]any)
@@ -632,7 +628,7 @@ func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider m
 			var tcArgs map[string]any
 			json.Unmarshal([]byte(tcArgsStr), &tcArgs)
 
-			toolResult, toolNode, payment, toolErr := executeFunctionCall(ctx, tcName, tcArgs, tools, aw, signer, rc, checkBalance, relayCfg)
+			toolResult, _, payment, toolErr := executeFunctionCall(ctx, tcName, tcArgs, tools, aw, signer, rc, checkBalance, relayCfg)
 			if toolErr != nil {
 				var blocked *ErrBalanceBlocked
 				if errors.As(toolErr, &blocked) {
@@ -645,9 +641,6 @@ func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider m
 			} else {
 				if payment != nil {
 					x402Payments = append(x402Payments, paymentReceipt(payment))
-				}
-				if BillableFlatFee(toolNode.Type, toolNode.Template) {
-					billedFlatFeeNodeIds = append(billedFlatFeeNodeIds, toolNode.ID)
 				}
 				b, _ := json.Marshal(toolResult)
 				resultStr = string(b)
