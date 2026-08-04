@@ -273,7 +273,7 @@ func TestAgentNodeChargesOwnFeeAndAttachedToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fundUser(t, store, user.ID, 2*models.ByokFlatFeeUSDMicros+200_000) // 1 agent fee + 1 tool fee, plenty of headroom
+	fundUser(t, store, user.ID, models.ByokFlatFeeUSDMicros+200_000) // BYOK agent step is free (see debitAgentFee); only the attached tool call is billed
 
 	wf, err := store.CreateWorkflow(ctx, "Agent Fee Test", user.ID)
 	if err != nil {
@@ -315,7 +315,7 @@ func TestAgentNodeChargesOwnFeeAndAttachedToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantBalance := int64(200_000) // agent's own fee + attached tool call each subtracted, 200000 headroom left
+	wantBalance := int64(200_000) // only the attached tool call subtracted, 200000 headroom left
 	if balance != wantBalance {
 		t.Fatalf("want balance %d got %d", wantBalance, balance)
 	}
@@ -324,20 +324,11 @@ func TestAgentNodeChargesOwnFeeAndAttachedToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("want 2 ledger entries (agent fee + tool fee), got %d: %+v", len(entries), entries)
+	if len(entries) != 1 {
+		t.Fatalf("want 1 ledger entry (tool fee only -- BYOK agent step is free), got %d: %+v", len(entries), entries)
 	}
-	var sawAgentFee, sawToolFee bool
-	for _, e := range entries {
-		if e.NodeID == "agent1" && e.Kind == models.DebitKindByokFlatFee {
-			sawAgentFee = true
-		}
-		if e.NodeID == "tool1" && e.Kind == models.DebitKindByokFlatFee {
-			sawToolFee = true
-		}
-	}
-	if !sawAgentFee || !sawToolFee {
-		t.Fatalf("want one ledger entry for agent1 and one for tool1, got %+v", entries)
+	if entries[0].NodeID != "tool1" || entries[0].Kind != models.DebitKindByokFlatFee {
+		t.Fatalf("want one ledger entry for tool1, got %+v", entries)
 	}
 }
 
@@ -924,12 +915,13 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 3000000: covers the agent's own flat fee, reserveAndFundRun's upfront
-	// credit reservation for this run (250000 real vendor cost + the
-	// platform's flat markup, models.X402PlatformFeeUSDMicros), with
-	// headroom to spare above executeFunctionCall's pre-existing floor
-	// guard (models.X402ProbeFloorUSDMicros) for any attached tool402 call
-	// not covered by run funding.
+	// 3000000: BYOK agent step is free (see debitAgentFee), so this covers
+	// reserveAndFundRun's upfront credit reservation for this run (250000
+	// real vendor cost + the platform's flat markup,
+	// models.X402PlatformFeeUSDMicros), with headroom to spare above
+	// executeFunctionCall's pre-existing floor guard
+	// (models.X402ProbeFloorUSDMicros) for any attached tool402 call not
+	// covered by run funding.
 	fundUser(t, store, user.ID, 3_000_000)
 
 	wf, err := store.CreateWorkflow(ctx, "Relay Inbound Settled Test", user.ID)
@@ -972,10 +964,10 @@ func TestAgentAttachedRelayToolBillsOnInboundSettlementDespiteOutboundFailure(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Agent's own flat fee + the real 250000 run-funded vendor cost + the
-	// platform's flat markup, billed despite the target's 500 response to
-	// the paid request.
-	wantBalance := int64(3_000_000 - models.ByokFlatFeeUSDMicros - 250_000 - models.X402PlatformFeeUSDMicros)
+	// BYOK agent step is free -- only the real 250000 run-funded vendor
+	// cost + the platform's flat markup, billed despite the target's 500
+	// response to the paid request.
+	wantBalance := int64(3_000_000 - 250_000 - models.X402PlatformFeeUSDMicros)
 	if balance != wantBalance {
 		t.Fatalf("want balance %d (billed for the signed outbound payment despite the target's failure), got %d", wantBalance, balance)
 	}
@@ -1111,13 +1103,14 @@ func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 3000000: covers the agent's own flat fee and reserveAndFundRun's
-	// upfront credit reservation (250000 real vendor cost + the platform's
-	// flat markup) with headroom to spare. The pool itself is still sized
-	// for exactly one call's worth of total (vendor cost + markup), so it's
-	// still exhausted after the first real payment -- markup scales pool
-	// size and per-call reserve together, it doesn't change the
-	// pool-exhaustion-after-one-call behavior this test is pinning.
+	// 3000000: BYOK agent step is free (see debitAgentFee), so this covers
+	// reserveAndFundRun's upfront credit reservation (250000 real vendor
+	// cost + the platform's flat markup) with headroom to spare. The pool
+	// itself is still sized for exactly one call's worth of total (vendor
+	// cost + markup), so it's still exhausted after the first real payment
+	// -- markup scales pool size and per-call reserve together, it doesn't
+	// change the pool-exhaustion-after-one-call behavior this test is
+	// pinning.
 	fundUser(t, store, user.ID, 3_000_000)
 
 	wf, err := store.CreateWorkflow(ctx, "Relay Sequential Overspend Test", user.ID)
@@ -1167,9 +1160,9 @@ func TestSequentialRelayToolCallsCannotOverspendPastBalance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantBalance := int64(3_000_000 - models.ByokFlatFeeUSDMicros - 250_000 - models.X402PlatformFeeUSDMicros)
+	wantBalance := int64(3_000_000 - 250_000 - models.X402PlatformFeeUSDMicros)
 	if balance != wantBalance {
-		t.Fatalf("want balance %d (exactly one payment + its markup + the agent's own fee, no overspend), got %d", wantBalance, balance)
+		t.Fatalf("want balance %d (exactly one payment + its markup, BYOK agent step free, no overspend), got %d", wantBalance, balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)
@@ -1497,13 +1490,14 @@ func TestAgentBranchingBetweenTwoPricedToolsDoesNotBlockMidRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 5000000 - creditReserve (750000 vendor-cost estimate + 2 funded tools'
-	// worth of markup) - agent's own flat fee + 50000 (unused pool
-	// released: vendor-cost estimate 400000+350000=750000, actually paid
-	// 350000+350000=700000 because tool_a's price drifted down between
-	// estimate and settle time; the markup component of the pool doesn't
-	// drift, so this 50000 gap is exactly the same as the no-markup case).
+	// worth of markup) + 50000 (unused pool released: vendor-cost estimate
+	// 400000+350000=750000, actually paid 350000+350000=700000 because
+	// tool_a's price drifted down between estimate and settle time; the
+	// markup component of the pool doesn't drift, so this 50000 gap is
+	// exactly the same as the no-markup case). BYOK agent step is free
+	// (see debitAgentFee), so no separate agent-fee term.
 	creditReserve := int64(750_000 + 2*models.X402PlatformFeeUSDMicros)
-	wantBalance := int64(5_000_000) - creditReserve - models.ByokFlatFeeUSDMicros + 50_000
+	wantBalance := int64(5_000_000) - creditReserve + 50_000
 	if balance != wantBalance {
 		t.Fatalf("want balance %d, got %d", wantBalance, balance)
 	}
@@ -2343,19 +2337,21 @@ func TestLegacyToolAttachedAlongsideRunFundedV2ToolBillsIdenticallyToStandalone(
 		t.Fatalf("want success got %s", final.Status)
 	}
 
-	// Final balance: 4500000 - agent's own flat fee - 300000 (v2 run-level
-	// pool, real settled amount) - v2's platform markup - legacy flat fee
+	// Final balance: 4500000 - 300000 (v2 run-level pool, real settled
+	// amount) - v2's platform markup - legacy flat fee
 	// (models.X402PlatformFeeUSDMicros, a separate charge from the v2
-	// markup despite sharing the same debit kind). A wrong balance here
-	// would mean the legacy fee was billed against the wrong ledger (or
-	// not billed / double-billed), or the v2 markup was skipped/duplicated.
-	wantBalance := int64(4_500_000 - models.ByokFlatFeeUSDMicros - 300_000 - models.X402PlatformFeeUSDMicros - models.X402PlatformFeeUSDMicros)
+	// markup despite sharing the same debit kind). BYOK agent step is free
+	// (see debitAgentFee), so no separate agent-fee term. A wrong balance
+	// here would mean the legacy fee was billed against the wrong ledger
+	// (or not billed / double-billed), or the v2 markup was
+	// skipped/duplicated.
+	wantBalance := int64(4_500_000 - 300_000 - models.X402PlatformFeeUSDMicros - models.X402PlatformFeeUSDMicros)
 	balance, err := store.GetCreditBalance(ctx, user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if balance != wantBalance {
-		t.Fatalf("want final balance %d (4500000 - agent fee - 300000 v2 - v2 markup - legacy fee), got %d -- legacy tool billing was not identical to the no-v2-attached case", wantBalance, balance)
+		t.Fatalf("want final balance %d (4500000 - 300000 v2 - v2 markup - legacy fee), got %d -- legacy tool billing was not identical to the no-v2-attached case", wantBalance, balance)
 	}
 
 	entries, err := store.ListDebitLedger(ctx, run.ID)

@@ -84,7 +84,25 @@ func main() {
 
 	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000) // $5.00 default
 
-	runner := engine.NewRunner(store, broker, walletSvc, envOr("BASE_URL", "http://localhost:8080"), platformSpendWalletEncMnemonic, engine.X402Config{
+	// Which /x402/relay a per-call paid tool402 request is routed through.
+	// Defaults to BASE_URL, since in a real deployment the same instance
+	// serves both — but they are genuinely different concerns, and conflating
+	// them made a whole class of change untestable: BASE_URL also signs auth
+	// cookies, so a developer who pointed it at their own machine broke login,
+	// and one who left it alone had their local engine silently pay through
+	// the DEPLOYED relay's code. Every outbound payment then came from a build
+	// nobody was editing — including a payment-header bug that survived three
+	// local restarts because the code that builds the header never ran here
+	// (2026-08-03). Split so a local run can exercise its own relay.
+	//
+	// Note the relay call goes through the same SSRF-safe dialer as any other
+	// outbound request, which refuses loopback and private ranges: a local
+	// value must be a publicly-resolvable hostname for this machine (e.g. a
+	// cloudflared/ngrok tunnel), not http://localhost:PORT.
+	relayBaseURL := envOr("RELAY_BASE_URL", envOr("BASE_URL", "http://localhost:8080"))
+	log.Printf("x402 relay base URL: %s", relayBaseURL)
+
+	runner := engine.NewRunner(store, broker, walletSvc, relayBaseURL, platformSpendWalletEncMnemonic, engine.X402Config{
 		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
 		USDCAssetID:               usdcAssetID,
 		FacilitatorClient:         facilitatorClient,

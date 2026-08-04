@@ -3,21 +3,16 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCredits } from "@/lib/credits/store";
 import { LowBalanceBanner } from "@/components/billing/LowBalanceBanner";
-import {
-  Logo,
-  Pill,
-  Hairline,
-  IconSearch,
-  Card,
-  ghostBtnSm,
-} from "@/components/ui";
-import { useAuth } from "@/hooks/useAuth";
-import { usage as usageApi } from "@/lib/api";
+import { IconSearch, Card, ghostBtnSm } from "@/components/ui";
+import { Topbar } from "@/components/Topbar";
+import { usage as usageApi, auth as authApi } from "@/lib/api";
+import { listSettlements } from "@/lib/settlements";
 import {
   UsageRange,
   UsagePayload,
   EndpointUsage,
   UsageCategory,
+  Settlement,
 } from "@/lib/types";
 import { AreaChart } from "./AreaChart";
 import { Donut, DonutSegment } from "./Donut";
@@ -44,7 +39,6 @@ const CAT_LABEL: Record<UsageCategory, string> = {
 
 export function UsagePage() {
   const router = useRouter();
-  const { signOut } = useAuth();
 
   const [range, setRange] = useState<UsageRange>("30d");
   const [data, setData] = useState<UsagePayload | null>(null);
@@ -93,11 +87,6 @@ export function UsagePage() {
     };
   }, [range, reloadNonce]);
 
-  const handleSignOut = async () => {
-    await signOut();
-    router.push("/");
-  };
-
   const changeRange = (r: UsageRange) => {
     setLoading(true);
     setLoadError(null);
@@ -133,73 +122,7 @@ export function UsagePage() {
         background: "var(--bg)",
       }}
     >
-      {/* Topbar */}
-      <div
-        style={{
-          height: 56,
-          flexShrink: 0,
-          background: "var(--bg-elev-1)",
-          borderBottom: "1px solid var(--border)",
-          padding: "0 24px",
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
-        }}
-      >
-        <button
-          onClick={() => router.push("/")}
-          style={{
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-            padding: 0,
-          }}
-        >
-          <Logo size={18} />
-        </button>
-        <Hairline vertical length={22} />
-        <button style={ghostBtnSm} onClick={() => router.push("/workflows")}>
-          ← Workflows
-        </button>
-        <Pill mono dot tone="ok">
-          testnet
-        </Pill>
-        <div style={{ flex: 1 }} />
-        <button style={ghostBtnSm} onClick={() => router.push("/billing")}>
-          Credits
-        </button>
-        <button
-          style={{
-            ...ghostBtnSm,
-            borderColor: "var(--accent-line)",
-            color: "var(--accent)",
-          }}
-        >
-          Usage
-        </button>
-        <button style={ghostBtnSm}>Credentials</button>
-        <button style={ghostBtnSm}>Settings</button>
-        <Hairline vertical length={22} />
-        <button style={ghostBtnSm} onClick={handleSignOut}>
-          Sign out
-        </button>
-        <div
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 999,
-            background: "var(--accent)",
-            color: "var(--accent-fg)",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 11,
-            fontWeight: 700,
-          }}
-        >
-          AC
-        </div>
-      </div>
+      <Topbar />
 
       {/* Main */}
       <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>
@@ -362,8 +285,34 @@ function UsageBody({
   onTopUp: () => void;
   loading: boolean;
 }) {
-  const { timeseries, byWorkflow, byEndpoint, settlements } = data;
-  const { balanceUSD } = useCredits();
+  const { timeseries, byWorkflow, byEndpoint } = data;
+  const { balanceUSD, refreshBalance } = useCredits();
+  const [localSettlements, setLocalSettlements] = useState<Settlement[]>([]);
+  // Settlements come from the local per-user record rather than the API: the
+  // server has no way to scope x402_relay_settlements to a user yet (no
+  // user_id column), so /usage/settlements deliberately returns nothing.
+  const settlements = localSettlements;
+  // Read after mount and only for the signed-in user, so another account's
+  // history in the same browser is never shown.
+  useEffect(() => {
+    let stale = false;
+    authApi
+      .me()
+      .then((u) => {
+        if (!stale) setLocalSettlements(listSettlements(u.id));
+      })
+      .catch(() => {
+        /* signed out: leave the panel empty */
+      });
+    return () => {
+      stale = true;
+    };
+  }, []);
+  // The balance is server state, not local state — fetch it when this page
+  // mounts so it reflects spend from runs made elsewhere in the app.
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
 
   const workflows = scopedWf
     ? byWorkflow.filter((w) => w.workflowId === scopedWf)
@@ -413,12 +362,12 @@ function UsageBody({
         >
           {(() => {
             const b = data.summary.budget;
-            // "Credits left" is the prepaid wallet -- the same single source the
-            // billing page shows -- so the two pages always agree. The box works
-            // in ALGO and converts to USD at display (compactUsd × rate), so
-            // convert the USD wallet balance back to ALGO here. The mock plan
-            // allowance (b.limit) is used only as the progress-bar reference; it
-            // is never added to the figure.
+            // "Credits left" is the prepaid wallet — now the backend balance
+            // (GET /credits/balance), the same row the engine debits, so this
+            // page, the billing page and the canvas topbar cannot disagree.
+            // Everything here is USD end to end (ALGO_USD is 1). The plan
+            // allowance (b.limit) is only the progress-bar reference; it is
+            // never added to the figure.
             const walletAlgo = balanceUSD / ALGO_USD;
             const left = balanceUSD > 0 || b ? walletAlgo : null;
             const limit = b ? b.limit : 0;
@@ -1100,7 +1049,7 @@ function EndpointTable({
                   className={r.unitPrice != null ? "cell-tip" : undefined}
                   data-tip={
                     r.unitPrice != null
-                      ? `${trim(r.unitPrice)} ALGO/${r.unit}`
+                      ? `$${trim(r.unitPrice)}/${r.unit}`
                       : undefined
                   }
                   style={{
@@ -1121,7 +1070,7 @@ function EndpointTable({
                 </span>
                 <span
                   className="cell-tip"
-                  data-tip={`${trim(r.totalAlgo)} ALGO`}
+                  data-tip={`$${trim(r.totalAlgo)}`}
                   style={{ ...numCell, color: "var(--accent)" }}
                 >
                   ${usd(r.totalAlgo)}
@@ -1358,9 +1307,12 @@ function Empty({ text }: { text: string }) {
 }
 
 // ── formatting helpers ──────────────────────────────────────────────────────
-// On-chain amounts are ALGO; user-facing credit/spend is shown in USD.
-// Single display rate -- swap for a live oracle when available.
-const ALGO_USD = 0.17;
+// Spend figures arrive from /usage/* already denominated in USD — they come
+// from debit_ledger.amount_usd_micros, the same units credits are sold and
+// billed in. The multiplier is retained (as 1) rather than deleted so the call
+// sites stay honest about doing no conversion; applying the old 0.17 ALGO rate
+// to USD figures would under-report every number on this page by ~6x.
+const ALGO_USD = 1;
 function usd(algoAmount: number, dp = 2) {
   return (algoAmount * ALGO_USD).toLocaleString("en", {
     minimumFractionDigits: dp,

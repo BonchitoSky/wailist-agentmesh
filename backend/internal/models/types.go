@@ -28,6 +28,30 @@ type ParamDef struct {
 	Default     string `json:"default,omitempty"`
 }
 
+// How a tool402 node builds its request. See WorkflowNode.BodyMode.
+const (
+	BodyModeParams = "params"
+	BodyModeJSON   = "json"
+)
+
+// CustomParam is an input field a user defined by hand on a tool402 node,
+// for the many real endpoints that publish no Bazaar input schema at all
+// (confirmed 2026-08-02: prism-99h2.onrender.com declares none) — nothing can
+// discover what those need, so the user states it.
+//
+// Kind "file" carries its bytes base64-encoded in Value and switches the whole
+// request to multipart/form-data. Files ride inside the workflow document
+// rather than separate blob storage, which keeps them bound to the node that
+// uses them (no orphaned uploads, no extra lifecycle to get wrong) at the cost
+// of a size ceiling — see maxParamFileBytes.
+type CustomParam struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"` // "text" | "file"
+	Value    string `json:"value,omitempty"`
+	FileName string `json:"fileName,omitempty"`
+	MIMEType string `json:"mimeType,omitempty"`
+}
+
 type WorkflowNode struct {
 	ID           string   `json:"id"`
 	Type         NodeType `json:"type"`
@@ -63,7 +87,35 @@ type WorkflowNode struct {
 	EmailProvider string `json:"emailProvider,omitempty"`
 	// x402 tool discovered params (populated by frontend discover)
 	DiscoveredParams []ParamDef `json:"discoveredParams,omitempty"`
-	Description      string     `json:"description,omitempty"`
+	// ParamDefaults holds the values a user typed for DiscoveredParams in the
+	// canvas. Applied to the outbound request at call time (query string for
+	// GET, JSON body otherwise) — see nodes.applyParamDefaults. Only fills
+	// params not already supplied per-call, so an agent's LLM-chosen args
+	// still win over these static fallbacks. Non-secret, like Config.
+	ParamDefaults map[string]string `json:"paramDefaults,omitempty"`
+	// CustomParams are user-defined fields, used alongside (and taking
+	// precedence over) DiscoveredParams for endpoints that declare nothing.
+	CustomParams []CustomParam `json:"customParams,omitempty"`
+	// BodyMode selects how CustomParams/ParamDefaults reach the endpoint:
+	// "" or BodyModeParams builds the request from the fields themselves
+	// (query string for GET, flat JSON or multipart otherwise), while
+	// BodyModeJSON sends BodyTemplate verbatim as the JSON body.
+	//
+	// The fields-only shape cannot express a nested body, and real endpoints
+	// want one: prism-99h2.onrender.com/resume-screen-accurate takes
+	// {"task_description": "...", "files": [{"filename": "...",
+	// "content_base64": "..."}]} — an array of objects with a file's bytes
+	// inside a JSON string. No arrangement of flat key/value fields produces
+	// that, and the endpoint declares no schema we could generate a form
+	// from, so the caller has to be able to write the body itself.
+	BodyMode string `json:"bodyMode,omitempty"`
+	// BodyTemplate is the JSON body for BodyModeJSON, with placeholders
+	// filled from CustomParams at call time — see nodes.expandBodyTemplate
+	// for the supported forms. Attached files stay in CustomParams and are
+	// referenced from here rather than uploaded separately, since the whole
+	// point of this mode is bodies where a file is one field among others.
+	BodyTemplate string `json:"bodyTemplate,omitempty"`
+	Description  string        `json:"description,omitempty"`
 	// Secrets holds per-connector credential values for connectors added after the
 	// original dedicated fields (APIKey, EmailAPIKey, ...). Each value is encrypted
 	// independently, exactly like EmailAPIKey, via encryptNodes/maskNodes/decryptNodes.
@@ -182,6 +234,8 @@ type User struct {
 	ID           string    `json:"id"`
 	Email        string    `json:"email"`
 	PasswordHash string    `json:"-"`
+	Name         string    `json:"name"`
+	OrgName      string    `json:"orgName"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
 

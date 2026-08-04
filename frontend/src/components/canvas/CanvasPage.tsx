@@ -11,7 +11,10 @@ import {
   IconStop,
 } from "@/components/ui";
 import { workflows as workflowsApi } from "@/lib/api";
-import { useCredits } from "@/lib/credits/store";
+import {
+  useCredits,
+  refreshBalance as refreshCredits,
+} from "@/lib/credits/store";
 import { CanvasGraph } from "./CanvasGraph";
 import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
@@ -24,6 +27,13 @@ import {
   loadWidths,
   saveWidths,
 } from "./panelSizing";
+
+// Which chain a deployed workflow's payments actually settle on. Mainnet is
+// the default because that is what the platform runs: real USDC, the mainnet
+// asset id, real settlements on the merchants leaderboard. The badge claimed
+// "testnet" long after that stopped being true. Overridable so a testnet
+// deployment does not have to lie in the other direction.
+const ALGORAND_NETWORK = process.env.NEXT_PUBLIC_ALGORAND_NETWORK ?? "mainnet";
 
 interface CanvasPageProps {
   workflowId: string;
@@ -122,8 +132,10 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       .then((wf) => {
         justLoaded.current = true;
         setWorkflow(wf);
-        // Restore deployed state: if any agent node has a wallet address it was previously deployed.
-        if (wf.nodes.some((n) => n.type === "agent" && n.wallet)) {
+        // Deployment state comes from the workflow's own status. It used to
+        // be inferred from an agent node having a wallet address, which no
+        // longer exists now that agents are funded by the platform wallets.
+        if (wf.status === "deployed") {
           setDeployed(true);
         }
         setLoading(false);
@@ -238,32 +250,14 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const onDeploy = useCallback(async () => {
     if (!workflow) return;
     if (deployed) {
-      showToast("Re-deployed · wallets preserved");
+      showToast("Re-deployed");
       return;
     }
     try {
       const res = await workflowsApi.deploy(workflow.id);
-      setWorkflow((wf) => {
-        if (!wf) return wf;
-        const addrMap: Record<string, string> = {};
-        for (const a of res.agents) addrMap[a.nodeId] = a.address;
-        return {
-          ...wf,
-          nodes: wf.nodes.map((n) =>
-            n.type === "agent" && addrMap[n.id]
-              ? {
-                  ...n,
-                  wallet: addrMap[n.id],
-                  balance: "0.000000",
-                  spent: "0.000000",
-                }
-              : n,
-          ),
-        };
-      });
       setDeployed(true);
       showToast(
-        `Deployed · ${res.agents.length} wallet${res.agents.length !== 1 ? "s" : ""} provisioned on Algorand testnet`,
+        `Deployed · ${res.agents.length} agent${res.agents.length !== 1 ? "s" : ""} ready · paid calls draw from your credits`,
       );
     } catch (err: unknown) {
       showToast(
@@ -321,12 +315,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     await startRun();
   }, [workflow, deployed, running, hasChatTrigger, startRun, showToast]);
 
-  const totalSpend = (
-    workflow?.nodes
-      .filter((n) => n.type === "agent")
-      .reduce((s, n) => s + parseFloat(n.spent ?? "0"), 0) ?? 0
-  ).toFixed(3);
-
   const onDragNodeStart = useCallback(
     (e: React.DragEvent, meta: Partial<WorkflowNode>) => {
       e.dataTransfer.setData("application/agentmesh", JSON.stringify(meta));
@@ -383,7 +371,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         running={running}
         onDeploy={onDeploy}
         onRun={onRun}
-        totalSpend={totalSpend}
         saveLabel={saveLabel}
         onBack={() => router.push("/workflows")}
       />
@@ -434,11 +421,18 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
               initial state instead of a setState cascade inside its effect. */}
           <LogDrawer
             key={runId ?? "idle"}
+            workflowId={workflow?.id}
             open={logOpen}
             onToggle={() => setLogOpen((o) => !o)}
             runId={runId}
             running={running}
-            onRunComplete={() => setRunning(false)}
+            onRunComplete={() => {
+              setRunning(false);
+              // A run that paid for an x402 call has just debited credits;
+              // re-read the balance so the topbar reflects the spend instead
+              // of the pre-run figure.
+              void refreshCredits();
+            }}
           />
         </div>
 
@@ -457,8 +451,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         />
         <Inspector
           selected={selected}
-          deployed={deployed}
-          workflowId={workflow.id}
           onUpdate={onUpdate}
           onDelete={onDelete}
           onClose={() => setSelectedId(null)}
@@ -488,7 +480,6 @@ function CanvasTopbar({
   running,
   onDeploy,
   onRun,
-  totalSpend,
   saveLabel,
   onBack,
 }: {
@@ -498,15 +489,20 @@ function CanvasTopbar({
   running: boolean;
   onDeploy: () => void;
   onRun: () => void;
-  totalSpend: string;
   saveLabel: string;
   onBack: () => void;
 }) {
   // Wallet balance is global (not per-node), so it lives in the topbar's
-  // financial cluster. Guard on `hydrated` like LowBalanceBanner so SSR and the
-  // first client render agree (localStorage is client-only).
-  const { balanceUSD, autoRecharge, hydrated } = useCredits();
-  const lowBalance = hydrated && balanceUSD < autoRecharge.thresholdUSD;
+  // financial cluster. The value comes from the backend (the same row the
+  // engine debits), so it is only meaningful once that fetch has landed —
+  // hence balanceKnown rather than the localStorage `hydrated` flag.
+  const { balanceUSD, autoRecharge, balanceKnown, refreshBalance } =
+    useCredits();
+  const lowBalance = balanceKnown && balanceUSD < autoRecharge.thresholdUSD;
+
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
 
   return (
     <div
@@ -559,7 +555,7 @@ function CanvasTopbar({
         }}
       />
       <Pill mono dot tone={deployed ? "ok" : "default"}>
-        {deployed ? "deployed · testnet" : "draft"}
+        {deployed ? `deployed · ${ALGORAND_NETWORK}` : "draft"}
       </Pill>
       {saveLabel && <Pill mono>{saveLabel}</Pill>}
 
@@ -579,7 +575,7 @@ function CanvasTopbar({
       >
         <Stat
           label="credits"
-          value={hydrated ? `$${balanceUSD.toFixed(2)}` : "-"}
+          value={balanceKnown ? `$${balanceUSD.toFixed(2)}` : "-"}
           color={lowBalance ? "var(--danger)" : "var(--accent)"}
         />
         <Hairline vertical length={18} />
@@ -599,12 +595,6 @@ function CanvasTopbar({
           label="x402"
           value={workflow.nodes.filter((n) => n.type === "tool402").length}
           color="#E879F9"
-        />
-        <Stat
-          label="spent / 24h"
-          value={totalSpend}
-          unit="ALGO"
-          color="var(--accent)"
         />
       </div>
 

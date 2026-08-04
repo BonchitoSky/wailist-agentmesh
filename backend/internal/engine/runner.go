@@ -258,10 +258,18 @@ type runFundResult struct {
 	// platform's flat per-call markup — see X402RelayConfig.MarkupLedger
 	// for why this must stay a distinct pool from Ledger rather than one
 	// pool sized estimate+markupTotal.
-	MarkupLedger  nodes.PaymentLedger
-	FundingID     string
-	FundedToolIDs map[string]bool
-	Cleanup       func(context.Context)
+	MarkupLedger nodes.PaymentLedger
+	FundingID    string
+	// FundingTxID and FundedUSDMicros describe the real on-chain inbound
+	// settlement FundingID refers to (Wallet 1 -> Wallet 2, the whole run's
+	// tool budget in one payment). Both zero when no pre-fund happened.
+	// They exist so the run's paid work is auditable from the UI: this is
+	// the ONLY inbound settlement a run-funded agent makes, so nothing
+	// downstream can reconstruct it per call.
+	FundingTxID     string
+	FundedUSDMicros int64
+	FundedToolIDs   map[string]bool
+	Cleanup         func(context.Context)
 }
 
 // reserveAndFundRun sizes and reserves a single run-level credit hold for
@@ -426,16 +434,57 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 			criticalAlert(wf, run, "run-level release failed (balance permanently stranded)", err, "amount", unused)
 		}
 	}
-	return runFundResult{Ledger: vendorLedger, MarkupLedger: markupLedger, FundingID: funding.ID, FundedToolIDs: fundedToolIDs, Cleanup: cleanup}, nil
+	return runFundResult{
+		Ledger:          vendorLedger,
+		MarkupLedger:    markupLedger,
+		FundingID:       funding.ID,
+		FundingTxID:     funding.InboundTxID,
+		FundedUSDMicros: estimate,
+		FundedToolIDs:   fundedToolIDs,
+		Cleanup:         cleanup,
+	}, nil
 }
 
-// debitAgentFee charges the agent node's own LLM-call fee — the flat BYOK
-// convenience fee, or the platform-key tier fee with usage recorded — and
-// logs on failure rather than failing the node, same rationale as
-// debitOrLog: the call already happened, there's nothing left to roll back.
+// prependRunFundingReceipt folds the run's up-front funding settlement into
+// an agent result's x402Payments list as its first entry, so it gets its own
+// console row and DB log row through the same publish loop in Run() that
+// every per-call receipt already goes through. No-op when the run was never
+// pre-funded.
+//
+// The list order matters: this row carries the full amount that really
+// settled on-chain, while the per-call receipts that follow repeat its tx id
+// (their only inbound leg) with just their own slice of that amount — so a
+// consumer de-duplicating by tx id keeps the accurate one by keeping the
+// first.
+func prependRunFundingReceipt(result map[string]any, rf runFundResult, node models.WorkflowNode, usdcAssetID uint64) {
+	if rf.FundingTxID == "" {
+		return
+	}
+	funded := map[string]any{
+		"nodeId":           node.ID,
+		"nodeName":         "run funding · " + node.Name,
+		"settledUsdMicros": rf.FundedUSDMicros,
+		"debitKind":        models.DebitKindX402RelayCost,
+		"txId":             rf.FundingTxID,
+		"amount":           fmt.Sprintf("%.6f", float64(rf.FundedUSDMicros)/1e6),
+		"explorerURL":      nodes.ExplorerURLForAsset(usdcAssetID, rf.FundingTxID),
+	}
+	// []map[string]any is the concrete type Run()'s publish loop asserts on;
+	// anything else there would silently drop every payment row.
+	existing, _ := result["x402Payments"].([]map[string]any)
+	result["x402Payments"] = append([]map[string]any{funded}, existing...)
+}
+
+// debitAgentFee charges an agent step. BYOK is free: the user is paying their
+// own provider directly with their own key, so AgentMesh incurs no cost to
+// pass on and takes no cut. Credits exist to cover what the platform actually
+// spends on the user's behalf — platform-key LLM calls, and real x402
+// settlements paid out of the platform wallets. Charging for BYOK billed
+// users for compute they had already bought themselves. Logs on failure
+// rather than failing the node, same rationale as debitOrLog: the call
+// already happened, there's nothing left to roll back.
 func (r *Runner) debitAgentFee(ctx context.Context, wf models.Workflow, run models.Run, nodeID string, amountUSDMicros int64, platformMode bool, model string, tokensIn, tokensOut int) {
 	if !platformMode {
-		r.debitOrLog(ctx, wf, run, nodeID, amountUSDMicros, models.DebitKindByokFlatFee)
 		return
 	}
 	if err := r.store.DebitCreditsForPlatformLLM(ctx, wf.UserID, amountUSDMicros, wf.ID, run.ID, nodeID, model, tokensIn, tokensOut); err != nil {
@@ -480,12 +529,19 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run) {
 		return
 	}
 
-	// Build set of tool/tool402 nodes that are ONLY connected via attach edges to
-	// agents. These must NOT be executed as standalone topology steps — the agent
-	// LLM drives them through function calling at runtime.
+	// Nodes attached to an agent are its resources, not steps of their own:
+	// a tool is invoked by the agent's LLM via function calling, and a
+	// provider is the model that agent runs on. Neither is a workflow step.
+	//
+	// This used to match only ToPort == "tools", which left a provider
+	// attached to the "model" port executing as a standalone topology step —
+	// and NodeTypeProvider's executeNode case simply returns rc.Message(), so
+	// it surfaced in the console as a step that echoed the run's input back
+	// verbatim (confirmed live 2026-08-02). Matching every attach edge fixes
+	// that for both ports.
 	agentToolIDs := make(map[string]bool)
 	for _, e := range wf.Edges {
-		if e.Kind == models.EdgeKindAttach && e.ToPort == "tools" {
+		if e.Kind == models.EdgeKindAttach {
 			agentToolIDs[e.From] = true
 		}
 	}
@@ -567,12 +623,18 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run) {
 					DurationMs: dur,
 					Ts:         time.Now(),
 				})
-				// Publish a separate log event per x402 payment made inside the agent loop.
+				// One log entry per x402 payment made inside the agent loop, so
+				// each settlement's tx ids are visible as their own console
+				// row. These are written to the DB as well as published:
+				// broadcast-only events exist for as long as a live stream is
+				// attached and no longer, so a dropped stream used to lose the
+				// on-chain receipts for money that had really moved — the one
+				// record a user most needs to audit a paid run.
 				if m, ok := result.(map[string]any); ok {
 					if payments, ok := m["x402Payments"].([]map[string]any); ok {
 						for _, p := range payments {
 							nodeID, _ := p["nodeId"].(string)
-							r.broker.Publish(run.ID, models.LogEvent{
+							ev := models.LogEvent{
 								StepIndex:  idx,
 								NodeID:     nodeID,
 								NodeType:   models.NodeTypeTool402,
@@ -580,7 +642,18 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run) {
 								Output:     p,
 								DurationMs: 0,
 								Ts:         time.Now(),
-							})
+							}
+							payJSON, _ := json.Marshal(p)
+							if entry, err := r.store.InsertRunLog(ctx, models.RunLog{
+								RunID:     run.ID,
+								StepIndex: idx,
+								NodeID:    nodeID,
+								NodeType:  models.NodeTypeTool402,
+								Status:    models.LogStatusRunning,
+							}); err == nil {
+								r.store.UpdateRunLog(context.Background(), entry.ID, models.LogStatusSuccess, payJSON, 0)
+							}
+							r.broker.Publish(run.ID, ev)
 						}
 					}
 				}
@@ -615,7 +688,11 @@ func (r *Runner) executeNode(
 		provider := attachMap[node.ID].Provider
 		platformMode := provider != nil && provider.KeyMode == "platform"
 
-		agentFeeUSDMicros := models.ByokFlatFeeUSDMicros
+		// BYOK costs the platform nothing, so it is neither gated on credits
+		// nor charged (see debitAgentFee). A zero preflight amount always
+		// passes, which is the point: a user running purely on their own API
+		// key should never be blocked by an empty balance.
+		var agentFeeUSDMicros int64
 		var resolvedModel string
 		if platformMode {
 			resolvedModel = nodes.ResolveModel(provider.Template, provider.Model)
@@ -663,6 +740,7 @@ func (r *Runner) executeNode(
 			// run-funded v2 tool attached (see X402RelayConfig.LegacyLedger).
 			LegacyLedger:     nodes.CallLedger(r.newPaymentLedger(wf, run)),
 			RunFundingID:     rf.FundingID, // "" => existing unmodified per-call public-relay path
+			RunFundingTxID:   rf.FundingTxID,
 			RunFundedToolIDs: rf.FundedToolIDs,
 			Wallet2: nodes.Wallet2PayConfig{
 				USDCSigner:                usdcSigner,
@@ -704,6 +782,39 @@ func (r *Runner) executeNode(
 			}
 		}
 		r.debitAgentFee(ctx, wf, run, node.ID, agentFeeUSDMicros, platformMode, resolvedModel, tokensIn, tokensOut)
+		// Attached x402Payments entries (relay markup included) and attached
+		// flat-fee tool/action calls are already reserved+committed from
+		// inside ExecuteAgent's tool-calling loop, atomically per call, at
+		// the moment each payment/call settled — not batched here. See
+		// relayCfg.Ledger/MarkupLedger/FlatFeeLedger and their doc comments
+		// for why batching until the whole agent turn completes would let
+		// every loop iteration check the same stale balance and collectively
+		// overspend past what the user can cover.
+		if m, ok := result.(map[string]any); ok {
+			// The run-level pre-fund is a real inbound settlement of its own
+			// (Wallet 1 -> Wallet 2, the run's whole tool budget in one
+			// payment) with no node of its own to report it. Folding it in as
+			// the FIRST x402Payments entry gives it its own console row and DB
+			// log row through the existing publish loop in Run(), carrying the
+			// amount that genuinely moved on-chain. The per-call receipts
+			// repeat this same tx id (it is their only inbound leg) but each
+			// carries just its own slice of the amount, so this row is the one
+			// a settlements view should key on.
+			//
+			// Purely a reporting entry: unlike the per-call receipts it is NOT
+			// billed here or anywhere below. reserveAndFundRun already
+			// reserved the full amount against the user's balance before this
+			// agent ran, and rf.Cleanup releases whatever went unspent.
+			prependRunFundingReceipt(m, rf, node, r.x402.USDCAssetID)
+		} else if rf.FundingTxID != "" {
+			// A run-funded agent whose own result is not a map has no
+			// x402Payments field to attach to (it never actually paid for a
+			// tool — rf.Cleanup releases the unspent pre-fund). The
+			// settlement itself is still recorded in x402_run_fundings; only
+			// the console row is skipped.
+			log.Printf("x402: run %s funded on-chain (tx %s) but agent node %s returned a non-map result, so no console row was emitted",
+				run.ID, rf.FundingTxID, node.ID)
+		}
 		return result, nil
 	case models.NodeTypeProvider:
 		return rc.Message(), nil

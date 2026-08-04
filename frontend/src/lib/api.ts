@@ -19,6 +19,16 @@ const BASE =
   _CONFIGURED && typeof window !== "undefined" ? "/api" : _CONFIGURED;
 
 // -- Auth ------------------------------------------------------------------
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  orgName: string;
+  // True for an OAuth account that has never set a name/org — Google and
+  // GitHub only hand back a verified email, not an organization.
+  needsOnboarding: boolean;
+}
+
 export const auth = {
   signIn: async (email: string, password: string): Promise<void> => {
     if (BASE) {
@@ -40,6 +50,7 @@ export const auth = {
   signUp: async (
     email: string,
     password: string,
+    name: string,
     org: string,
   ): Promise<void> => {
     if (BASE) {
@@ -47,7 +58,7 @@ export const auth = {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, org }),
+        body: JSON.stringify({ email, password, name, org }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "sign up failed");
@@ -55,17 +66,48 @@ export const auth = {
     }
     void email;
     void password;
+    void name;
     void org;
     await delay(500);
   },
 
-  me: async (): Promise<{ id: string; email: string }> => {
+  me: async (): Promise<AuthUser> => {
     if (BASE) {
       const res = await fetch(`${BASE}/auth/me`, { credentials: "include" });
       if (!res.ok) throw new Error("unauthorized");
       return res.json();
     }
-    return { id: "dev", email: "dev@local" };
+    return {
+      id: "dev",
+      email: "dev@local",
+      name: "Dev",
+      orgName: "Acme Capital",
+      needsOnboarding: false,
+    };
+  },
+
+  // Sets name/org for the signed-in user. Used by the post-OAuth onboarding
+  // prompt (OAuth accounts start with no name/org), and reusable as a
+  // general profile edit.
+  updateProfile: async (name: string, orgName: string): Promise<AuthUser> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/auth/me`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, orgName }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "could not update profile");
+      return data;
+    }
+    return {
+      id: "dev",
+      email: "dev@local",
+      name,
+      orgName,
+      needsOnboarding: false,
+    };
   },
 
   signOut: async (): Promise<void> => {
@@ -205,6 +247,83 @@ export const workflows = {
   },
 };
 
+// -- Credits ----------------------------------------------------------------
+export const credits = {
+  // The authoritative balance: users.credit_balance_usd_micros, the same row
+  // the engine reserves against and debits on every paid call. Anything shown
+  // from another source is a guess that drifts the moment a run spends money.
+  balance: async (): Promise<number> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/credits/balance`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "balance fetch failed");
+      return (data.credit_usd_micros ?? 0) / 1e6;
+    }
+    await delay(120);
+    return 0;
+  },
+
+  // Redeems a coupon code and returns the new balance. Throws with the
+  // server's message (e.g. "invalid coupon code", "coupon already redeemed")
+  // on failure so the caller can show it directly.
+  redeemCoupon: async (code: string): Promise<number> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/credits/redeem-coupon`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "coupon redemption failed");
+      return (data.credit_usd_micros ?? 0) / 1e6;
+    }
+    await delay(120);
+    throw new Error("coupons aren't available in mock mode");
+  },
+};
+
+// -- Runs -------------------------------------------------------------------
+export interface RunLogRecord {
+  id: string;
+  runId: string;
+  stepIndex: number;
+  nodeId: string;
+  nodeType: string;
+  status: "pending" | "running" | "success" | "failed";
+  output?: unknown;
+  durationMs?: number;
+  ts: string;
+}
+
+export const runs = {
+  // The DB-backed source of truth for a run's logs — used as a reconciliation
+  // fallback once the live SSE stream ends, since the stream's broker only
+  // delivers events to clients subscribed at the exact moment they're
+  // published (see sse/broker.go's non-blocking, unbuffered-per-subscriber
+  // Publish): any run that finishes a step before/without a live subscriber
+  // silently drops that step's event, with no replay. Polling this after
+  // "done" (or a stream error) guarantees the console reflects what actually
+  // happened server-side, not just whatever fraction of events the stream
+  // happened to deliver live.
+  get: async (
+    runId: string,
+  ): Promise<{ run: { status: string }; logs: RunLogRecord[] }> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/runs/${runId}`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "failed to fetch run");
+      return data;
+    }
+    await delay(150);
+    return { run: { status: "success" }, logs: [] };
+  },
+};
+
 // -- Agents ---------------------------------------------------------------
 export const agents = {
   // TODO: GET /workflows/:wfId/agents/:agentId/balance
@@ -260,10 +379,17 @@ export const tools = {
   ): Promise<{
     price?: string;
     unit?: string;
+    asset?: string;
     network?: string;
     recipient?: string;
     raw?: string;
     description?: string;
+    // The HTTP method the target declares for itself, and whether its params
+    // ride in the query string or the body — both read out of the endpoint's
+    // own Bazaar extension, so the canvas configures an arbitrary endpoint
+    // correctly without anyone hardcoding support for it.
+    method?: string;
+    paramsIn?: "query" | "body";
     params?: Array<{
       name: string;
       type: string;
@@ -314,6 +440,7 @@ export const waitlist = {
 export const payments = {
   createCashfreeOrder: async (
     amountINRPaise: number,
+    phone: string,
   ): Promise<{
     order_id: string;
     payment_session_id: string;
@@ -326,7 +453,7 @@ export const payments = {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount_inr_paise: amountINRPaise }),
+      body: JSON.stringify({ amount_inr_paise: amountINRPaise, phone }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "order creation failed");

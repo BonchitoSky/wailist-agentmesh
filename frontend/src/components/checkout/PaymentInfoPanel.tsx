@@ -7,6 +7,19 @@ import { useCashfreeCheckout } from "./useCashfreeCheckout";
 
 type PayStatus = "idle" | "processing" | "success";
 
+const PHONE_STORAGE_KEY = "agentmesh_checkout_phone";
+
+// normalizePhone mirrors the backend's normalizeIndianPhone (payments.go) —
+// strips formatting and an optional country code down to the bare 10 digits
+// Cashfree expects. This copy only gates the Pay button early and shows a
+// friendly hint; the server validates again and is the actual authority.
+function normalizePhone(raw: string): string | null {
+  let digits = raw.replace(/\D/g, "");
+  digits = digits.replace(/^0/, "");
+  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+  return /^[6-9]\d{9}$/.test(digits) ? digits : null;
+}
+
 const PANEL_CSS = `
 .checkout-pay { transition: background 0.18s var(--ease), transform 0.12s var(--ease); }
 .checkout-pay:not(:disabled):active { transform: scale(0.985); }
@@ -19,8 +32,8 @@ const PANEL_CSS = `
 `;
 
 // Right-hand payment column: pick a provider, then pay. Cashfree runs the real
-// hosted-checkout flow (order → SDK modal → server-side verify); NOWPayments is
-// wired as a stub until its backend lands. PayPal and Stripe render disabled.
+// hosted-checkout flow (order → SDK modal → server-side verify). NOWPayments,
+// PayPal and Stripe render disabled ("coming soon").
 // The provider hosts card entry, so there is no in-app card form here.
 export function PaymentInfoPanel({
   method,
@@ -38,6 +51,27 @@ export function PaymentInfoPanel({
   const [status, setStatus] = useState<PayStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [agreed, setAgreed] = useState(false);
+  // Cashfree requires a real customer phone on every order — it used to be
+  // sent as a hardcoded placeholder, which showed a fake number back to real
+  // paying customers on their own receipt. Remembered across visits (a
+  // contact number, not a secret) so returning to top up doesn't mean
+  // retyping it.
+  const [phone, setPhone] = useState(() =>
+    typeof window === "undefined"
+      ? ""
+      : (window.localStorage.getItem(PHONE_STORAGE_KEY) ?? ""),
+  );
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  const normalizedPhone = normalizePhone(phone);
+  const phoneValid = normalizedPhone !== null;
+
+  const handlePhoneChange = (value: string) => {
+    setPhone(value);
+    if (typeof window !== "undefined") {
+      const n = normalizePhone(value);
+      if (n) window.localStorage.setItem(PHONE_STORAGE_KEY, value);
+    }
+  };
 
   const finish = (creditsUSDOverride?: number) => {
     setStatus("success");
@@ -56,18 +90,27 @@ export function PaymentInfoPanel({
   const selected = PAYMENT_PROVIDERS.find((p) => p.id === method);
   const busy = status === "processing" || cashfree.loading;
   const isSuccess = status === "success";
-  const canPay = !!selected?.enabled && payable && !busy && !isSuccess && agreed;
+  // Cashfree specifically needs a real phone; other providers don't ask for
+  // one, so this gate only applies when that method is selected.
+  const canPay =
+    !!selected?.enabled &&
+    payable &&
+    !busy &&
+    !isSuccess &&
+    agreed &&
+    (method !== "cashfree" || phoneValid);
 
   const handlePay = () => {
     if (!canPay) return;
     setError(null);
     if (method === "cashfree") {
+      if (!normalizedPhone) {
+        setPhoneTouched(true);
+        return;
+      }
       // useCashfreeCheckout owns loading/dismiss; leave status idle so the
       // button reflects the hook's state, not a stuck "processing".
-      cashfree.pay(Math.round(amountINR * 100));
-    } else if (method === "nowpayments") {
-      setStatus("processing");
-      window.setTimeout(finish, 900);
+      cashfree.pay(Math.round(amountINR * 100), normalizedPhone);
     }
   };
 
@@ -79,10 +122,7 @@ export function PaymentInfoPanel({
         ? `Pay ₹${amountINR.toFixed(2)}`
         : "Add an amount to continue";
 
-  const trust =
-    method === "nowpayments"
-      ? "Settled on-chain via NOWPayments"
-      : "Secured by Cashfree · details are encrypted";
+  const trust = "Secured by Cashfree · details are encrypted";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -165,6 +205,55 @@ export function PaymentInfoPanel({
           );
         })}
       </div>
+
+      {/* Cashfree needs a real contact number on the order — shown only for
+          that provider, since others don't ask for one. */}
+      {method === "cashfree" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <label
+            htmlFor="checkout-phone"
+            style={{ fontSize: 12, fontWeight: 500, color: "var(--fg-muted)" }}
+          >
+            Phone number
+          </label>
+          <input
+            id="checkout-phone"
+            type="tel"
+            inputMode="numeric"
+            autoComplete="tel"
+            placeholder="98765 43210"
+            value={phone}
+            onChange={(e) => handlePhoneChange(e.target.value)}
+            onBlur={() => setPhoneTouched(true)}
+            aria-invalid={phoneTouched && !phoneValid}
+            style={{
+              height: 40,
+              padding: "0 12px",
+              borderRadius: "var(--r-2)",
+              border: `1px solid ${
+                phoneTouched && !phoneValid
+                  ? "var(--danger)"
+                  : "var(--border)"
+              }`,
+              background: "var(--bg)",
+              color: "var(--fg)",
+              fontSize: 13,
+              fontFamily: "var(--font-mono)",
+            }}
+          />
+          <span
+            style={{
+              fontSize: 11,
+              color:
+                phoneTouched && !phoneValid ? "var(--danger)" : "var(--fg-dim)",
+            }}
+          >
+            {phoneTouched && !phoneValid
+              ? "Enter a valid 10-digit mobile number."
+              : "Cashfree sends payment confirmations here."}
+          </span>
+        </div>
+      )}
 
       <div style={{ marginTop: "auto" }}>
         {/* Trust signal */}
@@ -293,9 +382,11 @@ export function PaymentInfoPanel({
           <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--fg-dim)", textAlign: "center" }}>
             {!payable
               ? "Your cart is empty."
-              : !agreed
-                ? "Please confirm the credit policy above to continue."
-                : `You'll be redirected to ${selected?.label ?? "the provider"} to complete payment.`}
+              : method === "cashfree" && !phoneValid
+                ? "Enter your phone number above to continue."
+                : !agreed
+                  ? "Please confirm the credit policy above to continue."
+                  : `You'll be redirected to ${selected?.label ?? "the provider"} to complete payment.`}
           </p>
         )}
       </div>

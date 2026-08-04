@@ -2,8 +2,10 @@ package nodes_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -1230,5 +1232,204 @@ func TestParseMaxAmountRequiredAsMicrosRejectsOversizedFloat(t *testing.T) {
 	micros, ok := nodes.ParseMaxAmountRequiredAsMicros(float64(500_000_000)) // $500
 	if !ok || micros != 500_000_000 {
 		t.Fatalf("want ok=true micros=500000000 for a legitimate large quote, got ok=%v micros=%d", ok, micros)
+	}
+}
+
+// runFundedTargetServer is a real 402-then-200 target for the run-funded
+// path: it quotes on an unpaid request and returns body on a paid one.
+func runFundedTargetServer(t *testing.T, body string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") != "" || r.Header.Get("Payment-Signature") != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(body))
+			return
+		}
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"accepts":[{"scheme":"exact","payTo":"TARGETADDR","asset":"10458941","maxAmountRequired":"100000"}]}`))
+	}))
+}
+
+// TestX402RunLevelReportsRunFundingTxID pins the fix for a paid run being
+// completely unauditable from the UI: a run-funded tool call settles no
+// inbound payment of its own (the run's single up-front funding settlement
+// already covered it), so the receipt it produced carried no tx id at all —
+// the console showed "paid" with no explorer link, and the usage page's
+// settlements list stayed permanently empty. The run funding's own tx id is
+// that call's inbound leg and must be reported as such.
+func TestX402RunLevelReportsRunFundingTxID(t *testing.T) {
+	target := runFundedTargetServer(t, `{"data":"real result"}`)
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID:     "test-run-funding-1",
+		RunFundingTxID:   "FUNDINGTXID123",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		ExpectedAssetID:  uint64(10458941),
+		Ledger: nodes.RunLedger(nodes.PaymentLedger{
+			Reserve: func(context.Context, int64) error { return nil },
+			Commit:  func(context.Context, string, int64, string) {},
+			Release: func(context.Context, int64) {},
+		}),
+		Wallet2: nodes.Wallet2PayConfig{
+			USDCSigner:                &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0},
+			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+			USDCAssetID:               uint64(10458941),
+			RelayNetwork:              "algorand:testnet",
+		},
+		RecordSettlement: func(context.Context, string, int64, bool) error { return nil },
+	}
+
+	res, err := nodes.ExecuteTool402V2(context.Background(), node, engine.NewRunContext("r1", nil), models.AgentWallet{}, nil, relayCfg)
+	if err != nil {
+		t.Fatalf("want a successful run-funded call, got %v", err)
+	}
+	if res.TxID != "FUNDINGTXID123" {
+		t.Fatalf("want the run funding tx id reported as this call's inbound leg, got %q", res.TxID)
+	}
+	wantURL := "https://lora.algokit.io/testnet/transaction/FUNDINGTXID123"
+	if res.ExplorerURL != wantURL {
+		t.Fatalf("want explorer URL %q, got %q", wantURL, res.ExplorerURL)
+	}
+	// Merged into the response body too, for the standalone-node console row
+	// that renders the raw response map rather than a payment receipt.
+	m, ok := res.Response.(map[string]any)
+	if !ok {
+		t.Fatalf("want a JSON object response, got %T", res.Response)
+	}
+	if m["txId"] != "FUNDINGTXID123" || m["explorerURL"] != wantURL {
+		t.Fatalf("want txId/explorerURL merged into the response map, got %v", m)
+	}
+	// Decimal USDC, not raw micros: the console parseFloat's this field, so
+	// micros rendered a one-cent call as "10000.000000 paid".
+	if m["amount"] != "0.100000" {
+		t.Fatalf("want amount as decimal USDC %q, got %v", "0.100000", m["amount"])
+	}
+}
+
+// TestX402RunLevelReportsTxIDForNonObjectResponse covers the case the
+// response-map merge alone can never handle: a target answering with a bare
+// JSON array has nowhere to carry sibling fields, so the settlement id has
+// to travel on the result struct or it is lost — which is exactly what the
+// agent-attached path (provider.go's paymentReceipt) reads.
+func TestX402RunLevelReportsTxIDForNonObjectResponse(t *testing.T) {
+	target := runFundedTargetServer(t, `[{"symbol":"ALGO"}]`)
+	defer target.Close()
+
+	node := models.WorkflowNode{ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL}
+	relayCfg := nodes.X402RelayConfig{
+		RunFundingID:     "test-run-funding-1",
+		RunFundingTxID:   "FUNDINGTXID456",
+		RunFundedToolIDs: map[string]bool{"x1": true},
+		ExpectedAssetID:  uint64(31566704), // mainnet USDC
+		Ledger: nodes.RunLedger(nodes.PaymentLedger{
+			Reserve: func(context.Context, int64) error { return nil },
+			Commit:  func(context.Context, string, int64, string) {},
+			Release: func(context.Context, int64) {},
+		}),
+		Wallet2: nodes.Wallet2PayConfig{
+			USDCSigner:                &mockUSDCGroupSigner{group: []string{"g0", "g1"}, idx: 0},
+			PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
+			USDCAssetID:               uint64(10458941),
+			RelayNetwork:              "algorand:testnet",
+		},
+		RecordSettlement: func(context.Context, string, int64, bool) error { return nil },
+	}
+
+	res, err := nodes.ExecuteTool402V2(context.Background(), node, engine.NewRunContext("r1", nil), models.AgentWallet{}, nil, relayCfg)
+	if err != nil {
+		t.Fatalf("want a successful run-funded call, got %v", err)
+	}
+	if res.TxID != "FUNDINGTXID456" {
+		t.Fatalf("want the run funding tx id reported even for a non-object response, got %q", res.TxID)
+	}
+	if res.ExplorerURL != "https://lora.algokit.io/mainnet/transaction/FUNDINGTXID456" {
+		t.Fatalf("want a mainnet explorer URL for the mainnet USDC asset id, got %q", res.ExplorerURL)
+	}
+}
+
+// TestTool402NonPaymentEndpointReceivesConfiguredParams pins the fix for a
+// tool402 node pointed at an endpoint that turns out NOT to require payment.
+// The probe used to send no body at all, and since a non-402 answer makes
+// that probe the node's only request (its response becomes the node's
+// result), every configured param was silently dropped and the target's
+// complaint about the empty request was reported as a successful step.
+// Confirmed live 2026-08-02 against api.scrape402.site/faucet/algo, which
+// answered {"error":"Unexpected end of JSON input"} — its reaction to a
+// bodyless POST, not to anything the node was configured with.
+func TestTool402NonPaymentEndpointReceivesConfiguredParams(t *testing.T) {
+	var gotBody, gotContentType string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody, gotContentType = string(b), r.Header.Get("Content-Type")
+		if len(b) == 0 {
+			// Exactly how the real endpoint behaved: parse an empty body,
+			// fail, and report that instead of doing the work.
+			w.Write([]byte(`{"error":"Unexpected end of JSON input"}`))
+			return
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{
+		ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL, Method: http.MethodPost,
+		CustomParams: []models.CustomParam{{Kind: "text", Name: "url", Value: "https://www.agent-mesh.app/"}},
+	}
+
+	res, err := nodes.ExecuteTool402V2(context.Background(), node, engine.NewRunContext("r1", nil), models.AgentWallet{}, nil, nodes.X402RelayConfig{})
+	if err != nil {
+		t.Fatalf("want the unpaid call to succeed, got %v", err)
+	}
+	if gotBody != `{"url":"https://www.agent-mesh.app/"}` {
+		t.Fatalf("want the configured params sent as the request body, got %q", gotBody)
+	}
+	if gotContentType != "application/json" {
+		t.Fatalf("want a JSON content type alongside the body, got %q", gotContentType)
+	}
+	m, ok := res.Response.(map[string]any)
+	if !ok || m["ok"] != true {
+		t.Fatalf("want the endpoint's real response, not its empty-request complaint, got %#v", res.Response)
+	}
+}
+
+// TestTool402NonPaymentEndpointSendsMultipartContentType covers the same
+// path for a file param: a multipart body carries its boundary in the
+// content type, so the probe hardcoding application/json left the receiver
+// unable to parse a single field.
+func TestTool402NonPaymentEndpointSendsMultipartContentType(t *testing.T) {
+	var gotFile, gotField string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			http.Error(w, "unparseable multipart: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		gotField = r.FormValue("caption")
+		if f, hdr, err := r.FormFile("doc"); err == nil {
+			defer f.Close()
+			gotFile = hdr.Filename
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+
+	node := models.WorkflowNode{
+		ID: "x1", Type: models.NodeTypeTool402, Endpoint: target.URL, Method: http.MethodPost,
+		CustomParams: []models.CustomParam{
+			{Kind: "text", Name: "caption", Value: "hello"},
+			{Kind: "file", Name: "doc", FileName: "report.txt", Value: base64.StdEncoding.EncodeToString([]byte("file contents"))},
+		},
+	}
+
+	res, err := nodes.ExecuteTool402V2(context.Background(), node, engine.NewRunContext("r1", nil), models.AgentWallet{}, nil, nodes.X402RelayConfig{})
+	if err != nil {
+		t.Fatalf("want the unpaid call to succeed, got %v", err)
+	}
+	if gotField != "hello" || gotFile != "report.txt" {
+		t.Fatalf("want the multipart body parseable by the receiver, got field=%q file=%q", gotField, gotFile)
+	}
+	if m, ok := res.Response.(map[string]any); !ok || m["ok"] != true {
+		t.Fatalf("want the endpoint's real response, got %#v", res.Response)
 	}
 }

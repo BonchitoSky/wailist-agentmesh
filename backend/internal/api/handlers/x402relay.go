@@ -18,6 +18,13 @@ import (
 	"github.com/agentmesh/backend/internal/x402"
 )
 
+// maxRelayTargetBodyBytes bounds the body a caller may ask the relay to
+// forward. Sized above what this platform's own nodes can produce -- a
+// workflow's file params are capped at 2 MiB each (nodes.maxParamFileBytes)
+// and several can share one multipart body -- while still refusing to buffer
+// an unbounded upload on a public, unauthenticated route.
+const maxRelayTargetBodyBytes int64 = 16 << 20 // 16 MiB
+
 // X402Relay is the orchestrator's own paid endpoint. It has no fixed price:
 // the price it charges the caller is whatever the target endpoint (given via
 // ?target=) actually charges. This is what makes the relay generic across
@@ -62,15 +69,11 @@ func (d *Deps) X402Relay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// X-Relay-Method/X-Relay-Body tell the relay what to send to TARGET (not
-	// how the caller reaches the relay itself -- that's always this same GET
-	// with ?target=, unchanged). Real x402 endpoints are not guaranteed to
-	// be GET-compatible (a POST-only resource can 404 a bare GET before it
-	// ever considers payment state), so the relay needs to know. Body goes
-	// in a header, base64-encoded, rather than the query string: request
-	// bodies can exceed URLs' practical length limits, while headers hold
-	// far more (net/http's default MaxHeaderBytes is 1MB) — same pattern
-	// X-Payment and Payment-Required already use in this file.
+	// X-Relay-Method tells the relay what to send to TARGET (not how the
+	// caller reaches the relay itself -- that is this route's own method and
+	// carries no meaning for the target). Real x402 endpoints are not
+	// guaranteed to be GET-compatible (a POST-only resource can 404 a bare
+	// GET before it ever considers payment state), so the relay needs to know.
 	targetMethod := r.Header.Get("X-Relay-Method")
 	if targetMethod == "" {
 		targetMethod = http.MethodGet
@@ -81,21 +84,48 @@ func (d *Deps) X402Relay(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusBadRequest, "unsupported X-Relay-Method: "+targetMethod)
 		return
 	}
+	// The body destined for the target arrives as this request's own body.
+	// It used to arrive base64-encoded in X-Relay-Body, on the reasoning that
+	// net/http allows 1MB of headers -- but our own server's limit is not the
+	// binding one. Every proxy in front of it caps headers far lower, so a
+	// file param (multipart, easily >100KB) never made it here at all: the
+	// connection was dropped upstream before this handler ran (confirmed live
+	// 2026-08-03, a 138KB PDF to prism-99h2.onrender.com). The header is
+	// still read as a fallback so a caller that predates this change keeps
+	// working for the small bodies it could actually deliver.
 	var targetBody []byte
-	if b64 := r.Header.Get("X-Relay-Body"); b64 != "" {
-		decoded, err := base64.StdEncoding.DecodeString(b64)
+	if r.Body != nil {
+		decoded, err := io.ReadAll(io.LimitReader(r.Body, maxRelayTargetBodyBytes+1))
 		if err != nil {
-			respond.Error(w, http.StatusBadRequest, "invalid X-Relay-Body: "+err.Error())
+			respond.Error(w, http.StatusBadRequest, "could not read the target request body: "+err.Error())
+			return
+		}
+		if int64(len(decoded)) > maxRelayTargetBodyBytes {
+			respond.Error(w, http.StatusRequestEntityTooLarge, "target request body exceeds the relay's limit")
 			return
 		}
 		targetBody = decoded
 	}
+	if len(targetBody) == 0 {
+		if b64 := r.Header.Get("X-Relay-Body"); b64 != "" {
+			decoded, err := base64.StdEncoding.DecodeString(b64)
+			if err != nil {
+				respond.Error(w, http.StatusBadRequest, "invalid X-Relay-Body: "+err.Error())
+				return
+			}
+			targetBody = decoded
+		}
+	}
+	// How targetBody is encoded. Only the caller knows — a multipart body's
+	// content type carries the boundary token generated when it was built,
+	// which cannot be reconstructed here.
+	targetContentType := r.Header.Get("X-Relay-Content-Type")
 
 	if !hasPayment {
-		d.relayInboundChallenge(w, r, target, targetMethod, targetBody)
+		d.relayInboundChallenge(w, r, target, targetMethod, targetBody, targetContentType)
 		return
 	}
-	d.relaySettleAndForward(w, r, target, xPayment, targetMethod, targetBody)
+	d.relaySettleAndForward(w, r, target, xPayment, targetMethod, targetBody, targetContentType)
 }
 
 // incomingPaymentJSON reads the caller's payment off whichever header they
@@ -385,7 +415,7 @@ type targetPriceQuote struct {
 // second time, draining the platform wallet for more than was ever collected
 // from the caller. relaySettleAndForward fetches the quote exactly once per
 // relay cycle and passes that same value into payTargetAndRespond.
-func fetchTargetPriceQuote(ctx context.Context, target, method string, body []byte) (targetPriceQuote, error) {
+func fetchTargetPriceQuote(ctx context.Context, target, method string, body []byte, contentType string) (targetPriceQuote, error) {
 	var bodyReader io.Reader
 	if method != http.MethodGet && len(body) > 0 {
 		bodyReader = bytes.NewReader(body)
@@ -395,7 +425,10 @@ func fetchTargetPriceQuote(ctx context.Context, target, method string, body []by
 		return targetPriceQuote{}, err
 	}
 	if bodyReader != nil {
-		req.Header.Set("Content-Type", "application/json")
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		req.Header.Set("Content-Type", contentType)
 	}
 	resp, err := nodes.SafeHTTPClient().Do(req)
 	if err != nil {
@@ -581,8 +614,8 @@ func bazaarDiscoveryExtension(target string) map[string]any {
 // relayInboundChallenge fetches the target's real 402 price and mirrors it
 // back as our own v2 challenge, tagged for the challenge and paid to our
 // platform wallet instead of the target's.
-func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, target, targetMethod string, targetBody []byte) {
-	quote, err := fetchTargetPriceQuote(r.Context(), target, targetMethod, targetBody)
+func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, target, targetMethod string, targetBody []byte, targetContentType string) {
+	quote, err := fetchTargetPriceQuote(r.Context(), target, targetMethod, targetBody, targetContentType)
 	if err != nil {
 		respond.Error(w, http.StatusBadGateway, "target fetch failed: "+err.Error())
 		return
@@ -664,7 +697,7 @@ func (d *Deps) relayInboundChallenge(w http.ResponseWriter, r *http.Request, tar
 // pays the real target from the platform wallet, then relays the target's
 // paid response back. Both settlements are real, GoPlausible-facilitated,
 // mainnet payments — this is what earns orchestrator-entry attribution.
-func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, target, xPaymentHeader, targetMethod string, targetBody []byte) {
+func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, target, xPaymentHeader, targetMethod string, targetBody []byte, targetContentType string) {
 	ctx := r.Context()
 
 	var payload x402.PaymentPayload
@@ -678,7 +711,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 	// facilitator actually enforces the quoted price instead of trusting
 	// whatever the caller's payment payload claims) and what lets us record
 	// the real settled amount in the ledger instead of a hardcoded 0.
-	quote, err := fetchTargetPriceQuote(ctx, target, targetMethod, targetBody)
+	quote, err := fetchTargetPriceQuote(ctx, target, targetMethod, targetBody, targetContentType)
 	if err != nil {
 		respond.Error(w, http.StatusBadGateway, "target fetch failed: "+err.Error())
 		return
@@ -788,7 +821,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 		return
 	}
 
-	d.payTargetAndRespond(w, r, target, ledgerRow.ID, settleResult.TxID, quote, targetMethod, targetBody)
+	d.payTargetAndRespond(w, r, target, ledgerRow.ID, settleResult.TxID, quote, targetMethod, targetBody, targetContentType)
 }
 
 // payTargetAndRespond pays the real target from the platform wallet via the
@@ -817,7 +850,7 @@ func (d *Deps) relaySettleAndForward(w http.ResponseWriter, r *http.Request, tar
 // current architecture (the relay pays the target directly rather than via
 // a second facilitator round-trip from our side), not an oversight, and not
 // something to paper over with a fabricated id.
-func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, target, ledgerID, inboundTxID string, quote targetPriceQuote, targetMethod string, targetBody []byte) {
+func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, target, ledgerID, inboundTxID string, quote targetPriceQuote, targetMethod string, targetBody []byte, targetContentType string) {
 	ctx := r.Context()
 
 	cfg := nodes.Wallet2PayConfig{
@@ -826,6 +859,7 @@ func (d *Deps) payTargetAndRespond(w http.ResponseWriter, r *http.Request, targe
 		USDCAssetID:               d.USDCAssetID,
 		RelayNetwork:              d.RelayNetwork,
 		MaxRelayOutboundUSDMicros: d.MaxRelayOutboundUSDMicros,
+		ContentType:               targetContentType,
 	}
 	result, err := nodes.PayTargetFromWallet2(ctx, cfg, target, targetMethod, targetBody, nodes.TargetQuote{
 		PayTo: quote.PayTo, Asset: quote.Asset, MaxAmountRequired: quote.MaxAmountRequired, FeePayer: quote.FeePayer,
