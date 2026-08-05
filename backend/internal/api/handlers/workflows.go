@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -95,11 +96,18 @@ func (d *Deps) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
 		// released) can't be silently destroyed along with the only copy
 		// of an active lease's encrypted credentials. Surface that as a
 		// clear 409, not the raw Postgres constraint-violation message.
-		if strings.Contains(err.Error(), "tendril_leases_workflow_id_fkey") {
+		// Both tendril_leases FKs are RESTRICT: workflow_id fires when the
+		// workflow itself is deleted, run_id when the cascade reaches its runs.
+		if strings.Contains(err.Error(), "tendril_leases_workflow_id_fkey") ||
+			strings.Contains(err.Error(), "tendril_leases_run_id_fkey") {
 			respond.Error(w, http.StatusConflict, "this workflow has Tendril machine lease history and can't be deleted")
 			return
 		}
-		respond.Error(w, http.StatusInternalServerError, err.Error())
+		// Anything else is ours to fix, not the user's to read: a raw driver
+		// message (constraint names, SQLSTATE) was being rendered straight into
+		// the workflows list.
+		log.Printf("delete workflow %s: %v", id, err)
+		respond.Error(w, http.StatusInternalServerError, "could not delete this workflow")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

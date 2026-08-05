@@ -33,6 +33,23 @@ func main() {
 	}
 	defer store.Close()
 
+	// Coupon catalog is configuration: COUPON_CODES="CODE:5,OTHER:12.50" (amounts
+	// in USD). Unset means no redeemable codes at all, which is the safe default —
+	// a code only grants credits while it's listed here. A malformed spec is fatal
+	// rather than partially applied, so a typo can't silently disable one code in a
+	// campaign while the rest stay live.
+	couponSpec := os.Getenv("COUPON_CODES")
+	catalog, err := db.ParseCouponCatalog(couponSpec)
+	if err != nil {
+		log.Fatalf("COUPON_CODES: %v", err)
+	}
+	store.SetCouponCatalog(catalog)
+	if len(catalog) == 0 {
+		log.Printf("no coupon codes configured (COUPON_CODES unset) — coupon redemption will reject every code")
+	} else {
+		log.Printf("coupon catalog loaded: %d code(s)", len(catalog))
+	}
+
 	broker := sse.NewBroker()
 
 	walletSvc := wallet.NewService(
