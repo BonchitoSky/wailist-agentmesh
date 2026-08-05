@@ -80,6 +80,18 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Get("/usage/by-workflow", d.UsageByWorkflow)
 		r.Get("/usage/by-endpoint", d.UsageByEndpoint)
 		r.Get("/usage/settlements", d.UsageSettlements)
+
+		r.Get("/tendril/machines", d.TendrilMachines)
+		r.Get("/tendril/credits", d.TendrilCredits)
+		r.Get("/tendril/console", d.TendrilConsoleWorkflow)
+		r.Get("/tendril/console/exists", d.TendrilConsoleWorkflowExists)
+		r.Post("/tendril/topup", d.TendrilConsoleTopup)
+		r.Post("/tendril/rent", d.TendrilConsoleRent)
+		r.Post("/tendril/run", d.TendrilConsoleRun)
+		r.Get("/leases", d.ListLeases)
+		r.Post("/leases/{id}/release", d.ReleaseLease)
+		r.Get("/leases/{id}/key", d.DownloadLeaseKey)
+		r.Get("/leases/{id}/terminal", d.LeaseTerminal)
 	})
 
 	return r

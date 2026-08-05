@@ -11,6 +11,7 @@ import {
   TOOL402_TEMPLATES,
   ACTION_TEMPLATES,
   END_TEMPLATES,
+  TENDRIL_TEMPLATES,
 } from "@/lib/data";
 import { IconSearch } from "@/components/ui";
 
@@ -87,6 +88,23 @@ const PALETTE_TABS = [
     }),
   },
   {
+    id: "tendril",
+    label: "Tendril",
+    items: () => TENDRIL_TEMPLATES,
+    type: "tendril",
+    dotColor: "magenta" as const,
+    map: (it: (typeof TENDRIL_TEMPLATES)[0]): Partial<WorkflowNode> => ({
+      type: "tendril",
+      template: it.id,
+      name: it.name,
+      icon: it.icon,
+      sub: it.desc,
+      tendrilAction: it.action,
+      tendrilHours: "1",
+      tendrilAmount: "10",
+    }),
+  },
+  {
     id: "actions",
     label: "Actions",
     items: () => ACTION_TEMPLATES,
@@ -155,6 +173,16 @@ const CREATE_META: Record<string, Partial<WorkflowNode>> = {
     name: "New x402 Endpoint",
     icon: "✦",
     sub: "paste URL · auto-price",
+  },
+  tendril: {
+    type: "tendril",
+    custom: true,
+    name: "Custom Tendril",
+    icon: "▣",
+    sub: "rent · run · release",
+    tendrilAction: "rent",
+    tendrilHours: "1",
+    tendrilAmount: "10",
   },
   actions: {
     type: "action",

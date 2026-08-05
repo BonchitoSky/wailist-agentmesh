@@ -66,7 +66,7 @@ func TestPaymentLedgerCommitAndReleaseSurviveCancelledContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), nil, "", "", X402Config{USDCAssetID: 10458941})
+	r := NewRunner(store, sse.NewBroker(), nil, "", "", "", X402Config{USDCAssetID: 10458941})
 	ledger := r.newPaymentLedger(wf, run)
 
 	if err := ledger.Reserve(context.Background(), 250_000); err != nil {
@@ -160,7 +160,7 @@ func TestRecordRunFundedSettlementSurvivesCancelledContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{USDCAssetID: 10458941})
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{USDCAssetID: 10458941})
 
 	recordSettlement := r.newRecordSettlement(wf, run, funding.ID)
 
@@ -194,10 +194,15 @@ func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentGroup(_ context.Context, _,
 	return []string{"g0", "g1"}, 0, nil
 }
 
+// SignUSDCPaymentSingle must also be implemented -- see fakeRelaySigner's
+// identical doc comment in runner_stop_test.go for why a missing method
+// here silently degrades every test using this fake to the no-fund path.
 func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentSingle(_ context.Context, _, _ string, _, _ uint64) ([]string, int, error) {
-	return []string{"s0"}, 0, nil
+	return []string{"g0"}, 0, nil
 }
 
+// Compile-time check, matching fakeRelaySigner's identical assertion in
+// runner_stop_test.go.
 var _ nodes.USDCGroupSigner = (*fakeUSDCSignerForLedgerTest)(nil)
 
 // TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFails
@@ -282,7 +287,7 @@ func TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFa
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID:               10458941,
 		PlatformWalletAddress:     "PLATFORMADDR",
 		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -432,7 +437,7 @@ func TestReserveAndFundRunRejectsOutOfRangeQuote(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID:               10458941,
 		PlatformWalletAddress:     "PLATFORMADDR",
 		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -480,7 +485,7 @@ func TestReserveAndFundRunRejectsOutOfRangeQuoteNoDatabase(t *testing.T) {
 	}))
 	defer facilitator.Close()
 
-	r := NewRunner(nil, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(nil, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID:               10458941,
 		PlatformWalletAddress:     "PLATFORMADDR",
 		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -580,7 +585,7 @@ func TestReserveAndFundRunHoldsReservationOnIndeterminateSettle(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID:               10458941,
 		PlatformWalletAddress:     "PLATFORMADDR",
 		PlatformWalletEncMnemonic: "platform-wallet-enc-mnemonic",
@@ -663,7 +668,7 @@ func TestReserveAndFundRunDegradesGracefullyWithNilFacilitator(t *testing.T) {
 	// (both already-checked fields), but FacilitatorClient left nil and
 	// PlatformWalletAddress left empty -- the two fields the existing guard
 	// doesn't check.
-	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", X402Config{
+	r := NewRunner(store, sse.NewBroker(), &fakeUSDCSignerForLedgerTest{}, "http://localhost:65535", "platform-spend-enc-mnemonic", "", X402Config{
 		USDCAssetID: 10458941,
 	})
 

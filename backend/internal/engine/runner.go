@@ -17,6 +17,7 @@ import (
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/tendril"
 	"github.com/agentmesh/backend/internal/x402"
 )
 
@@ -47,8 +48,11 @@ type Runner struct {
 	registry                 *runRegistry
 	relayBaseURL             string
 	platformSpendEncMnemonic string
+	encryptionKey            string
 	x402                     X402Config
 	platformKeys             map[string]string
+	tendrilClient            *tendril.Client
+	tendrilSession           *tendril.Session
 }
 
 func NewRunner(
@@ -57,6 +61,7 @@ func NewRunner(
 	walletSvc nodes.WalletSigner,
 	relayBaseURL string,
 	platformSpendEncMnemonic string,
+	encryptionKey string,
 	x402Cfg X402Config,
 ) *Runner {
 	return &Runner{
@@ -66,6 +71,7 @@ func NewRunner(
 		registry:                 newRunRegistry(),
 		relayBaseURL:             relayBaseURL,
 		platformSpendEncMnemonic: platformSpendEncMnemonic,
+		encryptionKey:            encryptionKey,
 		x402:                     x402Cfg,
 	}
 }
@@ -77,6 +83,14 @@ func NewRunner(
 // harness and any deployment that hasn't configured PLATFORM_*_API_KEY.
 func (r *Runner) SetPlatformKeys(keys map[string]string) {
 	r.platformKeys = keys
+}
+
+// SetTendril supplies the Tendril registry client and the Wallet 2 session
+// that reads the shared credit pool. Left nil when TENDRIL_REGISTRY_URL is
+// unset, in which case tendril nodes fail closed.
+func (r *Runner) SetTendril(client *tendril.Client, session *tendril.Session) {
+	r.tendrilClient = client
+	r.tendrilSession = session
 }
 
 // preflightCheck fails a node before it runs if wf.UserID can't cover
@@ -880,6 +894,35 @@ func (r *Runner) executeNode(
 		// Already reserved+committed via ledger inside ExecuteTool402V2, at
 		// the moment the payment settled — see newPaymentLedger.
 		return paymentResult.Response, nil
+	case models.NodeTypeTendril:
+		if r.tendrilClient == nil || r.tendrilSession == nil {
+			return nil, fmt.Errorf("tendril: TENDRIL_REGISTRY_URL is not configured on this server")
+		}
+		// Same conservative pre-flight as tool402: one cheap balance check
+		// before any network call that could spend money.
+		if err := r.preflightCheck(ctx, wf, models.X402PlatformFeeUSDMicros); err != nil {
+			return nil, err
+		}
+		usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
+		ledger := r.newPaymentLedger(wf, run)
+		return nodes.ExecuteTendril(ctx, node, rc, nodes.TendrilConfig{
+			Client:     r.tendrilClient,
+			Session:    r.tendrilSession,
+			Store:      r.store,
+			EncryptKey: r.encryptionKey,
+			UserID:     wf.UserID,
+			WorkflowID: wf.ID,
+			RunID:      run.ID,
+			Relay: nodes.X402RelayConfig{
+				USDCSigner:               usdcSigner,
+				PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
+				ExpectedAssetID:          r.x402.USDCAssetID,
+				RelayBaseURL:             r.relayBaseURL,
+				Ledger:                   nodes.RunLedger(ledger),
+				LegacyLedger:             nodes.CallLedger(ledger),
+				PerCallLedger:            nodes.CallLedger(ledger),
+			},
+		})
 	case models.NodeTypeAction:
 		billable := nodes.BillableFlatFee(node.Type, node.Template)
 		if billable {

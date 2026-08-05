@@ -288,10 +288,23 @@ function UsageBody({
   const { timeseries, byWorkflow, byEndpoint } = data;
   const { balanceUSD, refreshBalance } = useCredits();
   const [localSettlements, setLocalSettlements] = useState<Settlement[]>([]);
-  // Settlements come from the local per-user record rather than the API: the
-  // server has no way to scope x402_relay_settlements to a user yet (no
-  // user_id column), so /usage/settlements deliberately returns nothing.
-  const settlements = localSettlements;
+  const [tendrilSettlements, setTendrilSettlements] = useState<Settlement[]>(
+    [],
+  );
+  // Two sources, merged: workflow-run x402 payments come from the local
+  // per-user record (the server still can't scope x402_relay_settlements to
+  // a user — no user_id column on that table). Tendril top-ups aren't a
+  // workflow run at all (they're the console's direct-action button), but
+  // they DO land in a ledger that's scoped to a user from the moment it's
+  // written (tendril_credit_ledger), so /usage/settlements can report those
+  // honestly — see usage.go's UsageSettlements doc comment.
+  const settlements = useMemo(
+    () =>
+      [...tendrilSettlements, ...localSettlements].sort(
+        (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime(),
+      ),
+    [tendrilSettlements, localSettlements],
+  );
   // Read after mount and only for the signed-in user, so another account's
   // history in the same browser is never shown.
   useEffect(() => {
@@ -303,6 +316,20 @@ function UsageBody({
       })
       .catch(() => {
         /* signed out: leave the panel empty */
+      });
+    return () => {
+      stale = true;
+    };
+  }, []);
+  useEffect(() => {
+    let stale = false;
+    usageApi
+      .settlements(18)
+      .then((rows) => {
+        if (!stale) setTendrilSettlements(rows);
+      })
+      .catch(() => {
+        /* transient failure: leave whatever loaded last */
       });
     return () => {
       stale = true;
@@ -757,7 +784,7 @@ function UsageBody({
                   whiteSpace: "nowrap",
                 }}
               >
-                {s.workflowId}
+                {s.workflowId || "—"}
               </span>
               <span style={{ color: "var(--fg)", textAlign: "right" }}>
                 {s.amountAlgo.toFixed(6)}{" "}

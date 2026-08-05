@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pill } from "@/components/ui";
 import {
   runs as runsApi,
@@ -7,6 +7,7 @@ import {
   type RunLogRecord,
 } from "@/lib/api";
 import { recordSettlements } from "@/lib/settlements";
+import { TerminalTab } from "./TerminalTab";
 
 interface LogEvent {
   stepIndex: number;
@@ -137,6 +138,7 @@ export function LogDrawer({
   const [done, setDone] = useState(!!cached);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [resizing, setResizing] = useState(false);
+  const [tab, setTab] = useState<"logs" | "terminal">("logs");
   const esRef = useRef<EventSource | null>(null);
   const startRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -401,6 +403,31 @@ export function LogDrawer({
     return "RUN";
   };
 
+  // Detect the lease a Tendril rent step in this run opened, so the console
+  // can offer a Terminal tab into it. Takes the most recent one — a run
+  // renting two machines would need explicit lease-id wiring between nodes,
+  // out of scope here (see the plan's "Multiple concurrent leases per run").
+  const leaseId = useMemo(() => {
+    for (let i = logs.length - 1; i >= 0; i--) {
+      const output = logs[i].output;
+      if (
+        logs[i].nodeType === "tendril" &&
+        typeof output === "object" &&
+        output !== null &&
+        "agentMeshLeaseId" in output
+      ) {
+        const id = (output as { agentMeshLeaseId?: unknown }).agentMeshLeaseId;
+        if (typeof id === "string" && id) return id;
+      }
+    }
+    return null;
+  }, [logs]);
+
+  // A run that stops offering a lease (a fresh run with no Tendril step)
+  // must not leave the console stuck on a dead Terminal tab — derived at
+  // render time rather than synced back via an effect.
+  const effectiveTab = leaseId ? tab : "logs";
+
   const elapsedStr = (elapsed ?? 0).toFixed(1);
   const headerPill = runId
     ? done
@@ -500,6 +527,33 @@ export function LogDrawer({
               {logs.length} step{logs.length !== 1 ? "s" : ""}
             </span>
           )}
+          {leaseId && open && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ display: "flex", gap: 4 }}
+            >
+              {(["logs", "terminal"] as const).map((tb) => (
+                <button
+                  key={tb}
+                  onClick={() => setTab(tb)}
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 9.5,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    border: `1px solid ${tab === tb ? "var(--accent)" : "var(--border)"}`,
+                    color: tab === tb ? "var(--accent)" : "var(--fg-dim)",
+                    background: "transparent",
+                    cursor: "pointer",
+                  }}
+                >
+                  {tb === "logs" ? "Logs" : "Terminal"}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <span
           style={{
@@ -518,10 +572,21 @@ export function LogDrawer({
         </span>
       </div>
 
-      {/* Log lines */}
+      {/* Terminal — mounted only while selected; unmounting on tab switch
+          away is intentional (it owns a live WebSocket + SSH session, unlike
+          the log list which is cheap to keep mounted underneath). */}
+      {open && effectiveTab === "terminal" && leaseId && (
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <TerminalTab leaseId={leaseId} onClose={() => setTab("logs")} />
+        </div>
+      )}
+
+      {/* Log lines. Stays mounted (hidden via CSS) when the Terminal tab is
+          active, so switching back does not lose the transcript. */}
       {open && (
         <div
           style={{
+            display: effectiveTab === "terminal" ? "none" : "block",
             flex: 1,
             overflow: "auto",
             padding: "6px 14px 10px",

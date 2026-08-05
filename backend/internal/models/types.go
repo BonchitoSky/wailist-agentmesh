@@ -13,6 +13,7 @@ const (
 	NodeTypeTool402  NodeType = "tool402"
 	NodeTypeAction   NodeType = "action"
 	NodeTypeEnd      NodeType = "end"
+	NodeTypeTendril  NodeType = "tendril"
 )
 
 const (
@@ -115,7 +116,7 @@ type WorkflowNode struct {
 	// referenced from here rather than uploaded separately, since the whole
 	// point of this mode is bodies where a file is one field among others.
 	BodyTemplate string `json:"bodyTemplate,omitempty"`
-	Description  string        `json:"description,omitempty"`
+	Description  string `json:"description,omitempty"`
 	// Secrets holds per-connector credential values for connectors added after the
 	// original dedicated fields (APIKey, EmailAPIKey, ...). Each value is encrypted
 	// independently, exactly like EmailAPIKey, via encryptNodes/maskNodes/decryptNodes.
@@ -123,6 +124,20 @@ type WorkflowNode struct {
 	// Config holds per-connector non-secret settings (list IDs, project keys, channel
 	// names, etc.) for the same connectors. Never encrypted.
 	Config map[string]string `json:"config,omitempty"`
+	// Tendril node fields. TendrilAction is "topup" | "rent" | "run" | "release";
+	// TendrilHours is how many hours of credit to guarantee before renting,
+	// as a decimal string ("1", "2", "0.5") — a string, like every other
+	// canvas-entered value on this struct.
+	TendrilAction string `json:"tendrilAction,omitempty"`
+	TendrilNodeID string `json:"tendrilNodeId,omitempty"`
+	TendrilHours  string `json:"tendrilHours,omitempty"`
+	// TendrilAmount is USD of AgentMesh credit to convert into Tendril
+	// credit, on a topup node.
+	TendrilAmount string `json:"tendrilAmount,omitempty"`
+	// TendrilLeaseToken is a bearer the TARGET needs, carried to the relay
+	// out of band. Never persisted on a saved workflow — it is only ever set
+	// on the synthesized nodes payTendril builds at call time.
+	TendrilLeaseToken string `json:"-"`
 }
 
 type WorkflowEdge struct {
@@ -280,6 +295,61 @@ const (
 	DebitKindX402PlatformFee   = "x402_platform_fee"
 	DebitKindX402RelayCost     = "x402_relay_cost"
 	DebitKindPlatformKeyLLMFee = "platform_key_llm_fee"
+	DebitKindTendrilLease      = "tendril_lease"
+)
+
+// TendrilLease is one rented Tendril machine. A lease deliberately outlives
+// the run that opened it: a workflow run finishes in seconds while the machine
+// meters for hours, so this is a first-class AgentMesh resource with its own
+// release lifecycle rather than run-scoped state.
+type TendrilLease struct {
+	ID         string `json:"id"`
+	UserID     string `json:"userId"`
+	WorkflowID string `json:"workflowId"`
+	RunID      string `json:"runId"`
+	NodeID     string `json:"nodeId"`
+
+	LeaseID          string `json:"leaseId"`
+	LeaseTokenEnc    string `json:"-"`
+	TendrilNodeID    string `json:"tendrilNodeId"`
+	TendrilNodeLabel string `json:"tendrilNodeLabel"`
+
+	SSHHost          string `json:"sshHost"`
+	SSHPort          int    `json:"sshPort"`
+	SSHUsername      string `json:"sshUsername"`
+	SSHCommand       string `json:"sshCommand"`
+	SSHPublicKey     string `json:"sshPublicKey"`
+	SSHPrivateKeyEnc string `json:"-"`
+	SSHPasswordEnc   string `json:"-"`
+
+	RateUSDMicrosPerHour int64      `json:"rateUsdMicrosPerHour"`
+	HoursPurchased       float64    `json:"hoursPurchased"`
+	ReservedUSDMicros    int64      `json:"reservedUsdMicros"`
+	ChargedUSDMicros     *int64     `json:"chargedUsdMicros,omitempty"`
+	UsedSeconds          *int64     `json:"usedSeconds,omitempty"`
+	Status               string     `json:"status"`
+	StartedAt            time.Time  `json:"startedAt"`
+	FundedUntil          time.Time  `json:"fundedUntil"`
+	ReleasedAt           *time.Time `json:"releasedAt,omitempty"`
+}
+
+// TendrilCreditEntry is one row of the append-only tendril_credit_ledger
+// table — a movement of a single user's Tendril credit sub-ledger, distinct
+// from and never checked against the shared Wallet 2 pool balance.
+type TendrilCreditEntry struct {
+	ID              string    `json:"id"`
+	UserID          string    `json:"userId"`
+	Kind            string    `json:"kind"`
+	AmountUSDMicros int64     `json:"amountUsdMicros"`
+	LeaseID         *string   `json:"leaseId,omitempty"`
+	TxID            *string   `json:"txId,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
+const (
+	TendrilCreditKindTopup  = "topup"  // AgentMesh credits -> Tendril credits
+	TendrilCreditKindCharge = "charge" // Tendril credits -> compute
+	TendrilCreditKindRefund = "refund" // unused reservation returned
 )
 
 const (

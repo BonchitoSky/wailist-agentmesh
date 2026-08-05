@@ -55,6 +55,67 @@ func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models
 	return w, nil
 }
 
+// FindSystemWorkflow is GetOrCreateSystemWorkflow's read-only half: looks
+// up this user's workflow row with the given name WITHOUT creating one if
+// it's missing. found is false, with a zero Workflow, when there's nothing
+// to find yet -- that is a normal, expected outcome for a user who has
+// never triggered the system workflow's creation, not an error condition.
+//
+// Exists specifically for callers that need to know "is THIS id the system
+// workflow" (e.g. WorkflowRoute deciding whether to render the Tendril
+// console instead of the canvas for a given workflowId) without the side
+// effect of silently creating a hidden row the moment they check -- every
+// workflow-page visit calling GetOrCreateSystemWorkflow instead would mint
+// an empty "Tendril Console" row for every user who has never touched
+// Tendril, the instant they open ANY of their own workflows.
+func (s *Store) FindSystemWorkflow(ctx context.Context, userID, name string) (w models.Workflow, found bool, err error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
+		FROM workflows WHERE user_id = $1 AND name = $2 ORDER BY created_at ASC LIMIT 1
+	`, userID, name)
+	if err != nil {
+		return models.Workflow{}, false, err
+	}
+	for rows.Next() {
+		var graphJSON []byte
+		var runEndpoint *string
+		if err := rows.Scan(
+			&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
+			&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
+		); err != nil {
+			rows.Close()
+			return models.Workflow{}, false, err
+		}
+		if runEndpoint != nil {
+			w.RunEndpoint = *runEndpoint
+		}
+		unmarshalGraph(graphJSON, &w)
+		found = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return models.Workflow{}, false, err
+	}
+	return w, found, nil
+}
+
+// GetOrCreateSystemWorkflow returns this user's workflow row with the given
+// name, creating it if it doesn't exist yet. Backs direct-action UIs (the
+// Tendril console) that never show a canvas but still need a real
+// workflow_id/run_id pair for the engine's node executors and the FK
+// constraints on rows like tendril_leases. Use FindSystemWorkflow instead
+// when a missing row should mean "not found", not "create one now".
+func (s *Store) GetOrCreateSystemWorkflow(ctx context.Context, userID, name string) (models.Workflow, error) {
+	w, found, err := s.FindSystemWorkflow(ctx, userID, name)
+	if err != nil {
+		return models.Workflow{}, err
+	}
+	if found {
+		return w, nil
+	}
+	return s.CreateWorkflow(ctx, name, userID)
+}
+
 func (s *Store) GetWorkflow(ctx context.Context, id string) (models.Workflow, error) {
 	var w models.Workflow
 	var graphJSON []byte
@@ -582,6 +643,13 @@ func (s *Store) GetCreditBalance(ctx context.Context, userID string) (int64, err
 	return balance, err
 }
 
+// CreditBalance is a thin alias for GetCreditBalance, named to match
+// nodes.TendrilStore's method set (TendrilCreditBalance/CreditBalance read
+// as a pair there) without a second implementation of the same query.
+func (s *Store) CreditBalance(ctx context.Context, userID string) (int64, error) {
+	return s.GetCreditBalance(ctx, userID)
+}
+
 // --- Coupons ---
 
 // CouponAmountsUSDMicros is the fixed catalog of redeemable coupon codes. Each
@@ -949,4 +1017,134 @@ func (s *Store) ListX402RelaySettlementsByRunFunding(ctx context.Context, runFun
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+const tendrilLeaseCols = `id, user_id, workflow_id, run_id, node_id, lease_id,
+	lease_token_enc, tendril_node_id, tendril_node_label, ssh_host, ssh_port,
+	ssh_username, ssh_command, ssh_public_key, ssh_private_key_enc,
+	ssh_password_enc, rate_usd_micros_per_hour, hours_purchased,
+	reserved_usd_micros, charged_usd_micros, used_seconds, status, started_at,
+	funded_until, released_at`
+
+func scanTendrilLease(row pgx.Row) (models.TendrilLease, error) {
+	var l models.TendrilLease
+	err := row.Scan(&l.ID, &l.UserID, &l.WorkflowID, &l.RunID, &l.NodeID, &l.LeaseID,
+		&l.LeaseTokenEnc, &l.TendrilNodeID, &l.TendrilNodeLabel, &l.SSHHost, &l.SSHPort,
+		&l.SSHUsername, &l.SSHCommand, &l.SSHPublicKey, &l.SSHPrivateKeyEnc,
+		&l.SSHPasswordEnc, &l.RateUSDMicrosPerHour, &l.HoursPurchased,
+		&l.ReservedUSDMicros, &l.ChargedUSDMicros, &l.UsedSeconds, &l.Status,
+		&l.StartedAt, &l.FundedUntil, &l.ReleasedAt)
+	return l, err
+}
+
+func (s *Store) InsertTendrilLease(ctx context.Context, l models.TendrilLease) (models.TendrilLease, error) {
+	return scanTendrilLease(s.pool.QueryRow(ctx, `
+		INSERT INTO tendril_leases (user_id, workflow_id, run_id, node_id, lease_id,
+			lease_token_enc, tendril_node_id, tendril_node_label, ssh_host, ssh_port,
+			ssh_username, ssh_command, ssh_public_key, ssh_private_key_enc,
+			ssh_password_enc, rate_usd_micros_per_hour, hours_purchased,
+			reserved_usd_micros, funded_until)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+		RETURNING `+tendrilLeaseCols,
+		l.UserID, l.WorkflowID, l.RunID, l.NodeID, l.LeaseID, l.LeaseTokenEnc,
+		l.TendrilNodeID, l.TendrilNodeLabel, l.SSHHost, l.SSHPort, l.SSHUsername,
+		l.SSHCommand, l.SSHPublicKey, l.SSHPrivateKeyEnc, l.SSHPasswordEnc,
+		l.RateUSDMicrosPerHour, l.HoursPurchased, l.ReservedUSDMicros, l.FundedUntil))
+}
+
+func (s *Store) GetTendrilLease(ctx context.Context, id string) (models.TendrilLease, error) {
+	return scanTendrilLease(s.pool.QueryRow(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases WHERE id = $1`, id))
+}
+
+func (s *Store) ListActiveTendrilLeases(ctx context.Context, userID string) ([]models.TendrilLease, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE user_id = $1 AND status = 'active' ORDER BY started_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TendrilLease
+	for rows.Next() {
+		l, err := scanTendrilLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// ListExpiredTendrilLeases feeds the reaper. Reaps on started_at +
+// hours_purchased -- the window THIS renter actually paid for -- not
+// funded_until, which reflects how long Tendril's shared pool wallet (every
+// AgentMesh user's topups combined) could fund the machine at its rate.
+// funded_until is almost always far more than any one user bought (confirmed
+// live: a 1-hour rent showed a ~2-hour funded_until), so reaping on it let a
+// renter keep metering against the shared pool, for free, well past their
+// own paid window -- worse the healthier the pool's balance, since that's
+// exactly what stretches funded_until further from what was actually paid
+// for. hours_purchased is fractional (a 0.5-hour rent is valid), hence the
+// interval multiplication rather than an integer add.
+func (s *Store) ListExpiredTendrilLeases(ctx context.Context, now time.Time) ([]models.TendrilLease, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE status = 'active' AND started_at + (hours_purchased * interval '1 hour') <= $1
+		 ORDER BY started_at + (hours_purchased * interval '1 hour')`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TendrilLease
+	for rows.Next() {
+		l, err := scanTendrilLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// MarkTendrilLeaseReleased transitions a lease from active to released, and
+// reports via the bool whether THIS call performed a genuine transition (as
+// opposed to a no-op update against a row some other caller already closed
+// -- concurrent release attempts, or the reaper racing a user's own click).
+// A caller that refunded an unused reservation without checking this bool
+// used to double-refund on that race, or report a refund that never
+// happened when Tendril's own watchdog closed the lease first (a 404 from
+// Tendril has no charged amount for us to reconcile against).
+func (s *Store) MarkTendrilLeaseReleased(ctx context.Context, id string, usedSeconds, chargedUSDMicros int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE tendril_leases
+		   SET status = 'released', released_at = NOW(),
+		       used_seconds = $2, charged_usd_micros = $3
+		 WHERE id = $1 AND status = 'active'`, id, usedSeconds, chargedUSDMicros)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// LatestActiveLeaseForRun is how a run/release node finds the lease its own
+// run opened, without the canvas having to thread an id between nodes.
+func (s *Store) LatestActiveLeaseForRun(ctx context.Context, runID string) (models.TendrilLease, error) {
+	return scanTendrilLease(s.pool.QueryRow(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE run_id = $1 AND status = 'active'
+		 ORDER BY started_at DESC LIMIT 1`, runID))
+}
+
+// LatestActiveLeaseForUser is the fallback resolveLease reaches for once a
+// Run/Release step is split into its own standalone one-node workflow: its
+// own run_id never matches the Rent step's (that was a different run
+// entirely), so the only thing left to resolve against is "whichever
+// machine this user currently has open" — still scoped to one user, never
+// the shared pool, so it can never resolve to someone else's lease.
+func (s *Store) LatestActiveLeaseForUser(ctx context.Context, userID string) (models.TendrilLease, error) {
+	return scanTendrilLease(s.pool.QueryRow(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE user_id = $1 AND status = 'active'
+		 ORDER BY started_at DESC LIMIT 1`, userID))
 }

@@ -14,8 +14,10 @@ import (
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine"
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/payments"
 	"github.com/agentmesh/backend/internal/sse"
+	"github.com/agentmesh/backend/internal/tendril"
 	"github.com/agentmesh/backend/internal/wallet"
 	"github.com/agentmesh/backend/internal/x402"
 )
@@ -82,7 +84,10 @@ func main() {
 		nowPaymentsClient.UseSandbox()
 	}
 
-	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 5_000_000) // $5.00 default
+	// $20.00 default, up from $5.00: Tendril's cheapest online machine is
+	// $6.00/hour and a 2-hour rent tops the shared pool up by $12.00 in one
+	// call, which the old ceiling rejected outright.
+	maxRelayOutboundUSDMicros := envInt64Or("MAX_RELAY_OUTBOUND_USD_MICROS", 20_000_000)
 
 	// Which /x402/relay a per-call paid tool402 request is routed through.
 	// Defaults to BASE_URL, since in a real deployment the same instance
@@ -102,7 +107,7 @@ func main() {
 	relayBaseURL := envOr("RELAY_BASE_URL", envOr("BASE_URL", "http://localhost:8080"))
 	log.Printf("x402 relay base URL: %s", relayBaseURL)
 
-	runner := engine.NewRunner(store, broker, walletSvc, relayBaseURL, platformSpendWalletEncMnemonic, engine.X402Config{
+	runner := engine.NewRunner(store, broker, walletSvc, relayBaseURL, platformSpendWalletEncMnemonic, mustEnv("ENCRYPTION_KEY"), engine.X402Config{
 		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
 		USDCAssetID:               usdcAssetID,
 		FacilitatorClient:         facilitatorClient,
@@ -120,7 +125,25 @@ func main() {
 		"mistral":   os.Getenv("PLATFORM_MISTRAL_API_KEY"),
 	})
 
+	var tendrilClient *tendril.Client
+	var tendrilSession *tendril.Session
+	if registryURL := envOr("TENDRIL_REGISTRY_URL", "https://tendrilregister.007575.xyz"); registryURL != "" {
+		tendrilClient = tendril.NewClient(registryURL)
+		// Wallet 2 is what pays Tendril through the relay, so Wallet 2's
+		// address is the one Tendril keys the shared credit pool to — sign the
+		// session with its mnemonic, not Wallet 1's.
+		sess, err := tendrilClient.Session(ctx, walletSvc, platformWalletEncMnemonic)
+		if err != nil {
+			log.Printf("tendril: registry session unavailable (%v) — tendril nodes will fail closed", err)
+		} else {
+			tendrilSession = sess
+			runner.SetTendril(tendrilClient, sess)
+			log.Printf("tendril: registry %s, pool wallet %s", registryURL, platformWalletAddr)
+		}
+	}
+
 	go expireStalePendingTransactionsLoop(ctx, store)
+	runner.StartLeaseReaper(ctx, nodes.ReaperInterval)
 
 	deps := &handlers.Deps{
 		Store:         store,
@@ -128,6 +151,7 @@ func main() {
 		Wallet:        walletSvc,
 		Engine:        runner,
 		BaseURL:       envOr("BASE_URL", "http://localhost:8080"),
+		RelayBaseURL:  relayBaseURL,
 		JWTSecret:     mustEnv("JWT_SECRET"),
 		EncryptionKey: mustEnv("ENCRYPTION_KEY"),
 
@@ -141,14 +165,17 @@ func main() {
 		CashfreeAppID: cashfreeClient.AppID,
 		NOWPayments:   nowPaymentsClient,
 
-		PlatformWalletAddress:     platformWalletAddr,
-		PlatformWalletEncMnemonic: platformWalletEncMnemonic,
-		FacilitatorClient:         facilitatorClient,
-		USDCAssetID:               usdcAssetID,
-		RelayNetwork:              relayNetwork,
-		RelayFeePayer:             relayFeePayer,
-		USDCSigner:                walletSvc,
-		MaxRelayOutboundUSDMicros: maxRelayOutboundUSDMicros,
+		PlatformWalletAddress:          platformWalletAddr,
+		PlatformWalletEncMnemonic:      platformWalletEncMnemonic,
+		PlatformSpendWalletEncMnemonic: platformSpendWalletEncMnemonic,
+		FacilitatorClient:              facilitatorClient,
+		USDCAssetID:                    usdcAssetID,
+		RelayNetwork:                   relayNetwork,
+		RelayFeePayer:                  relayFeePayer,
+		USDCSigner:                     walletSvc,
+		MaxRelayOutboundUSDMicros:      maxRelayOutboundUSDMicros,
+		TendrilClient:                  tendrilClient,
+		TendrilSession:                 tendrilSession,
 	}
 
 	r := api.NewRouter(deps)

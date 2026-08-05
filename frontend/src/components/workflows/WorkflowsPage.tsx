@@ -12,10 +12,7 @@ import {
 import { Topbar } from "@/components/Topbar";
 import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
-import {
-  buildX402DemoWorkflow,
-  buildCanix402DemoWorkflow,
-} from "@/lib/demoWorkflow";
+import { tendril } from "@/lib/tendril";
 
 export function WorkflowsPage() {
   const router = useRouter();
@@ -25,8 +22,7 @@ export function WorkflowsPage() {
   const [wfList, setWfList] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [creatingDemo, setCreatingDemo] = useState(false);
-  const [creatingCanixDemo, setCreatingCanixDemo] = useState(false);
+  const [creatingTendril, setCreatingTendril] = useState(false);
 
   useEffect(() => {
     workflowsApi
@@ -58,31 +54,22 @@ export function WorkflowsPage() {
     }
   }, [creating, router]);
 
-  const handleLoadDemoWorkflow = useCallback(async () => {
-    if (creatingDemo) return;
-    setCreatingDemo(true);
+  // No node graph here at all — this row is a shortcut into the direct
+  // Tendril console (WorkflowRoute matches on its id), not a workflow you
+  // build on canvas. tendril.console() finds-or-creates the ONE hidden
+  // workflow that backs every user's console, so repeated clicks always
+  // open the same row instead of workflowsApi.create minting a fresh
+  // duplicate one every time.
+  const handleLoadTendrilWorkflow = useCallback(async () => {
+    if (creatingTendril) return;
+    setCreatingTendril(true);
     try {
-      const wf = await workflowsApi.create("x402: Prism Resume Screener");
-      const { nodes, edges } = buildX402DemoWorkflow();
-      await workflowsApi.update(wf.id, { name: wf.name, nodes, edges });
-      router.push(`/workflows/${wf.id}`);
+      const workflowId = await tendril.console();
+      router.push(`/workflows/${workflowId}`);
     } catch {
-      setCreatingDemo(false);
+      setCreatingTendril(false);
     }
-  }, [creatingDemo, router]);
-
-  const handleLoadCanix402Workflow = useCallback(async () => {
-    if (creatingCanixDemo) return;
-    setCreatingCanixDemo(true);
-    try {
-      const wf = await workflowsApi.create("x402: CANIX402 DeFi Opportunities");
-      const { nodes, edges } = buildCanix402DemoWorkflow();
-      await workflowsApi.update(wf.id, { name: wf.name, nodes, edges });
-      router.push(`/workflows/${wf.id}`);
-    } catch {
-      setCreatingCanixDemo(false);
-    }
-  }, [creatingCanixDemo, router]);
+  }, [creatingTendril, router]);
 
   const activeCount = wfList.filter((w) => w.status === "active").length;
 
@@ -135,20 +122,31 @@ export function WorkflowsPage() {
             <div style={{ display: "flex", gap: 8 }}>
               <button style={ghostBtn}>Import</button>
               <button
-                onClick={handleLoadDemoWorkflow}
-                disabled={creatingDemo}
-                style={{ ...ghostBtn, opacity: creatingDemo ? 0.6 : 1 }}
-                title="Loads a no-agent workflow: a trigger paying Prism's real x402 endpoint on Algorand mainnet, settled on-chain."
+                onClick={handleLoadTendrilWorkflow}
+                disabled={creatingTendril}
+                style={{
+                  ...ghostBtn,
+                  opacity: creatingTendril ? 0.6 : 1,
+                  position: "relative",
+                }}
+                title="Rent a real Linux machine by the hour. SSH from the console. Official — built with Tendril."
               >
-                {creatingDemo ? "Loading…" : "Load demo workflow"}
-              </button>
-              <button
-                onClick={handleLoadCanix402Workflow}
-                disabled={creatingCanixDemo}
-                style={{ ...ghostBtn, opacity: creatingCanixDemo ? 0.6 : 1 }}
-                title="Loads a no-agent workflow: a trigger paying CANIX402's real x402 endpoint (Algorand DeFi opportunities) on mainnet, settled on-chain."
-              >
-                {creatingCanixDemo ? "Loading…" : "Load canix402 workflow"}
+                {creatingTendril ? "Loading…" : "Load Tendril workflow"}
+                <span
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 9,
+                    fontFamily: "var(--font-mono)",
+                    color: "#E879F9",
+                    border: "1px solid #E879F9",
+                    borderRadius: 999,
+                    padding: "1px 5px",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                  }}
+                >
+                  Official
+                </span>
               </button>
               <button
                 onClick={handleNewWorkflow}
