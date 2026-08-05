@@ -292,13 +292,15 @@ func executeFunctionCall(ctx context.Context, funcName string, args map[string]a
 			if paymentResult.SettledUSDMicros > 0 {
 				payment = &ToolPaymentInfo{
 					NodeID: toolNode.ID, NodeName: toolNode.Name,
-					SettledUSDMicros:     paymentResult.SettledUSDMicros,
-					DebitKind:            paymentResult.DebitKind,
-					PlatformFeeUSDMicros: paymentResult.PlatformFeeUSDMicros,
-					TxID:                 paymentResult.TxID,
-					ExplorerURL:          paymentResult.ExplorerURL,
-					OutboundTxID:         paymentResult.OutboundTxID,
-					OutboundExplorerURL:  paymentResult.OutboundExplorerURL,
+					SettledUSDMicros:       paymentResult.SettledUSDMicros,
+					DebitKind:              paymentResult.DebitKind,
+					PlatformFeeUSDMicros:   paymentResult.PlatformFeeUSDMicros,
+					TxID:                   paymentResult.TxID,
+					ExplorerURL:            paymentResult.ExplorerURL,
+					OutboundTxID:           paymentResult.OutboundTxID,
+					OutboundExplorerURL:    paymentResult.OutboundExplorerURL,
+					PlatformFeeTxID:        paymentResult.PlatformFeeTxID,
+					PlatformFeeExplorerURL: paymentResult.PlatformFeeExplorerURL,
 				}
 				// The legacy direct-pay dialect never populates the result's
 				// own settlement fields (ExecuteTool402 predates them and
@@ -384,6 +386,14 @@ type ToolPaymentInfo struct {
 	ExplorerURL         string
 	OutboundTxID        string
 	OutboundExplorerURL string
+	// PlatformFeeTxID/PlatformFeeExplorerURL identify the dedicated Wallet 1
+	// -> Wallet 2 settlement for PlatformFeeUSDMicros -- see
+	// Tool402PaymentResult.PlatformFeeTxID's doc comment. Both empty for the
+	// legacy dialect, a run-funded call (its markup already settled as part
+	// of the run's single up-front funding), or a fee settlement that failed
+	// (logged/alerted elsewhere, never blocks the call itself).
+	PlatformFeeTxID        string
+	PlatformFeeExplorerURL string
 }
 
 // paymentReceipt turns a ToolPaymentInfo into the map shape surfaced in an
@@ -416,6 +426,12 @@ func paymentReceipt(p *ToolPaymentInfo) map[string]any {
 	}
 	if p.OutboundExplorerURL != "" {
 		receipt["outboundExplorerURL"] = p.OutboundExplorerURL
+	}
+	if p.PlatformFeeTxID != "" {
+		receipt["platformFeeTxId"] = p.PlatformFeeTxID
+	}
+	if p.PlatformFeeExplorerURL != "" {
+		receipt["platformFeeExplorerURL"] = p.PlatformFeeExplorerURL
 	}
 	if p.SettledUSDMicros > 0 {
 		// Same decimal shape the non-agent-attached paths put in their

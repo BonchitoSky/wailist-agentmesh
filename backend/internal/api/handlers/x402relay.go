@@ -380,6 +380,16 @@ func (d *Deps) X402RunFundingInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// X402PlatformFeeInfo is X402RunFundingInfo's counterpart for
+// nodes.SettlePlatformFee's PaymentRequirements.Resource — same rationale,
+// a real reachable route rather than an opaque identifier, registered at
+// nodes.platformFeePublicPath.
+func (d *Deps) X402PlatformFeeInfo(w http.ResponseWriter, r *http.Request) {
+	respond.JSON(w, http.StatusOK, map[string]string{
+		"description": "AgentMesh platform fee — internal settlement of the flat per-call markup, not directly payable via this route",
+	})
+}
+
 // targetPriceQuote is the subset of a target's x402 402 response the relay
 // cares about.
 type targetPriceQuote struct {

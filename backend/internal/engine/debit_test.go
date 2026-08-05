@@ -2387,7 +2387,15 @@ func TestLegacyToolAttachedAlongsideRunFundedV2ToolBillsIdenticallyToStandalone(
 	if len(fundings) != 1 {
 		t.Fatalf("want exactly 1 x402_run_fundings row (sized only for the v2 tool), got %d", len(fundings))
 	}
-	if fundings[0].AmountAssetMicros != 300000 {
-		t.Fatalf("want the run-level pre-fund sized only for the v2 tool's 300000 quote (never the legacy tool's flat fee), got %d", fundings[0].AmountAssetMicros)
+	// 300000 (v2 tool's real quote) + 1500000 (one flat platform markup) --
+	// the run-level pre-fund now settles the FULL creditReserve on-chain,
+	// not just the real vendor cost, so the platform's own margin actually
+	// lands in Wallet 2 instead of being a pure ledger entry with no
+	// backing transfer (see reserveAndFundRun's creditReserve). The legacy
+	// tool's flat fee is still never folded in here -- it bills through its
+	// own separate LegacyLedger/per-call path, untouched by this run-level
+	// settlement.
+	if fundings[0].AmountAssetMicros != 1_800_000 {
+		t.Fatalf("want the run-level pre-fund sized at the v2 tool's 300000 quote plus one platform markup (never the legacy tool's flat fee), got %d", fundings[0].AmountAssetMicros)
 	}
 }

@@ -289,13 +289,16 @@ type runFundResult struct {
 // reserveAndFundRun sizes and reserves a single run-level credit hold for
 // agentNode's attached tool402 tools, then settles that exact amount as one
 // real inbound x402 payment (Wallet 1 -> Wallet 2) before the agent's
-// tool-calling loop starts. estimate (the real on-chain leg FundRunReserve
-// settles) = sum of REAL, freshly-fetched vendor quotes for each attached
-// v2 tool402 node — never padded. creditReserve = estimate plus one flat
-// platform markup (models.X402PlatformFeeUSDMicros) per funded tool — the
-// markup is pure margin with no on-chain leg of its own, so it inflates
-// what's held against the user's CREDIT balance and the run-level pool, but
-// never the real Wallet-1-to-Wallet-2 settlement amount.
+// tool-calling loop starts. estimate = sum of REAL, freshly-fetched vendor
+// quotes for each attached v2 tool402 node — never padded. creditReserve =
+// estimate plus one flat platform markup (models.X402PlatformFeeUSDMicros)
+// per funded tool, and is what's held against the user's CREDIT balance AND
+// what FundRunReserve actually settles on-chain: the whole run's margin
+// lands in Wallet 2 in this one up-front payment, same as every real vendor
+// cost, so nothing here is a pure ledger fiction with no backing transfer.
+// executeTool402RunLevel's own per-call spend still only ever draws
+// `estimate` worth out to vendors (vendorLedger below), never touching the
+// markup portion sitting in Wallet 2.
 //
 // An agent with no attached tool402 nodes, or only legacy-dialect ones,
 // gets estimate=0 — a no-op returning the existing per-call
@@ -337,12 +340,15 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 	}
 
 	// creditReserve is what's actually held against the user's CREDIT
-	// balance and sizes the run-level pool below -- estimate (real vendor
-	// cost) plus one flat markup per funded tool, matching the total
-	// executeTool402RunLevel reserves/commits per call (see its own
-	// total/amount split). FundRunReserve/RecordRunFunding below stay on
-	// estimate alone: the real on-chain Wallet-1-to-Wallet-2 leg never
-	// needs to move the markup, only the vendor's real price.
+	// balance and settled on-chain -- estimate (real vendor cost) plus one
+	// flat markup per funded tool, matching the total executeTool402RunLevel
+	// reserves/commits per call (see its own total/amount split).
+	// FundRunReserve below settles this FULL amount, not estimate alone: the
+	// whole point is that Wallet 2 actually receives everything the user was
+	// charged in one real transaction, not just the vendor-cost portion --
+	// see SettlePlatformFee's doc comment for why the per-call (non-run-
+	// funded) path needs a second dedicated transaction to reach the same
+	// end state, which this single up-front settlement gets for free.
 	markupTotal := fundedToolCount * models.X402PlatformFeeUSDMicros
 	if markupTotal/models.X402PlatformFeeUSDMicros != fundedToolCount || estimate > math.MaxInt64-markupTotal {
 		return runFundResult{}, fmt.Errorf("x402 run funding: credit reserve overflow (estimate %d, %d funded tools)", estimate, fundedToolCount)
@@ -383,7 +389,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		ExpectedAssetID:          r.x402.USDCAssetID,
 		FrontendURL:              r.x402.FrontendURL,
 	}
-	txID, err := nodes.FundRunReserve(ctx, fundCfg, run.ID, estimate)
+	txID, err := nodes.FundRunReserve(ctx, fundCfg, run.ID, creditReserve)
 	if err != nil {
 		if errors.Is(err, nodes.ErrSettlementIndeterminate) {
 			// The settle response was lost -- we don't know whether the
@@ -404,7 +410,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		return runFundResult{}, fmt.Errorf("x402 run funding failed: %w", err)
 	}
 
-	funding, err := r.store.RecordRunFunding(ctx, run.ID, txID, estimate)
+	funding, err := r.store.RecordRunFunding(ctx, run.ID, txID, creditReserve)
 	if err != nil {
 		// Real money already moved on-chain — this is a bookkeeping failure,
 		// not a payment failure. Do NOT release the DB reservation (the
@@ -426,15 +432,16 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 	}
 
 	// Two separate pools, not one sized creditReserve: vendorLedger is
-	// bounded by estimate -- the exact amount this run actually moved
-	// on-chain Wallet 1 -> Wallet 2 -- so executeTool402RunLevel's real
-	// PayTargetFromWallet2 spend can never exceed what this run itself
-	// funded. markupLedger is bounded by markupTotal, pure credits
-	// bookkeeping with no on-chain leg. Both pools are in-memory only
-	// (Reserve/Release never touch the DB balance — see newRunLevelLedger);
-	// the single real DB decrement already happened above via
-	// ReserveCredits(creditReserve), so splitting the in-memory budget here
-	// doesn't double-reserve anything.
+	// bounded by estimate -- the exact amount executeTool402RunLevel's real
+	// PayTargetFromWallet2 is allowed to pay OUT to vendors -- so a single
+	// call can never drain more than this run's own real vendor-cost
+	// budget, even though the on-chain settlement above moved creditReserve
+	// (estimate + markupTotal) into Wallet 2 in one lump sum. markupLedger
+	// is bounded by markupTotal, the flat-fee counterpart -- both are pure
+	// credits-side bookkeeping pools (Reserve/Release never touch the DB
+	// balance — see newRunLevelLedger); the single real DB decrement already
+	// happened above via ReserveCredits(creditReserve), so splitting the
+	// in-memory budget here doesn't double-reserve anything.
 	vendorLedger, vendorRemaining := newRunLevelLedger(estimate, wf, run, r.store)
 	markupLedger, markupRemaining := newRunLevelLedger(markupTotal, wf, run, r.store)
 	cleanup := func(cctx context.Context) {
@@ -453,7 +460,7 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		MarkupLedger:    markupLedger,
 		FundingID:       funding.ID,
 		FundingTxID:     funding.InboundTxID,
-		FundedUSDMicros: estimate,
+		FundedUSDMicros: creditReserve,
 		FundedToolIDs:   fundedToolIDs,
 		Cleanup:         cleanup,
 	}, nil
@@ -737,6 +744,11 @@ func (r *Runner) executeNode(
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 			ExpectedAssetID:          r.x402.USDCAssetID,
 			RelayBaseURL:             r.relayBaseURL,
+			Facilitator:              r.x402.FacilitatorClient,
+			PlatformWalletAddress:    r.x402.PlatformWalletAddress,
+			RelayNetwork:             r.x402.RelayNetwork,
+			RelayFeePayer:            r.x402.RelayFeePayer,
+			FrontendURL:              r.x402.FrontendURL,
 			Ledger:                   nodes.RunLedger(rf.Ledger),
 			MarkupLedger:             nodes.RunLedger(rf.MarkupLedger),
 			// PerCallLedger backs any v2 dispatch not covered by this run's
@@ -884,6 +896,11 @@ func (r *Runner) executeNode(
 			PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 			ExpectedAssetID:          r.x402.USDCAssetID,
 			RelayBaseURL:             r.relayBaseURL,
+			Facilitator:              r.x402.FacilitatorClient,
+			PlatformWalletAddress:    r.x402.PlatformWalletAddress,
+			RelayNetwork:             r.x402.RelayNetwork,
+			RelayFeePayer:            r.x402.RelayFeePayer,
+			FrontendURL:              r.x402.FrontendURL,
 			PerCallLedger:            nodes.CallLedger(standaloneLedger),
 			LegacyLedger:             nodes.CallLedger(standaloneLedger),
 		}
@@ -918,6 +935,11 @@ func (r *Runner) executeNode(
 				PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
 				ExpectedAssetID:          r.x402.USDCAssetID,
 				RelayBaseURL:             r.relayBaseURL,
+				Facilitator:              r.x402.FacilitatorClient,
+				PlatformWalletAddress:    r.x402.PlatformWalletAddress,
+				RelayNetwork:             r.x402.RelayNetwork,
+				RelayFeePayer:            r.x402.RelayFeePayer,
+				FrontendURL:              r.x402.FrontendURL,
 				Ledger:                   nodes.RunLedger(ledger),
 				LegacyLedger:             nodes.CallLedger(ledger),
 				PerCallLedger:            nodes.CallLedger(ledger),

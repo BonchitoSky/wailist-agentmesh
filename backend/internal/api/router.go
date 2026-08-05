@@ -41,6 +41,8 @@ func NewRouter(d *handlers.Deps) http.Handler {
 	// a real, reachable route on our own domain rather than an opaque identifier string,
 	// matching what a real Bazaar-catalog crawler would expect to find there.
 	r.Get("/x402/relay/run-funding", d.X402RunFundingInfo)
+	// Same rationale, for nodes.SettlePlatformFee's PaymentRequirements.Resource.
+	r.Get("/x402/relay/platform-fee", d.X402PlatformFeeInfo)
 
 	// Protected routes — JWT required
 	r.Group(func(r chi.Router) {

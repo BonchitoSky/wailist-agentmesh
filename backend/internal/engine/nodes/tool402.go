@@ -21,6 +21,7 @@ import (
 
 	"github.com/agentmesh/backend/internal/alert"
 	"github.com/agentmesh/backend/internal/models"
+	"github.com/agentmesh/backend/internal/x402"
 )
 
 // relayHTTPClient is used only for the two calls to our own /x402/relay
@@ -594,6 +595,17 @@ type X402RelayConfig struct {
 	PlatformSpendEncMnemonic string
 	ExpectedAssetID          uint64
 	RelayBaseURL             string
+	// Facilitator/PlatformWalletAddress/RelayNetwork/RelayFeePayer/FrontendURL
+	// are only used by executeTool402V2Relay's SettlePlatformFee call, right
+	// after the vendor-cost leg settles -- see that call site's comment. A
+	// zero Facilitator (dev/test wiring that never configured one) makes the
+	// fee settlement a no-op rather than a panic; the vendor payment and the
+	// internal credit debit are both unaffected either way.
+	Facilitator           *x402.FacilitatorClient
+	PlatformWalletAddress string
+	RelayNetwork          string
+	RelayFeePayer         string
+	FrontendURL           string
 	// Ledger reserves/commits/releases credits for executeTool402RunLevel
 	// only -- the in-memory run-level pool, sized to `estimate` (never
 	// padded with markup, see MarkupLedger), read only when
@@ -620,13 +632,15 @@ type X402RelayConfig struct {
 	// MarkupLedger is the platform-flat-markup counterpart to Ledger, read
 	// only by executeTool402RunLevel. Kept as a SEPARATE pool rather than
 	// folded into Ledger's own budget: reserveAndFundRun sizes Ledger to
-	// `estimate` (the exact amount actually moved on-chain Wallet 1 ->
-	// Wallet 2 for this run) and MarkupLedger to `markupTotal` (pure
-	// credits-side margin, no on-chain leg). If markup were added into
-	// Ledger's own pool instead, a single call's real vendor amount could
-	// exceed `estimate` by borrowing unused markup headroom left over from
-	// other funded-but-never-called tools, letting Wallet 2 pay out real
-	// USDC this run never actually funded on-chain. Unused for the
+	// `estimate` (the ceiling on what executeTool402RunLevel may pay OUT to
+	// vendors from Wallet 2) and MarkupLedger to `markupTotal` (a pure
+	// credits-side accounting cap -- both pools are already backed by the
+	// SAME single on-chain settlement, creditReserve = estimate+markupTotal,
+	// see reserveAndFundRun). If markup were added into Ledger's own pool
+	// instead, a single call's real vendor amount could exceed `estimate` by
+	// borrowing unused markup headroom left over from other
+	// funded-but-never-called tools, letting Wallet 2 pay out real USDC
+	// beyond what this run's vendor-cost budget actually allows. Unused for the
 	// per-call relay path (executeTool402V2Relay), which reserves its own
 	// amount+markup total from one DB-backed ledger per call — there's no
 	// upfront padded pool to protect against in that path.
@@ -748,6 +762,17 @@ type Tool402PaymentResult struct {
 	ExplorerURL         string
 	OutboundTxID        string
 	OutboundExplorerURL string
+	// PlatformFeeTxID/PlatformFeeExplorerURL identify the second, dedicated
+	// Wallet 1 -> Wallet 2 settlement that pays PlatformFeeUSDMicros
+	// on-chain -- see SettlePlatformFee's doc comment. Both empty when no
+	// fee was owed (legacy dialect, whose SettledUSDMicros already IS the
+	// flat markup with nothing separate to settle) or when settlement
+	// failed (logged/alerted, not fatal to the call -- see the call site in
+	// executeTool402V2Relay; executeTool402RunLevel never sets these, its
+	// markup is already covered by reserveAndFundRun's single up-front
+	// settlement).
+	PlatformFeeTxID        string
+	PlatformFeeExplorerURL string
 }
 
 // ChallengeAcceptsFromHeader extracts a v2 challenge's accepts[] from a
@@ -1105,7 +1130,7 @@ func ExecuteTool402V2(ctx context.Context, node models.WorkflowNode, rc RunConte
 			}
 			return executeTool402RunLevel(ctx, node, relayCfg, targetQuote, quote.MaxAmountRequired, method, payBody)
 		}
-		return executeTool402V2Relay(ctx, node, relayCfg.USDCSigner, relayCfg.PlatformSpendEncMnemonic, relayCfg.ExpectedAssetID, relayCfg.RelayBaseURL, PaymentLedger(relayCfg.PerCallLedger), method, payBody, paramContentType, node.TendrilLeaseToken)
+		return executeTool402V2Relay(ctx, node, relayCfg, PaymentLedger(relayCfg.PerCallLedger), method, payBody, paramContentType, node.TendrilLeaseToken)
 	}
 
 	// Legacy flat-quote dialect: unchanged direct-pay path, flat-fee billing,
@@ -1256,7 +1281,11 @@ func newRelayRequest(ctx context.Context, relayURL, targetMethod string, targetB
 // target on the relay's own end, same "method/body only matter for the
 // downstream target, never for talking to the relay" split PayTargetFromWallet2
 // and probeTool402Endpoint already follow).
-func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSigner USDCGroupSigner, platformSpendEncMnemonic string, expectedAssetID uint64, relayBaseURL string, ledger PaymentLedger, targetMethod string, targetBody []byte, targetContentType, targetAuth string) (Tool402PaymentResult, error) {
+func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, cfg X402RelayConfig, ledger PaymentLedger, targetMethod string, targetBody []byte, targetContentType, targetAuth string) (Tool402PaymentResult, error) {
+	usdcSigner := cfg.USDCSigner
+	platformSpendEncMnemonic := cfg.PlatformSpendEncMnemonic
+	expectedAssetID := cfg.ExpectedAssetID
+	relayBaseURL := cfg.RelayBaseURL
 	if platformSpendEncMnemonic == "" || usdcSigner == nil {
 		return Tool402PaymentResult{Response: map[string]any{"error": "payment required but no platform spend wallet configured"}}, nil
 	}
@@ -1435,6 +1464,56 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, usdcSi
 			commit(ctx, node.ID, int64(amount), models.DebitKindX402RelayCost)
 			commit(ctx, node.ID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
 		}
+		// Settle the platform's own flat markup as a second, real Wallet 1
+		// -> Wallet 2 payment -- see SettlePlatformFee's doc comment for why
+		// this can't just be folded into the vendor-cost leg above. Best
+		// effort: the vendor has already been paid and the caller's credit
+		// balance already reflects the full charge via the two Commit calls
+		// above, so a failure here is a treasury reconciliation problem, not
+		// a reason to fail a tool call that has, in every way that matters
+		// to the caller, already succeeded. cfg.Facilitator == nil (dev/test
+		// wiring that never configured one) makes this a silent no-op.
+		//
+		// Detached from ctx (WithoutCancel, own timeout) rather than run on
+		// it directly: by this point money has already moved and the user
+		// has already been billed the fee in credits, so a caller-initiated
+		// cancellation (a closed console tab, a StopWorkflow racing this
+		// exact instant) must not abort the one thing that would actually
+		// back that charge with real USDC -- same reasoning as every other
+		// post-settlement compensating action in this codebase (see
+		// runner.go's ledgerCompensationTimeout uses). 60s budget: up to 20s
+		// each for the facilitator's Verify and Settle calls
+		// (FacilitatorClient's own http.Client timeout), plus the signing
+		// call ahead of them making its own algod SuggestedParams round
+		// trip on this same context with no timeout of its own, plus
+		// headroom.
+		if cfg.Facilitator != nil {
+			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+			feeTxID, feeErr := SettlePlatformFee(fctx, RunPreFundConfig{
+				USDCSigner:               usdcSigner,
+				PlatformSpendEncMnemonic: platformSpendEncMnemonic,
+				Facilitator:              cfg.Facilitator,
+				PlatformWalletAddress:    cfg.PlatformWalletAddress,
+				RelayNetwork:             cfg.RelayNetwork,
+				RelayFeePayer:            cfg.RelayFeePayer,
+				ExpectedAssetID:          expectedAssetID,
+				FrontendURL:              cfg.FrontendURL,
+			}, models.X402PlatformFeeUSDMicros)
+			cancel()
+			if feeErr != nil {
+				msg := fmt.Sprintf("CRITICAL: x402 platform fee failed to settle on-chain (node %s, target %s, fee %d): %v",
+					node.ID, node.Endpoint, models.X402PlatformFeeUSDMicros, feeErr)
+				log.Print(msg)
+				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+			} else {
+				out.PlatformFeeTxID = feeTxID
+				out.PlatformFeeExplorerURL = ExplorerURLForAsset(expectedAssetID, feeTxID)
+				if m, ok := out.Response.(map[string]any); ok {
+					m["platformFeeTxId"] = feeTxID
+					m["platformFeeExplorerURL"] = out.PlatformFeeExplorerURL
+				}
+			}
+		}
 		// Surfaces the real, already-settled inbound tx id in the node's own
 		// output (rather than only the DB audit trail) so a run's console log
 		// shows it -- same txId/explorerURL shape LogDrawer already renders
@@ -1533,12 +1612,14 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	// the platform's flat markup on top of the real vendor amount, not just
 	// the vendor amount alone. amount and markup are reserved/committed
 	// against two SEPARATE pools here, not summed into one: cfg.Ledger is
-	// sized to `estimate` by reserveAndFundRun -- the exact amount actually
-	// moved on-chain Wallet 1 -> Wallet 2 for this run -- so it correctly
-	// gates the real PayTargetFromWallet2 call below at what this run's
-	// on-chain leg actually funded. cfg.MarkupLedger is a second pool sized
-	// to markupTotal (pure credits bookkeeping, no on-chain leg of its
-	// own). Reserving amount+markup from ONE pool sized estimate+markupTotal
+	// sized to `estimate` by reserveAndFundRun -- the ceiling on what may
+	// be paid OUT to vendors from Wallet 2 -- so it correctly gates the
+	// real PayTargetFromWallet2 call below at this run's own vendor-cost
+	// budget. cfg.MarkupLedger is a second pool sized to markupTotal, a
+	// pure credits-side accounting cap on top of the SAME on-chain
+	// settlement (both pools are backed by reserveAndFundRun's single
+	// creditReserve = estimate+markupTotal transfer, not two separate
+	// ones). Reserving amount+markup from ONE pool sized estimate+markupTotal
 	// would let a single call's real amount exceed `estimate` by borrowing
 	// unused markup headroom from other funded-but-uncalled tools, causing
 	// Wallet 2 to pay out real USDC this run never backed on-chain.
@@ -1616,8 +1697,10 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 	// Two separate debit_ledger rows for one call, each committed against
 	// the pool it was reserved from above: the real vendor cost (what
 	// Wallet 2 actually paid out, cfg.Ledger) and the platform's flat
-	// markup on top of it (pure margin, no corresponding on-chain leg,
-	// cfg.MarkupLedger). Commit only ever writes the audit row, it never
+	// markup on top of it (cfg.MarkupLedger) -- both already backed by the
+	// SAME real on-chain transfer, the run's single up-front FundRunReserve
+	// settlement (see reserveAndFundRun's creditReserve), not a second
+	// transfer per call. Commit only ever writes the audit row, it never
 	// touches either pool's remaining balance.
 	if commit := cfg.Ledger.Commit; commit != nil {
 		commit(ctx, node.ID, amount, models.DebitKindX402RelayCost)
