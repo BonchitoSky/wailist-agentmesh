@@ -75,7 +75,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // effect would run before it exists. Attaching the ResizeObserver here starts
   // observation exactly when the node mounts. Persisted widths are seeded before
   // observing, so the observer's first (async) callback clamps and applies them
-  // — keeping the canvas above MIN_CANVAS and all setState off the SSR path.
+  // -- keeping the canvas above MIN_CANVAS and all setState off the SSR path.
   const attachRow = useCallback((el: HTMLDivElement | null) => {
     rowObserver.current?.disconnect();
     rowObserver.current = null;
@@ -227,7 +227,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     setSelectedId(null);
   }, [selectedId]);
 
-  // Delete/Backspace removes the selected node — ignored while typing in a field.
+  // Delete/Backspace removes the selected node -- ignored while typing in a field.
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Delete" && e.key !== "Backspace") return;
@@ -590,7 +590,7 @@ function CanvasTopbar({
       >
         <Stat
           label="credits"
-          value={balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
+          value={balanceKnown ? `$${balanceUSD.toFixed(2)}` : "-"}
           color={lowBalance ? "var(--danger)" : "var(--accent)"}
         />
         <Hairline vertical length={18} />

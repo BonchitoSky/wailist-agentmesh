@@ -37,6 +37,6 @@ export const PAYMENT_PROVIDERS: PaymentProvider[] = [
   },
 ];
 
-// The default selected provider — the first enabled one.
+// The default selected provider -- the first enabled one.
 export const DEFAULT_PROVIDER: PaymentMethod =
   PAYMENT_PROVIDERS.find((p) => p.enabled)?.id ?? "cashfree";

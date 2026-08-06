@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { WorkflowNode, CustomParam } from "@/lib/types";
 import {
   PROVIDER_TEMPLATES,
@@ -9,12 +9,18 @@ import {
   ACTION_TEMPLATES,
   END_TEMPLATES,
   AGENT_TEMPLATES,
+  TENDRIL_TEMPLATES,
   modelTier,
   TIER_FEES,
 } from "@/lib/data";
 import { IconClose, StatusDot } from "@/components/ui";
 import { BrandLogo } from "./nodes/brandLogos";
 import { tools as toolsApi } from "@/lib/api";
+import {
+  tendril as tendrilApi,
+  estimateLeaseHoursCostUSD,
+  TendrilMachine,
+} from "@/lib/tendril";
 
 interface InspectorProps {
   selected: WorkflowNode | null;
@@ -135,6 +141,9 @@ export function Inspector({
         )}
         {selected.type === "end" && (
           <EndInspector node={selected} onUpdate={onUpdate} />
+        )}
+        {selected.type === "tendril" && (
+          <TendrilInspector node={selected} onUpdate={onUpdate} />
         )}
       </div>
 
@@ -280,6 +289,11 @@ function nodeMeta(n: WorkflowNode) {
     },
     action: { list: ACTION_TEMPLATES, bg: "var(--bg-elev-3)", fg: "var(--fg)" },
     end: { list: END_TEMPLATES, bg: "var(--bg-elev-3)", fg: "var(--fg)" },
+    tendril: {
+      list: TENDRIL_TEMPLATES,
+      bg: "rgba(232, 121, 249, 0.14)",
+      fg: "#E879F9",
+    },
   };
   const L = tpls[n.type] ?? tpls.action;
   const tpl = L.list.find((x) => x.id === n.template);
@@ -382,7 +396,7 @@ function SecretField({
         style={monoInputStyle}
         type="password"
         value={isSet ? "" : (val ?? "")}
-        placeholder={isSet ? "Key set — enter to replace" : placeholder}
+        placeholder={isSet ? "Key set, enter to replace" : placeholder}
         onChange={(e) => {
           const next = e.target.value || (isSet ? "__enc__" : "");
           onUpdate({
@@ -682,7 +696,7 @@ function ProviderInspector({
               value={node.apiKey === "__enc__" ? "" : (node.apiKey ?? "")}
               placeholder={
                 node.apiKey === "__enc__"
-                  ? "Key set — enter to replace"
+                  ? "Key set, enter to replace"
                   : "AIza···"
               }
               onChange={(e) =>
@@ -2227,7 +2241,7 @@ const CONNECTOR_AUTH: Record<
 };
 
 // Small "where to get the credential" deep-link. Underline-free per the design
-// system — links read via --accent color, not decoration.
+// system -- links read via --accent color, not decoration.
 function AuthDocLink({ href, label }: { href: string; label: string }) {
   return (
     <a
@@ -2403,7 +2417,7 @@ function ActionInspector({
               }
               placeholder={
                 node.emailApiKey === "__enc__"
-                  ? "Key set — enter to replace"
+                  ? "Key set, enter to replace"
                   : node.emailProvider === "postmark"
                     ? "your-postmark-server-token"
                     : "re_xxxxxxxxxxxx"
@@ -2456,7 +2470,7 @@ function ActionInspector({
               rows={5}
               value={node.emailBody ?? ""}
               placeholder={
-                "Hi,\n\nHere is your result:\n\n{{ result }}\n\n— AgentMesh"
+                "Hi,\n\nHere is your result:\n\n{{ result }}\n\nAgentMesh"
               }
               onChange={(e) => onUpdate({ ...node, emailBody: e.target.value })}
             />
@@ -2465,6 +2479,168 @@ function ActionInspector({
       )}
 
       <ConnectorConfigSection node={node} onUpdate={onUpdate} />
+    </>
+  );
+}
+
+// ── Tendril Inspector ──────────────────────────────────────────────────────
+function TendrilInspector({
+  node,
+  onUpdate,
+}: {
+  node: WorkflowNode;
+  onUpdate: (n: WorkflowNode) => void;
+}) {
+  const [credit, setCredit] = useState<number | null>(null);
+  const [machines, setMachines] = useState<TendrilMachine[]>([]);
+  const action = node.tendrilAction ?? "rent";
+
+  useEffect(() => {
+    tendrilApi.credit().then(setCredit).catch(() => setCredit(null));
+  }, []);
+
+  useEffect(() => {
+    if (action !== "rent") return;
+    tendrilApi.machines().then(setMachines).catch(() => setMachines([]));
+  }, [action]);
+
+  const selectedMachine =
+    machines.find((m) => m.id === node.tendrilNodeId) ?? machines[0];
+  const hours = parseFloat(node.tendrilHours || "1") || 1;
+  // Tendril-credit-only (hours, no gate fee) -- matches the "of Tendril
+  // credit" label below exactly. The gate fee is a separate real charge
+  // billed in AgentMesh credit, not drawn from this balance.
+  const cost = selectedMachine
+    ? estimateLeaseHoursCostUSD(selectedMachine.pricePerHourUsd, hours)
+    : null;
+  const creditVal = credit ?? 0;
+  const topupAmount = parseFloat(node.tendrilAmount || "0") || 0;
+
+  const custom = node.customParams ?? [];
+  const payloadValue = custom.find((p) => p.name === "payload")?.value ?? "";
+  const setPayload = (value: string) => {
+    const next = custom.some((p) => p.name === "payload")
+      ? custom.map((p) => (p.name === "payload" ? { ...p, value } : p))
+      : [...custom, { name: "payload", kind: "text" as const, value }];
+    onUpdate({ ...node, customParams: next });
+  };
+
+  return (
+    <>
+      <div style={{ fontSize: 12, opacity: 0.85 }}>
+        Tendril credit: <strong>${creditVal.toFixed(2)}</strong>
+        {selectedMachine && (
+          <>
+            {" "}
+            — about {(creditVal / selectedMachine.pricePerHourUsd).toFixed(1)}{" "}
+            h on {selectedMachine.label || selectedMachine.id}
+          </>
+        )}
+        <div style={{ opacity: 0.6, marginTop: 2 }}>
+          Separate from your AgentMesh credits. Buy more with a Topup node.
+        </div>
+      </div>
+
+      <Section label="Action">
+        <Field label="Action">
+          <select
+            style={monoInputStyle}
+            value={action}
+            onChange={(e) =>
+              onUpdate({
+                ...node,
+                tendrilAction: e.target
+                  .value as WorkflowNode["tendrilAction"],
+              })
+            }
+          >
+            <option value="topup">Buy Tendril Credit</option>
+            <option value="rent">Rent a Machine</option>
+            <option value="run">Run a Job</option>
+            <option value="release">Release</option>
+          </select>
+        </Field>
+      </Section>
+
+      {action === "topup" && (
+        <Section label="Topup">
+          <Field label="Amount (USD)">
+            <input
+              style={monoInputStyle}
+              type="number"
+              min="0.1"
+              step="0.5"
+              value={node.tendrilAmount ?? "10"}
+              onChange={(e) =>
+                onUpdate({ ...node, tendrilAmount: e.target.value })
+              }
+            />
+          </Field>
+          <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
+            Converts ${topupAmount.toFixed(2)} of your AgentMesh credits into
+            Tendril credit.
+          </div>
+        </Section>
+      )}
+
+      {action === "rent" && (
+        <Section label="Rent">
+          <Field label="Machine">
+            <select
+              style={monoInputStyle}
+              value={node.tendrilNodeId ?? ""}
+              onChange={(e) =>
+                onUpdate({ ...node, tendrilNodeId: e.target.value })
+              }
+            >
+              <option value="">Cheapest online</option>
+              {machines.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label || m.id} — {m.cpuCores} vCPU,{" "}
+                  {Math.round(m.ramMb / 1024)} GB — ${m.pricePerHourUsd}/hr
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Hours">
+            <input
+              style={monoInputStyle}
+              type="number"
+              min="0.5"
+              step="0.5"
+              max="24"
+              value={node.tendrilHours ?? "1"}
+              onChange={(e) =>
+                onUpdate({ ...node, tendrilHours: e.target.value })
+              }
+            />
+          </Field>
+          {cost != null && (
+            <div
+              style={{
+                fontSize: 11,
+                color: cost > creditVal ? "var(--danger)" : "var(--fg-dim)",
+              }}
+            >
+              Costs ${cost.toFixed(2)} of Tendril credit
+              {cost > creditVal &&
+                " — not enough Tendril credit, add a Topup node"}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {action === "run" && (
+        <Section label="Run">
+          <Field label="Payload (Python)">
+            <textarea
+              style={{ ...monoInputStyle, height: 120, resize: "vertical" }}
+              value={payloadValue}
+              onChange={(e) => setPayload(e.target.value)}
+            />
+          </Field>
+        </Section>
+      )}
     </>
   );
 }

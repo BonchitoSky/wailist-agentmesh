@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { clampWidth, PALETTE, INSPECTOR, MIN_CANVAS } from "./panelSizing";
 
-const WIDE = 1600; // plenty of room — container constraint never binds
+const WIDE = 1600; // plenty of room -- container constraint never binds
 
 describe("clampWidth", () => {
   it("clamps below the minimum up to min", () => {

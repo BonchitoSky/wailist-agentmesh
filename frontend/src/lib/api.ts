@@ -15,7 +15,7 @@ import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
 const _CONFIGURED = process.env.NEXT_PUBLIC_API_URL ?? "";
-const BASE =
+export const BASE =
   _CONFIGURED && typeof window !== "undefined" ? "/api" : _CONFIGURED;
 
 // -- Auth ------------------------------------------------------------------
@@ -122,7 +122,7 @@ export const auth = {
   },
 
   // Full URL to kick off a backend OAuth flow. Empty string when no backend
-  // is configured (mock mode) — callers should guard on the http prefix.
+  // is configured (mock mode) -- callers should guard on the http prefix.
   oauthURL: (provider: "github" | "google"): string =>
     BASE ? `${BASE}/auth/oauth/${provider}` : "",
 };
@@ -195,6 +195,25 @@ export const workflows = {
     };
   },
 
+  // DELETE /workflows/:id — permanent. The backend refuses (409) for a
+  // workflow that has Tendril lease history, since deleting it would destroy
+  // the only copy of an active lease's encrypted credentials; that message is
+  // surfaced to the caller rather than swallowed.
+  remove: async (id: string): Promise<void> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/workflows/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "workflow delete failed");
+      }
+      return;
+    }
+    await delay(200);
+  },
+
   // TODO: POST /workflows/:id/deploy
   deploy: async (
     id: string,
@@ -265,10 +284,15 @@ export const credits = {
     return 0;
   },
 
-  // Redeems a coupon code and returns the new balance. Throws with the
-  // server's message (e.g. "invalid coupon code", "coupon already redeemed")
-  // on failure so the caller can show it directly.
-  redeemCoupon: async (code: string): Promise<number> => {
+  // Redeems a coupon code, returning the new balance and what this code
+  // granted — both in USD. The credited amount is per-code configuration
+  // (COUPON_CODES on the backend), so it has to come from the response rather
+  // than being assumed. Throws with the server's message (e.g. "invalid coupon
+  // code", "coupon already redeemed") on failure so the caller can show it
+  // directly.
+  redeemCoupon: async (
+    code: string,
+  ): Promise<{ balanceUSD: number; creditedUSD: number }> => {
     if (BASE) {
       const res = await fetch(`${BASE}/credits/redeem-coupon`, {
         method: "POST",
@@ -278,7 +302,10 @@ export const credits = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "coupon redemption failed");
-      return (data.credit_usd_micros ?? 0) / 1e6;
+      return {
+        balanceUSD: (data.credit_usd_micros ?? 0) / 1e6,
+        creditedUSD: (data.credited_usd_micros ?? 0) / 1e6,
+      };
     }
     await delay(120);
     throw new Error("coupons aren't available in mock mode");
@@ -477,7 +504,7 @@ export const payments = {
 };
 
 // -- Usage & Credits ------------------------------------------------------
-// Real endpoints don't exist yet (see plan §5 — needs a metering change in
+// Real endpoints don't exist yet (see plan §5 -- needs a metering change in
 // tool402.go + provider.go). Until then these return fixtures in mock mode,
 // and in real mode call the proposed /usage/* routes once the backend adds them.
 // Mock fixtures depend on Date.now(); memoize per range so every panel in a
@@ -500,7 +527,7 @@ function bucketFor(range: UsageRange): "hour" | "day" {
 }
 
 // One fetch/mock branch for every usage endpoint. Always reads the response
-// body for a server-provided `error` message — before this was shared, only
+// body for a server-provided `error` message -- before this was shared, only
 // summary did, and the other four threw fixed strings that discarded detail.
 async function usageFetch<T>(path: string, mock: () => T): Promise<T> {
   if (BASE) {
@@ -546,7 +573,7 @@ export const usage = {
       () => mockUsage(range).byEndpoint,
     ),
 
-  // Settlements are the latest on-chain payments, not a range-scoped metric —
+  // Settlements are the latest on-chain payments, not a range-scoped metric --
   // the real endpoint takes only `limit`, and the panel deliberately ignores
   // the 24h/7d/30d selector. Any range yields the same rows in mock mode, so
   // "30d" just picks a canonical memoized payload to slice from.

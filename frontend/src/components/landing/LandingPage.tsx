@@ -54,7 +54,7 @@ export function LandingPage({ signedIn }: LandingPageProps) {
     v.addEventListener("ended", onEnded);
     v.play().catch(() => {});
     // Named handlers so the listeners (and the pending restart timer) are torn
-    // down on unmount — anonymous ones leaked across StrictMode re-mounts.
+    // down on unmount -- anonymous ones leaked across StrictMode re-mounts.
     return () => {
       cancelled = true;
       cancelAnimationFrame(rafId);
@@ -614,7 +614,7 @@ function LandingPillars() {
                       textTransform: "uppercase",
                     }}
                   >
-                    — {p.kicker}
+                    · {p.kicker}
                   </span>
                 </div>
                 <h3
@@ -821,9 +821,9 @@ function LandingWaitlist() {
     const email = data.get("email") as string;
     try {
       await waitlist.join(email);
-      alert("Thanks — we'll be in touch.");
+      alert("Thanks! We'll be in touch.");
     } catch {
-      alert("Thanks — we'll be in touch.");
+      alert("Thanks! We'll be in touch.");
     }
   };
 

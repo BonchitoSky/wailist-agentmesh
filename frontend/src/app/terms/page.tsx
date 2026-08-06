@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Terms & Conditions — AgentMesh",
+  title: "Terms & Conditions | AgentMesh",
   description:
     "AgentMesh platform terms of service, including credits policy and acceptable use.",
 };
@@ -160,7 +160,7 @@ function LegalDoc() {
         </P>
       </Section>
 
-      {/* ── CREDITS — the section Cashfree reviewers care most about ── */}
+      {/* -- CREDITS: the section Cashfree reviewers care most about -- */}
       <Section n="4" title="Platform Credits" highlight>
         <P>
           The following terms govern the purchase and use of {COMPANY} Credits
@@ -190,8 +190,8 @@ function LegalDoc() {
           <P>
             Credits carry <strong>zero monetary value</strong>. They cannot be
             exchanged, converted, or redeemed for cash, fiat currency,
-            cryptocurrency, or any other monetary equivalent — either by{" "}
-            {COMPANY} or any third party — under any circumstances.
+            cryptocurrency, or any other monetary equivalent, either by{" "}
+            {COMPANY} or any third party, under any circumstances.
           </P>
         </SubSection>
 
@@ -229,7 +229,7 @@ function LegalDoc() {
           </P>
         </SubSection>
 
-        <SubSection title="4.8 Final Sales — No Refunds">
+        <SubSection title="4.8 Final Sales: No Refunds">
           <P>
             All Credit purchases are <strong>final and non-refundable</strong>{" "}
             once the Credits are provisioned to your account. Please see our{" "}
@@ -241,7 +241,7 @@ function LegalDoc() {
         </SubSection>
 
         <Notice>
-          Summary: Credits are a prepaid platform resource — like fuel for your
+          Summary: Credits are a prepaid platform resource, like fuel for your
           agent pipelines. They are not money, cannot become money, and cannot
           leave the Platform.
         </Notice>
@@ -270,9 +270,9 @@ function LegalDoc() {
       <Section n="7" title="Pricing and Billing">
         <P>
           Workflow execution is billed against your Credit balance in real time.
-          Pricing for individual tool calls and model usage is displayed in the
-          Platform and may change with 30 days&apos; notice. {COMPANY} does not
-          extend credit — you must maintain a positive Credit balance to run
+          Pricing for individual tool calls and model usage is set by {COMPANY}{" "}
+          and may change at any time without prior notice. {COMPANY} does not
+          extend credit; you must maintain a positive Credit balance to run
           workflows.
         </P>
       </Section>
@@ -283,7 +283,7 @@ function LegalDoc() {
           available&rdquo; without warranty of any kind, express or implied.{" "}
           {COMPANY} does not warrant that the Platform will be uninterrupted,
           error-free, or free of harmful components. AI-generated outputs are
-          probabilistic and may be inaccurate — you are solely responsible for
+          probabilistic and may be inaccurate; you are solely responsible for
           validating any output before relying on it.
         </P>
       </Section>

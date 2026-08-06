@@ -14,6 +14,13 @@ import (
 // routeTemplate, which must agree -- see x402relay.go's relayPublicPath.
 const runFundingPublicPath = "/api/x402/relay/run-funding"
 
+// platformFeePublicPath is SettlePlatformFee's resource identity, same
+// rationale as runFundingPublicPath -- a real, non-root, genuinely
+// 402-answering path under our own branded origin, distinct from
+// runFundingPublicPath so the two settlement kinds attribute separately in
+// any per-resource reporting even though both share one payTo.
+const platformFeePublicPath = "/api/x402/relay/platform-fee"
+
 // RunPreFundConfig carries what's needed to settle a single lump-sum inbound
 // x402 payment (Wallet 1 -> Wallet 2) before an agent node's tool-calling
 // loop starts. Distinct from Wallet2PayConfig (Task 3), which drives the
@@ -45,12 +52,49 @@ type RunPreFundConfig struct {
 // amountUSDMicros <= 0 is a no-op (an agent with no attached tool402 nodes,
 // or all-legacy-dialect ones, needs no pre-fund at all).
 func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amountUSDMicros int64) (string, error) {
+	return selfSettleWallet1ToWallet2(ctx, cfg, runFundingPublicPath,
+		"AgentMesh workflow run funding — pre-settled pool for this run's downstream x402 tool calls",
+		"run pre-fund", amountUSDMicros)
+}
+
+// SettlePlatformFee settles the platform's own flat per-call markup
+// (models.X402PlatformFeeUSDMicros) as one more real, direct Wallet 1 ->
+// Wallet 2 payment, same mechanism as FundRunReserve but for the fee alone
+// rather than a whole run's estimated vendor spend.
+//
+// Exists so the fee actually lands in cfg.PlatformWalletAddress on-chain
+// instead of being a pure internal credit-ledger bookkeeping entry with no
+// backing asset movement -- before this, the per-call relay path's
+// executeTool402V2Relay committed the fee against the caller's AgentMesh
+// credit balance and stopped there: real USDC only ever moved for the
+// vendor's own real ask (see that function's `total := amount + fee` split,
+// where only `amount` is ever signed/settled). Called right alongside that
+// vendor-cost settlement, not baked into it, because the vendor leg's price
+// is set by the vendor's own external 402 challenge -- inflating it by our
+// own markup would overpay whatever the vendor actually quoted and break
+// protocol compatibility for any other caller of our public relay endpoint
+// (x402relay.go's X402Relay is unauthenticated and bazaar-cataloged, used by
+// more than just this platform's own engine).
+func SettlePlatformFee(ctx context.Context, cfg RunPreFundConfig, amountUSDMicros int64) (string, error) {
+	return selfSettleWallet1ToWallet2(ctx, cfg, platformFeePublicPath,
+		"AgentMesh platform fee — flat per-call markup, settled from the platform spend wallet to the platform revenue wallet",
+		"platform fee settle", amountUSDMicros)
+}
+
+// selfSettleWallet1ToWallet2 signs, verifies, and settles one real GoPlausible
+// payment for amountUSDMicros from the platform's own Wallet 1 spend wallet
+// into Wallet 2 (cfg.PlatformWalletAddress) -- no external target involved,
+// the platform is both payer and resource server. publicPath/description
+// give the settlement its own distinct, genuinely-402-answering resource
+// identity (see runFundingPublicPath's doc comment for why that has to be a
+// real path under our own branded origin, not an opaque identifier).
+// amountUSDMicros <= 0 is a no-op.
+func selfSettleWallet1ToWallet2(ctx context.Context, cfg RunPreFundConfig, publicPath, description, errPrefix string, amountUSDMicros int64) (string, error) {
 	if amountUSDMicros <= 0 {
 		return "", nil
 	}
 
-	description := "AgentMesh workflow run funding — pre-settled pool for this run's downstream x402 tool calls"
-	resourceURL := cfg.FrontendURL + runFundingPublicPath
+	resourceURL := cfg.FrontendURL + publicPath
 	reqs := x402.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           cfg.RelayNetwork,
@@ -82,7 +126,7 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 				// Public /api proxy path, matching resourceURL above --
 				// origin+routeTemplate has to resolve to a real URL, see
 				// x402relay.go's routeTemplate comment.
-				"routeTemplate": runFundingPublicPath,
+				"routeTemplate": publicPath,
 				"info": map[string]any{
 					"input": map[string]any{"type": "http", "method": "GET"},
 				},
@@ -108,7 +152,7 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 
 	group, idx, err := cfg.USDCSigner.SignUSDCPaymentGroup(ctx, cfg.PlatformSpendEncMnemonic, cfg.PlatformWalletAddress, cfg.ExpectedAssetID, uint64(amountUSDMicros), cfg.RelayFeePayer)
 	if err != nil {
-		return "", fmt.Errorf("run pre-fund: sign failed: %w", err)
+		return "", fmt.Errorf("%s: sign failed: %w", errPrefix, err)
 	}
 	payload := x402.PaymentPayload{
 		X402Version: 2,
@@ -135,24 +179,24 @@ func FundRunReserve(ctx context.Context, cfg RunPreFundConfig, runID string, amo
 
 	verifyResult, err := cfg.Facilitator.Verify(ctx, payload, reqs)
 	if err != nil {
-		return "", fmt.Errorf("run pre-fund: facilitator verify failed: %w", err)
+		return "", fmt.Errorf("%s: facilitator verify failed: %w", errPrefix, err)
 	}
 	if !verifyResult.IsValid {
-		return "", fmt.Errorf("run pre-fund: payment invalid: %s", verifyResult.Invalid)
+		return "", fmt.Errorf("%s: payment invalid: %s", errPrefix, verifyResult.Invalid)
 	}
 
 	settleResult, err := cfg.Facilitator.Settle(ctx, payload, reqs)
 	if err != nil {
 		// Response never arrived -- settlement's fate is unknown, not
-		// "failed". Wrapped so reserveAndFundRun's caller can tell this
-		// apart from a definitive rejection and avoid releasing a
-		// reservation for money that may have already moved.
-		return "", fmt.Errorf("run pre-fund: facilitator settle response lost: %v: %w", err, ErrSettlementIndeterminate)
+		// "failed". Wrapped so callers can tell this apart from a
+		// definitive rejection and avoid releasing a reservation for money
+		// that may have already moved.
+		return "", fmt.Errorf("%s: facilitator settle response lost: %v: %w", errPrefix, err, ErrSettlementIndeterminate)
 	}
 	if !settleResult.Success {
 		// A real, received response says it failed -- money definitively
 		// never moved.
-		return "", fmt.Errorf("run pre-fund: settlement failed: %s", settleResult.Error)
+		return "", fmt.Errorf("%s: settlement failed: %s", errPrefix, settleResult.Error)
 	}
 	return settleResult.TxID, nil
 }

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Cancellation & Refund Policy — AgentMesh",
+  title: "Cancellation & Refund Policy | AgentMesh",
   description:
     "AgentMesh prepaid credit purchase policy: all sales are final and non-refundable once provisioned.",
 };
@@ -165,7 +165,7 @@ function PolicyDoc() {
           {COMPANY} sells prepaid platform Credits (&ldquo;Credits&rdquo;) that
           are deducted in real time as your agent workflows consume
           computational resources. Credits are a finite, platform-internal
-          resource — not a subscription and not a financial product.
+          resource, not a subscription and not a financial product.
         </P>
       </Section>
 
@@ -233,8 +233,8 @@ function PolicyDoc() {
         </P>
         <P>
           Initiating a chargeback or payment dispute for a legitimately
-          completed Credit purchase — where Credits were provisioned as
-          described — is a breach of these Terms and may result in immediate
+          completed Credit purchase, where Credits were provisioned as
+          described, is a breach of these Terms and may result in immediate
           suspension of your account.
         </P>
       </Section>

@@ -18,6 +18,7 @@ export const NODE_TYPES: Record<string, NodeTypeMeta> = {
   tool402: { w: 220, h: 84, ports: ["top"] },
   action: { w: 200, h: 64, ports: ["in", "out"] },
   end: { w: 200, h: 60, ports: ["in"] },
+  tendril: { w: 240, h: 96, ports: ["in", "out", "top"] },
 };
 
 export const TRIGGER_TEMPLATES = [
@@ -47,7 +48,7 @@ export const PROVIDER_TEMPLATES = [
 ];
 
 // Display-only mirror of backend/internal/engine/nodes/tier.go's modelTiers
-// map — the backend is the billing-authoritative source; this only drives
+// map -- the backend is the billing-authoritative source; this only drives
 // the Inspector's tier badge so the fee is visible before a run happens.
 // Keep in sync by hand when either the model dropdowns or the Go tier map
 // change.
@@ -89,11 +90,15 @@ export const MODEL_TIERS: Record<
   },
 };
 
+// Display-only mirror of backend/internal/models.PlatformKeyEconomy/Standard/
+// FrontierFeeUSDMicros -- same hand-sync caveat as MODEL_TIERS above: the
+// backend is billing-authoritative, this only drives the Inspector's fee
+// badge. Keep in sync by hand when the Go constants change.
 export const TIER_FEES: Record<"economy" | "standard" | "frontier", number> =
   {
-    economy: 0.01,
-    standard: 0.03,
-    frontier: 0.05,
+    economy: 0.03,
+    standard: 0.09,
+    frontier: 0.15,
   };
 
 // modelTier mirrors nodes.ModelTier's default: unrecognized template/model
@@ -231,6 +236,37 @@ export const END_TEMPLATES = [
   { id: "done", name: "End", desc: "Mark complete", icon: "■" },
 ];
 
+export const TENDRIL_TEMPLATES = [
+  {
+    id: "tendril_topup",
+    name: "Buy Tendril Credit",
+    desc: "AgentMesh credits → Tendril credit",
+    action: "topup" as const,
+    icon: "＄",
+  },
+  {
+    id: "tendril_rent",
+    name: "Rent a Machine",
+    desc: "Open a metered SSH session",
+    action: "rent" as const,
+    icon: "▣",
+  },
+  {
+    id: "tendril_run",
+    name: "Run a Job",
+    desc: "Execute Python on the machine",
+    action: "run" as const,
+    icon: "▶",
+  },
+  {
+    id: "tendril_release",
+    name: "Release",
+    desc: "Stop the meter and bill",
+    action: "release" as const,
+    icon: "■",
+  },
+];
+
 export const SAMPLE_WORKFLOW: Workflow = {
   id: "wf-weather",
   name: "Weather Agent Test",
@@ -270,7 +306,7 @@ export const SAMPLE_WORKFLOW: Workflow = {
       y: 430,
       name: "x402 Weather",
       description:
-        "Real-time weather data — temperature, wind, conditions for any city worldwide. Accepts: city (string, required), units (celsius|fahrenheit, optional).",
+        "Real-time weather data: temperature, wind, conditions for any city worldwide. Accepts: city (string, required), units (celsius|fahrenheit, optional).",
       endpoint: "http://localhost:4402/weather",
       price: "0.065",
       unit: "call",
@@ -685,7 +721,7 @@ export function buildUsage(range: UsageRange): UsagePayload {
     EP_SEEDS.reduce((a, s) => a + (s.tokens30 ?? 0), 0) * mult,
   );
 
-  // Credit balance is account-level — it must NOT change with the selected chart
+  // Credit balance is account-level -- it must NOT change with the selected chart
   // range. Compute lifetime spend at full scale (no range multiplier) so
   // "credits left" reads the same across 24h / 7d / 30d.
   const lifetimeSpend = r6(
@@ -696,10 +732,10 @@ export function buildUsage(range: UsageRange): UsagePayload {
     }, 0),
   );
 
-  // No spending cap — an account just holds a credit balance (grows on top-up,
+  // No spending cap -- an account just holds a credit balance (grows on top-up,
   // shrinks on spend). "Total bought" = balance + lifetime spend, and % left is
   // computed against that, so there is no fixed limit.
-  const creditsBalance = 250; // mock remaining balance (ALGO) — real value comes from the account
+  const creditsBalance = 250; // mock remaining balance (ALGO) -- real value comes from the account
 
   // Workflows
   const byWorkflow: WorkflowSpend[] = WF_SEEDS.map((w) => ({
@@ -710,7 +746,7 @@ export function buildUsage(range: UsageRange): UsagePayload {
     calls: Math.round(w.calls30 * mult),
   })).sort((a, b) => b.algo - a.algo);
 
-  // Settlements (most recent x402 payments — independent of range)
+  // Settlements (most recent x402 payments -- independent of range)
   const x402Seeds = EP_SEEDS.filter((s) => s.type === "x402");
   // Guard the modulo below: with no x402 seeds, `i % 0` is NaN and the indexed
   // seed is undefined, which throws and takes the whole page down.

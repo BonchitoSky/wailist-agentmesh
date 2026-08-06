@@ -1154,3 +1154,57 @@ func TestX402RelayRecordsFailedWhenTargetRejectsOutboundPayment(t *testing.T) {
 		t.Fatalf("want the outbound settlement recorded as failed when the target rejects the payment, got status %q", row.Status)
 	}
 }
+
+// TestX402RelayForwardsTargetAuthHeader confirms a bearer the TARGET needs
+// (Tendril's lease token, carried via X-Relay-Auth) reaches the target as a
+// real Authorization header, and that its absence sets no Authorization
+// header at all — this exercises the unauthenticated challenge-probe leg
+// (relayInboundChallenge -> fetchTargetPriceQuote), which needs no
+// facilitator or wallet signer to reach.
+func TestX402RelayForwardsTargetAuthHeader(t *testing.T) {
+	var gotAuth string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		json.NewEncoder(w).Encode(map[string]any{
+			"x402Version": 2,
+			"accepts": []map[string]any{{
+				"scheme":            "exact",
+				"network":           "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+				"maxAmountRequired": "100000",
+				"payTo":             "TARGETADDR",
+				"asset":             "10458941",
+			}},
+		})
+	}))
+	defer target.Close()
+
+	d := &handlers.Deps{
+		PlatformWalletAddress: "PLATFORMADDR",
+		USDCAssetID:           10458941,
+		RelayNetwork:          "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=",
+		RelayFeePayer:         "FEEPAYERADDR",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/x402/relay?target="+target.URL, nil)
+	req.Header.Set("X-Relay-Auth", "tok")
+	w := httptest.NewRecorder()
+	d.X402Relay(w, req)
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("want 402, got %d: %s", w.Code, w.Body.String())
+	}
+	if gotAuth != "Bearer tok" {
+		t.Errorf("target Authorization = %q, want %q", gotAuth, "Bearer tok")
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/x402/relay?target="+target.URL, nil)
+	w2 := httptest.NewRecorder()
+	d.X402Relay(w2, req2)
+	if w2.Code != http.StatusPaymentRequired {
+		t.Fatalf("want 402, got %d: %s", w2.Code, w2.Body.String())
+	}
+	if gotAuth != "" {
+		t.Errorf("target Authorization = %q, want none without X-Relay-Auth", gotAuth)
+	}
+}

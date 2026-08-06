@@ -28,7 +28,7 @@ import type { ReactNode } from "react";
 
 // Maps a node template id to its simple-icons export. The logo is drawn in
 // currentColor (monochrome) so it inherits the exact colour the placeholder
-// letter used — the node's icon box, size, and styling are untouched; only the
+// letter used -- the node's icon box, size, and styling are untouched; only the
 // glyph shape changes from a letter to the service's real mark.
 //
 // Imports are static (not a dynamic simpleIcons[name] lookup) so the bundler

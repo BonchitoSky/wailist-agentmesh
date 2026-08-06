@@ -11,6 +11,7 @@ import {
   TOOL402_TEMPLATES,
   ACTION_TEMPLATES,
   END_TEMPLATES,
+  TENDRIL_TEMPLATES,
 } from "@/lib/data";
 import { Pill } from "@/components/ui";
 
@@ -41,6 +42,8 @@ export function CanvasNode(props: NodeProps) {
       return <ActionNode {...props} />;
     case "end":
       return <EndNode {...props} />;
+    case "tendril":
+      return <TendrilNode {...props} />;
     default:
       return null;
   }
@@ -606,7 +609,7 @@ function ProviderNode({
   const t = NODE_TYPES.provider;
   const tpl = PROVIDER_TEMPLATES.find((x) => x.id === node.template);
   const hasKey = !!node.apiKey;
-  // Always a fixed mask, never a slice of the raw value — the canvas node is
+  // Always a fixed mask, never a slice of the raw value -- the canvas node is
   // visible in screen shares/recordings, unlike the Inspector's password
   // input, so no characters of an unsaved key should ever render here.
   const maskedKey = hasKey ? "•".repeat(14) : null;
@@ -838,7 +841,7 @@ function Tool402Node({
             </span>
           </span>
         ) : (
-          <span style={{ color: "var(--fg-dim)" }}>price — set endpoint</span>
+          <span style={{ color: "var(--fg-dim)" }}>price: set endpoint</span>
         )}
       </div>
       <TopPort
@@ -910,6 +913,79 @@ function ActionNode({
       <SidePort
         side="right"
         color="var(--fg)"
+        node={node}
+        port="out"
+        onHover={() => onPortHover("out")}
+        onLeave={onPortLeave}
+        onMouseDown={(e) => onStartWire(e, "out")}
+      />
+    </NodeShell>
+  );
+}
+
+// ── Tendril ────────────────────────────────────────────────────────────────
+// Same "paid tool" magenta family as Tool402Node (both spend real x402
+// money), but with in/out flow ports — a standalone Tendril workflow is
+// trigger -> rent -> end, not an agent-attached resource. The top port stays
+// available for a future agent to attach a Tendril node directly.
+function TendrilNode({
+  node,
+  selected,
+  onMouseDown,
+  onPortHover,
+  onPortLeave,
+  onStartWire,
+}: NodeProps) {
+  const t = NODE_TYPES.tendril;
+  const tpl = TENDRIL_TEMPLATES.find((x) => x.id === node.template);
+  const magenta = "#E879F9";
+  const name = node.name ?? tpl?.name ?? "Tendril";
+  const sub = node.sub ?? tpl?.desc ?? "";
+  const icon = node.icon ?? tpl?.icon ?? "▣";
+  const action = node.tendrilAction ?? tpl?.action;
+
+  return (
+    <NodeShell
+      node={node}
+      selected={selected}
+      onMouseDown={onMouseDown}
+      W={t.w}
+      H={t.h}
+      accent={magenta}
+      dashed
+    >
+      <NodeHeader
+        icon={icon}
+        template={node.template}
+        iconBg="rgba(232, 121, 249, 0.14)"
+        iconColor={magenta}
+        kicker="tendril · compute"
+        title={name}
+        sub={
+          action === "rent" && node.tendrilHours
+            ? `${sub} · ${node.tendrilHours}h`
+            : sub
+        }
+      />
+      <TopPort
+        color={magenta}
+        node={node}
+        port="top"
+        onHover={() => onPortHover("top")}
+        onLeave={onPortLeave}
+        onMouseDown={(e) => onStartWire(e, "top")}
+      />
+      <SidePort
+        side="left"
+        color={magenta}
+        node={node}
+        port="in"
+        onHover={() => onPortHover("in")}
+        onLeave={onPortLeave}
+      />
+      <SidePort
+        side="right"
+        color={magenta}
         node={node}
         port="out"
         onHover={() => onPortHover("out")}
