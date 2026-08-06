@@ -66,7 +66,10 @@ function loadPersisted(): CreditsState {
     if (!raw) return DEFAULT_STATE;
     const parsed = JSON.parse(raw) as Partial<CreditsState>;
     return {
-      balanceUSD: typeof parsed.balanceUSD === "number" ? parsed.balanceUSD : 0,
+      // Deliberately not restored from storage — see the module comment. persist()
+      // already refuses to write it, but storage from an older build can still
+      // carry the key, and adopting it would resurrect the stale-cache bug.
+      balanceUSD: 0,
       purchases: Array.isArray(parsed.purchases) ? parsed.purchases : [],
       autoRecharge: {
         ...DEFAULT_AUTO_RECHARGE,
