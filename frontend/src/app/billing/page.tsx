@@ -51,7 +51,7 @@ const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
 export default function BillingPage() {
   const router = useRouter();
   const { signOut } = useAuth();
-  const { balanceUSD, lastPurchase } = useCredits();
+  const { balanceUSD, lastPurchase, loadError, refresh } = useCredits();
   const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -75,7 +75,11 @@ export default function BillingPage() {
   const checkoutAmountINR = effectiveINR >= 1 ? effectiveINR : 0;
   const canCheckout = checkoutAmountINR > 0;
   const credits = creditsForTopup(checkoutAmountINR);
-  const isLow = balanceUSD < LOW_BALANCE_USD;
+  // A failed load leaves the store at its $0 default. Treating that as a real
+  // balance is what made the old UI claim "$0.00 / Low balance" when the API was
+  // simply unreachable — so an unknown balance suppresses both.
+  const balanceUnknown = loadError !== null;
+  const isLow = !balanceUnknown && balanceUSD < LOW_BALANCE_USD;
 
   return (
     <div
@@ -190,6 +194,45 @@ export default function BillingPage() {
             </p>
           </div>
 
+          {/* A failed balance/history load must announce itself rather than
+              rendering as an empty wallet. Mirrors the usage page's banner. */}
+          {loadError && (
+            <div
+              role="alert"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 16,
+                padding: "8px 12px",
+                background: "var(--danger-soft)",
+                border: "1px solid var(--danger-line)",
+                borderRadius: "var(--r-2)",
+                fontFamily: "var(--font-mono)",
+                fontSize: 11,
+                color: "var(--danger)",
+              }}
+            >
+              couldn&apos;t load your credits — this is not the same as having a
+              zero balance
+              <button
+                onClick={refresh}
+                style={{
+                  marginLeft: "auto",
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--danger)",
+                  cursor: "pointer",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  textDecoration: "underline",
+                }}
+              >
+                retry
+              </button>
+            </div>
+          )}
+
           <div className="bill-grid">
             {/* MAIN column */}
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -254,7 +297,7 @@ export default function BillingPage() {
                         fontVariantNumeric: "tabular-nums",
                       }}
                     >
-                      {fmtUSD(balanceUSD)}
+                      {balanceUnknown ? "—" : fmtUSD(balanceUSD)}
                     </div>
                   </div>
                   <span
@@ -267,11 +310,23 @@ export default function BillingPage() {
                       borderRadius: 999,
                       fontSize: 11,
                       fontWeight: 500,
-                      border: `1px solid ${isLow ? "rgba(255,181,71,0.35)" : "var(--accent-line)"}`,
-                      background: isLow
-                        ? "var(--warm-soft)"
-                        : "var(--accent-soft)",
-                      color: isLow ? "var(--warm)" : "var(--accent)",
+                      border: `1px solid ${
+                        balanceUnknown
+                          ? "var(--danger-line)"
+                          : isLow
+                            ? "rgba(255,181,71,0.35)"
+                            : "var(--accent-line)"
+                      }`,
+                      background: balanceUnknown
+                        ? "var(--danger-soft)"
+                        : isLow
+                          ? "var(--warm-soft)"
+                          : "var(--accent-soft)",
+                      color: balanceUnknown
+                        ? "var(--danger)"
+                        : isLow
+                          ? "var(--warm)"
+                          : "var(--accent)",
                     }}
                   >
                     <span
@@ -279,10 +334,18 @@ export default function BillingPage() {
                         width: 6,
                         height: 6,
                         borderRadius: 999,
-                        background: isLow ? "var(--warm)" : "var(--accent)",
+                        background: balanceUnknown
+                          ? "var(--danger)"
+                          : isLow
+                            ? "var(--warm)"
+                            : "var(--accent)",
                       }}
                     />
-                    {isLow ? "Low balance" : "Active"}
+                    {balanceUnknown
+                      ? "Unavailable"
+                      : isLow
+                        ? "Low balance"
+                        : "Active"}
                   </span>
                 </div>
               </div>
