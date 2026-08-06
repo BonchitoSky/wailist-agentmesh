@@ -106,7 +106,7 @@ export default function BillingPage() {
   return (
     <div
       style={{
-        minHeight: "100dvh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
