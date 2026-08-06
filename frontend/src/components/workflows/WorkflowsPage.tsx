@@ -1,17 +1,19 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Pill,
   Tag,
   IconSearch,
   IconGrid,
+  IconWallet,
   Card,
   ghostBtnSm,
 } from "@/components/ui";
 import { Topbar } from "@/components/Topbar";
 import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
+import { useCredits } from "@/lib/credits/store";
 import { tendril } from "@/lib/tendril";
 
 export function WorkflowsPage() {
@@ -23,6 +25,8 @@ export function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [creatingTendril, setCreatingTendril] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
 
   useEffect(() => {
     workflowsApi
@@ -31,6 +35,12 @@ export function WorkflowsPage() {
       .catch(() => setWfList([]))
       .finally(() => setLoading(false));
   }, []);
+
+  // Same authoritative balance the engine spends against, re-read on mount so
+  // this page never shows a figure left over from before the last run.
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
 
   const filtered = useMemo(() => {
     return wfList.filter((wf) => {
@@ -71,7 +81,20 @@ export function WorkflowsPage() {
     }
   }, [creatingTendril, router]);
 
-  const activeCount = wfList.filter((w) => w.status === "active").length;
+  // Deletion is permanent, so the row only calls this after its own in-menu
+  // confirm step. The backend refuses (409) for workflows with Tendril lease
+  // history; that message is shown rather than leaving the row silently intact.
+  const handleDelete = useCallback(async (id: string) => {
+    setDeleteError("");
+    try {
+      await workflowsApi.remove(id);
+      setWfList((prev) => prev.filter((w) => w.id !== id));
+    } catch (e) {
+      setDeleteError(
+        e instanceof Error ? e.message : "could not delete workflow",
+      );
+    }
+  }, []);
 
   return (
     <div
@@ -158,33 +181,74 @@ export function WorkflowsPage() {
             </div>
           </div>
 
-          {/* KPI row */}
-          <div
+          {/* Credit balance — the one number that actually gates whether a run
+              can happen here. Replaces the old KPI row, whose cards were all
+              unwired placeholders. */}
+          <Card
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)",
-              gap: 16,
               marginBottom: 24,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 16,
             }}
           >
-            <KpiCard
-              label="Active workflows"
-              value={loading ? "…" : activeCount}
-              sub={loading ? "" : `of ${wfList.length} total`}
-            />
-            <KpiCard
-              label="Agents deployed"
-              value="-"
-              sub="deploy a workflow"
-            />
-            <KpiCard
-              label="Spend · 30d"
-              value="-"
-              unit="ALGO"
-              sub="run a workflow"
-            />
-            <KpiCard label="Runs · 30d" value="-" sub="no runs yet" tone="ok" />
-          </div>
+            <div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  color: "var(--fg-dim)",
+                }}
+              >
+                <IconWallet size={13} /> Credit balance
+              </div>
+              <div
+                style={{
+                  marginTop: 8,
+                  fontSize: 28,
+                  fontWeight: 500,
+                  letterSpacing: "-0.02em",
+                  fontFamily: "var(--font-mono)",
+                  fontVariantNumeric: "tabular-nums",
+                  color: "var(--fg)",
+                }}
+              >
+                {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
+              </div>
+              <div
+                style={{ marginTop: 4, fontSize: 11, color: "var(--fg-muted)" }}
+              >
+                {balanceKnown
+                  ? "Spent as your agents call paid tools and models."
+                  : "Loading balance…"}
+              </div>
+            </div>
+            <button onClick={() => router.push("/billing")} style={ghostBtn}>
+              Add credits
+            </button>
+          </Card>
+
+          {deleteError && (
+            <div
+              style={{
+                marginBottom: 16,
+                padding: "10px 14px",
+                borderRadius: "var(--r-2)",
+                border: "1px solid var(--danger)",
+                background: "var(--bg-elev-1)",
+                color: "var(--danger)",
+                fontSize: 12.5,
+              }}
+            >
+              {deleteError}
+            </div>
+          )}
 
           {/* Controls */}
           <div
@@ -315,6 +379,7 @@ export function WorkflowsPage() {
             <WorkflowRows
               items={filtered}
               onOpen={(id) => router.push(`/workflows/${id}`)}
+              onDelete={handleDelete}
             />
           ) : (
             <WorkflowGrid
@@ -343,65 +408,6 @@ export function WorkflowsPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-function KpiCard({
-  label,
-  value,
-  unit,
-  sub,
-  tone,
-}: {
-  label: string;
-  value: string | number;
-  unit?: string;
-  sub?: string;
-  tone?: string;
-}) {
-  return (
-    <Card>
-      <div
-        style={{
-          fontFamily: "var(--font-mono)",
-          fontSize: 10,
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          color: "var(--fg-dim)",
-          marginBottom: 10,
-        }}
-      >
-        {label}
-      </div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-        <span
-          style={{
-            fontSize: 26,
-            fontWeight: 500,
-            letterSpacing: "-0.02em",
-            color: tone === "ok" ? "var(--accent)" : "var(--fg)",
-          }}
-        >
-          {value}
-        </span>
-        {unit && (
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 12,
-              color: "var(--fg-muted)",
-            }}
-          >
-            {unit}
-          </span>
-        )}
-      </div>
-      {sub && (
-        <div style={{ marginTop: 4, fontSize: 11, color: "var(--fg-muted)" }}>
-          {sub}
-        </div>
-      )}
-    </Card>
   );
 }
 
@@ -473,12 +479,173 @@ function WorkflowIcon({ name }: { name: string }) {
   );
 }
 
+// RowMenu is the ⋯ menu on a workflow row. Delete is permanent, so it asks for
+// a second click ("Delete permanently?") in place rather than firing on the
+// first — and rather than a browser confirm() dialog, which the rest of the app
+// doesn't use.
+function RowMenu({ onDelete }: { onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  // The rows list scrolls horizontally (overflow-x: auto), which clips absolutely
+  // positioned children in both axes — so the menu is position:fixed, anchored to
+  // the button's viewport rect, and closes on scroll/resize rather than drifting.
+  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(
+    null,
+  );
+  const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  const close = useCallback(() => {
+    setOpen(false);
+    setConfirming(false);
+  }, []);
+
+  // Close on any click outside, so an open menu can't be left hanging over a
+  // row the user has moved on from.
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open, close]);
+
+  return (
+    <div
+      ref={ref}
+      // The row itself navigates on click; nothing inside this menu should.
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        ref={btnRef}
+        aria-label="Workflow actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        style={{
+          ...ghostBtnSm,
+          width: 28,
+          padding: 0,
+          justifyContent: "center",
+          background: open ? "var(--bg-elev-3)" : undefined,
+        }}
+        onClick={() => {
+          if (open) {
+            close();
+            return;
+          }
+          const rect = btnRef.current?.getBoundingClientRect();
+          if (rect) {
+            setAnchor({
+              top: rect.bottom + 6,
+              right: window.innerWidth - rect.right,
+            });
+          }
+          setConfirming(false);
+          setOpen(true);
+        }}
+      >
+        ⋯
+      </button>
+      {open && anchor && (
+        <div
+          role="menu"
+          style={{
+            position: "fixed",
+            top: anchor.top,
+            right: anchor.right,
+            zIndex: 40,
+            minWidth: 168,
+            padding: 4,
+            background: "var(--bg-elev-2)",
+            border: "1px solid var(--border-strong)",
+            borderRadius: "var(--r-2)",
+            boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+          }}
+        >
+          <button
+            role="menuitem"
+            onClick={() => {
+              if (!confirming) {
+                setConfirming(true);
+                return;
+              }
+              close();
+              onDelete();
+            }}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              padding: "8px 10px",
+              border: "none",
+              borderRadius: 5,
+              background: confirming
+                ? "var(--danger-soft, transparent)"
+                : "transparent",
+              color: "var(--danger)",
+              fontSize: 12.5,
+              fontWeight: confirming ? 600 : 500,
+              fontFamily: "var(--font-sans)",
+              cursor: "pointer",
+            }}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.background = "var(--bg-elev-3)")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.background = confirming
+                ? "var(--danger-soft, transparent)"
+                : "transparent")
+            }
+          >
+            {confirming ? "Delete permanently?" : "Delete workflow"}
+          </button>
+          {confirming && (
+            <button
+              role="menuitem"
+              onClick={() => setConfirming(false)}
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: "8px 10px",
+                border: "none",
+                borderRadius: 5,
+                background: "transparent",
+                color: "var(--fg-muted)",
+                fontSize: 12.5,
+                fontFamily: "var(--font-sans)",
+                cursor: "pointer",
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WorkflowRows({
   items,
   onOpen,
+  onDelete,
 }: {
   items: Workflow[];
   onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   return (
     <Card style={{ padding: 0, overflowX: "auto" }}>
@@ -612,17 +779,7 @@ function WorkflowRows({
             >
               Open
             </button>
-            <button
-              style={{
-                ...ghostBtnSm,
-                width: 28,
-                padding: 0,
-                justifyContent: "center",
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              ⋯
-            </button>
+            <RowMenu onDelete={() => onDelete(wf.id)} />
           </div>
         </div>
       ))}

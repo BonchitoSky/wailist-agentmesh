@@ -195,6 +195,25 @@ export const workflows = {
     };
   },
 
+  // DELETE /workflows/:id — permanent. The backend refuses (409) for a
+  // workflow that has Tendril lease history, since deleting it would destroy
+  // the only copy of an active lease's encrypted credentials; that message is
+  // surfaced to the caller rather than swallowed.
+  remove: async (id: string): Promise<void> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/workflows/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "workflow delete failed");
+      }
+      return;
+    }
+    await delay(200);
+  },
+
   // TODO: POST /workflows/:id/deploy
   deploy: async (
     id: string,
@@ -265,10 +284,15 @@ export const credits = {
     return 0;
   },
 
-  // Redeems a coupon code and returns the new balance. Throws with the
-  // server's message (e.g. "invalid coupon code", "coupon already redeemed")
-  // on failure so the caller can show it directly.
-  redeemCoupon: async (code: string): Promise<number> => {
+  // Redeems a coupon code, returning the new balance and what this code
+  // granted — both in USD. The credited amount is per-code configuration
+  // (COUPON_CODES on the backend), so it has to come from the response rather
+  // than being assumed. Throws with the server's message (e.g. "invalid coupon
+  // code", "coupon already redeemed") on failure so the caller can show it
+  // directly.
+  redeemCoupon: async (
+    code: string,
+  ): Promise<{ balanceUSD: number; creditedUSD: number }> => {
     if (BASE) {
       const res = await fetch(`${BASE}/credits/redeem-coupon`, {
         method: "POST",
@@ -278,7 +302,10 @@ export const credits = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "coupon redemption failed");
-      return (data.credit_usd_micros ?? 0) / 1e6;
+      return {
+        balanceUSD: (data.credit_usd_micros ?? 0) / 1e6,
+        creditedUSD: (data.credited_usd_micros ?? 0) / 1e6,
+      };
     }
     await delay(120);
     throw new Error("coupons aren't available in mock mode");

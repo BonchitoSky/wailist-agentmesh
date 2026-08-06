@@ -60,6 +60,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
   const [org, setOrg] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   // Surface OAuth failures the backend redirected back with (?error=...).
   useEffect(() => {
@@ -241,14 +242,43 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
                   )
                 }
               >
-                <input
-                  style={inputStyle}
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="•••••••••••"
-                />
+                {/* The reveal toggle sits inside the field, so the input keeps
+                    room for it rather than running under the button. */}
+                <div style={{ position: "relative" }}>
+                  <input
+                    style={{ ...inputStyle, paddingRight: 60 }}
+                    type={showPassword ? "text" : "password"}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="•••••••••••"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-pressed={showPassword}
+                    aria-label={
+                      showPassword ? "Hide password" : "Show password"
+                    }
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      right: 0,
+                      height: 38,
+                      padding: "0 10px",
+                      background: "transparent",
+                      border: "none",
+                      color: "var(--fg-muted)",
+                      fontSize: 11,
+                      fontFamily: "var(--font-mono)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
               </FormField>
 
               {error && (

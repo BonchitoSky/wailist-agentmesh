@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,9 @@ var ErrPasswordAccountExists = errors.New("password account exists for email")
 
 type Store struct {
 	pool *pgxpool.Pool
+	// coupons is the redeemable coupon catalog (code -> USD micros), loaded
+	// from configuration at startup. See SetCouponCatalog.
+	coupons map[string]int64
 }
 
 func (s *Store) Close() {
@@ -652,34 +656,100 @@ func (s *Store) CreditBalance(ctx context.Context, userID string) (int64, error)
 
 // --- Coupons ---
 
-// CouponAmountsUSDMicros is the fixed catalog of redeemable coupon codes. Each
-// code is independently redeemable once per user (enforced by the UNIQUE
+// The coupon catalog is configuration, not code: it comes from the COUPON_CODES
+// env var (parsed by ParseCouponCatalog, installed via SetCouponCatalog at
+// startup) so codes can be minted, repriced, or retired without a deploy. An
+// empty catalog — the zero value, and what an unset COUPON_CODES gives you —
+// means every code is rejected as invalid, which is the right default: a
+// forgotten hardcoded code that still grants real credits is a standing
+// liability.
+//
+// Each code is independently redeemable once per user (enforced by the UNIQUE
 // (user_id, code) constraint on coupon_redemptions) — redeeming multiple
 // distinct codes stacks.
-var CouponAmountsUSDMicros = map[string]int64{
-	"AYASHISGAY6969": 5_000_000, // $5
-	"INNOFUSIONFTW":  5_000_000, // $5
-}
 
 var (
 	ErrCouponInvalid         = errors.New("invalid coupon code")
 	ErrCouponAlreadyRedeemed = errors.New("coupon already redeemed")
 )
 
+// SetCouponCatalog installs the redeemable coupon catalog, keyed by
+// already-uppercased code, valued in USD micros. Called once at startup,
+// before the server accepts requests.
+func (s *Store) SetCouponCatalog(catalog map[string]int64) {
+	s.coupons = catalog
+}
+
+// CouponCatalog returns the installed catalog (nil if none was set).
+func (s *Store) CouponCatalog() map[string]int64 {
+	return s.coupons
+}
+
+// ParseCouponCatalog parses a COUPON_CODES spec into a catalog. The format is
+// a comma-separated list of CODE:AMOUNT pairs, where AMOUNT is in US dollars:
+//
+//	COUPON_CODES="WELCOME5:5,LAUNCH:12.50"
+//
+// Codes are upper-cased to match the handler, which upper-cases user input
+// before lookup. An empty spec yields an empty catalog with no error; a
+// malformed entry is an error rather than a silent skip, so a typo in one code
+// can't quietly leave a coupon campaign half-live.
+//
+// A repeated code is an error for the same reason. Last-write-wins on a
+// duplicate would mean "WELCOME5:5,WELCOME5:10" quietly grants $10 while
+// reading, to anyone scanning the config, like it grants $5 — the exact class
+// of silent misconfiguration the rest of this parser refuses.
+func ParseCouponCatalog(spec string) (map[string]int64, error) {
+	catalog := map[string]int64{}
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		code, amountStr, ok := strings.Cut(entry, ":")
+		if !ok {
+			return nil, fmt.Errorf("coupon entry %q is not in CODE:AMOUNT form", entry)
+		}
+		code = strings.ToUpper(strings.TrimSpace(code))
+		if code == "" {
+			return nil, fmt.Errorf("coupon entry %q has an empty code", entry)
+		}
+		if _, dup := catalog[code]; dup {
+			return nil, fmt.Errorf("coupon %s: listed more than once", code)
+		}
+		usd, err := strconv.ParseFloat(strings.TrimSpace(amountStr), 64)
+		if err != nil {
+			return nil, fmt.Errorf("coupon %s: amount %q is not a number", code, strings.TrimSpace(amountStr))
+		}
+		if usd <= 0 {
+			return nil, fmt.Errorf("coupon %s: amount must be greater than 0", code)
+		}
+		// Round rather than truncate: 0.1 lands a hair under 100000 micros in
+		// binary floating point, and truncating would quietly short every
+		// redemption by one micro.
+		catalog[code] = int64(math.Round(usd * 1e6))
+	}
+	return catalog, nil
+}
+
 // RedeemCoupon credits a user's balance for an unredeemed, known coupon code,
 // atomically. The UNIQUE (user_id, code) constraint plus ON CONFLICT DO
 // NOTHING is what actually enforces "once per user per code" under
 // concurrent requests — RowsAffected == 0 means another request (or an
 // earlier one) already claimed this code for this user.
-func (s *Store) RedeemCoupon(ctx context.Context, userID, code string) (int64, error) {
-	amount, ok := CouponAmountsUSDMicros[code]
+//
+// Returns the user's new balance and the amount this redemption credited, both
+// in USD micros — the caller shows the credited amount, which is per-code
+// configuration and no longer a fixed $5 it could hardcode.
+func (s *Store) RedeemCoupon(ctx context.Context, userID, code string) (newBalance, credited int64, err error) {
+	amount, ok := s.coupons[code]
 	if !ok {
-		return 0, ErrCouponInvalid
+		return 0, 0, ErrCouponInvalid
 	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -689,25 +759,24 @@ func (s *Store) RedeemCoupon(ctx context.Context, userID, code string) (int64, e
 		ON CONFLICT (user_id, code) DO NOTHING
 	`, userID, code, amount)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if tag.RowsAffected() == 0 {
-		return 0, ErrCouponAlreadyRedeemed
+		return 0, 0, ErrCouponAlreadyRedeemed
 	}
 
-	var newBalance int64
 	if err := tx.QueryRow(ctx, `
 		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1
 		WHERE id = $2
 		RETURNING credit_balance_usd_micros
 	`, amount, userID).Scan(&newBalance); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return newBalance, nil
+	return newBalance, amount, nil
 }
 
 // MarkCreditTransactionStatus moves a still-pending ledger row directly to status
