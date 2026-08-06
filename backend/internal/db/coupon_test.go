@@ -52,6 +52,11 @@ func TestParseCouponCatalogRejectsMalformed(t *testing.T) {
 		"CODE:0",          // non-positive
 		"CODE:-5",         // negative
 		"GOOD:5,BAD",      // one bad entry fails the whole spec
+		// A duplicate must not silently last-write-win: the spec below reads
+		// like a $5 coupon and would otherwise grant $10.
+		"WELCOME5:5,WELCOME5:10",
+		"WELCOME5:5,welcome5:10", // same code, different case
+		"WELCOME5:5,WELCOME5:5",  // duplicate even at the same amount
 	} {
 		if _, err := db.ParseCouponCatalog(spec); err == nil {
 			t.Fatalf("spec %q: want error, got none", spec)

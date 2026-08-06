@@ -694,6 +694,11 @@ func (s *Store) CouponCatalog() map[string]int64 {
 // before lookup. An empty spec yields an empty catalog with no error; a
 // malformed entry is an error rather than a silent skip, so a typo in one code
 // can't quietly leave a coupon campaign half-live.
+//
+// A repeated code is an error for the same reason. Last-write-wins on a
+// duplicate would mean "WELCOME5:5,WELCOME5:10" quietly grants $10 while
+// reading, to anyone scanning the config, like it grants $5 — the exact class
+// of silent misconfiguration the rest of this parser refuses.
 func ParseCouponCatalog(spec string) (map[string]int64, error) {
 	catalog := map[string]int64{}
 	for _, entry := range strings.Split(spec, ",") {
@@ -708,6 +713,9 @@ func ParseCouponCatalog(spec string) (map[string]int64, error) {
 		code = strings.ToUpper(strings.TrimSpace(code))
 		if code == "" {
 			return nil, fmt.Errorf("coupon entry %q has an empty code", entry)
+		}
+		if _, dup := catalog[code]; dup {
+			return nil, fmt.Errorf("coupon %s: listed more than once", code)
 		}
 		usd, err := strconv.ParseFloat(strings.TrimSpace(amountStr), 64)
 		if err != nil {
