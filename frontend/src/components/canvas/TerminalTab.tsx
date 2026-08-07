@@ -5,7 +5,8 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
 // The SSE stream already bypasses Next's /api rewrite because that proxy does
-// not hold long-lived connections open (see LogDrawer's SSE_BASE comment). A
+// not hold long-lived connections open (see useRunTranscript's SSE_BASE
+// comment). A
 // WebSocket has exactly the same problem, so it dials the backend directly for
 // exactly the same reason.
 const WS_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";

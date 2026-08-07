@@ -9,7 +9,7 @@ import {
   type X402Payment,
 } from "./useRunTranscript";
 
-interface LogDrawerProps {
+interface ConsolePanelProps {
   open: boolean;
   onToggle: () => void;
   runId: string | null;
@@ -30,14 +30,14 @@ const maxHeight = () =>
     ? 640
     : Math.max(MIN_HEIGHT, window.innerHeight - 220);
 
-export function LogDrawer({
+export function ConsolePanel({
   open,
   onToggle,
   runId,
   running,
   onRunComplete,
   workflowId,
-}: LogDrawerProps) {
+}: ConsolePanelProps) {
   // Everything about the run itself -- SSE, DB reconciliation, the cached
   // last-run transcript, settlement recording -- lives in useRunTranscript.
   // This component owns only how that transcript is presented.

@@ -18,7 +18,7 @@ import {
 import { CanvasGraph } from "./CanvasGraph";
 import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
-import { LogDrawer } from "./LogDrawer";
+import { ConsolePanel } from "./ConsolePanel";
 import { ResizeHandle } from "./ResizeHandle";
 import {
   PALETTE,
@@ -419,7 +419,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           />
           {/* key remounts the drawer per run, so logs/elapsed/done reset via
               initial state instead of a setState cascade inside its effect. */}
-          <LogDrawer
+          <ConsolePanel
             key={runId ?? "idle"}
             workflowId={workflow?.id}
             open={logOpen}
