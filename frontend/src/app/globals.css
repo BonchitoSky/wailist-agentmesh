@@ -401,3 +401,71 @@ body {
     transition: none;
   }
 }
+
+/* ── Workflow console chat ──────────────────────────────────────────────── */
+/* Messages arrive with the same entrance the Toast uses, so the console's
+   conversation reads as part of the app's existing motion vocabulary. */
+.chat-msg {
+  animation: fade-up 0.25s var(--ease);
+}
+
+/* "working…" indicator while a turn's run is in flight. Reuses the shared
+   `pulse` keyframe rather than introducing another one. */
+.chat-thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.2s var(--ease) infinite;
+}
+
+/* The activity strip: dim by default so it stays subordinate to the answer,
+   accented on hover to advertise that it opens the logs. */
+.chat-activity {
+  transition: color 0.12s var(--ease);
+}
+.chat-activity:not(:disabled):hover {
+  color: var(--accent);
+}
+.chat-activity:not(:disabled):active {
+  transform: scale(0.97);
+}
+.chat-activity:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+
+.chat-send {
+  transition:
+    background 0.12s var(--ease),
+    transform 0.12s var(--ease);
+}
+.chat-send:not(:disabled):hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+.chat-send:not(:disabled):active {
+  transform: scale(0.97);
+}
+.chat-send:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-msg {
+    animation: none;
+  }
+  .chat-thinking-dot {
+    animation: none;
+  }
+  .chat-activity,
+  .chat-send {
+    transition: none;
+  }
+  .chat-activity:not(:disabled):active,
+  .chat-send:not(:disabled):active {
+    transform: none;
+  }
+}
