@@ -8,6 +8,9 @@ import {
   type LogEvent,
   type X402Payment,
 } from "./useRunTranscript";
+import { ChatPane } from "./chat/ChatPane";
+import { useChatSession } from "./chat/useChatSession";
+import { resolveReply } from "./chat/resolveReply";
 
 interface ConsolePanelProps {
   open: boolean;
@@ -18,9 +21,21 @@ interface ConsolePanelProps {
   // Scopes the cached last-run transcript, so reopening a workflow shows that
   // workflow's own last result rather than whatever ran most recently.
   workflowId?: string;
+  /** True when the workflow has a chat trigger, so it can be talked to. */
+  chatEnabled?: boolean;
+  /** Starts a run from a chat message. */
+  onSendMessage?: (text: string) => void;
 }
 
 const HEIGHT_KEY = "agentmesh_console_height";
+// Whether a chat-capable workflow also shows the log rows. Persisted per user
+// rather than per workflow: it tracks who you are (developer or not), not
+// which graph you happen to have open. A developer flips it once; someone who
+// only wants the answer never touches it.
+const LOGS_VISIBLE_KEY = "agentmesh_console_logs_visible";
+// Chat keeps a comfortable reading column when the logs sit beside it; when
+// they are hidden it takes the full width instead.
+const CHAT_WIDTH = 380;
 const DEFAULT_HEIGHT = 240;
 const MIN_HEIGHT = 120;
 // Leave room for the topbar and some canvas: a console dragged to fill the
@@ -37,6 +52,8 @@ export function ConsolePanel({
   running,
   onRunComplete,
   workflowId,
+  chatEnabled = false,
+  onSendMessage,
 }: ConsolePanelProps) {
   // Everything about the run itself -- SSE, DB reconciliation, the cached
   // last-run transcript, settlement recording -- lives in useRunTranscript.
@@ -48,10 +65,71 @@ export function ConsolePanel({
     workflowId,
   });
 
+  const session = useChatSession(workflowId);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [resizing, setResizing] = useState(false);
   const [tab, setTab] = useState<"logs" | "terminal">("logs");
+  const [logsVisible, setLogsVisible] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // A workflow with no chat trigger has nothing but logs to show, so the
+  // toggle only applies to chat-capable ones.
+  const showLogs = !chatEnabled || logsVisible;
+
+  // Restore the logs-visible preference. Same next-frame pattern as the
+  // height below, and for the same hydration reason.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      try {
+        setLogsVisible(window.localStorage.getItem(LOGS_VISIBLE_KEY) === "1");
+      } catch {
+        /* unavailable storage: default to chat-only */
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  const toggleLogs = () => {
+    setLogsVisible((v) => {
+      const next = !v;
+      try {
+        window.localStorage.setItem(LOGS_VISIBLE_KEY, next ? "1" : "0");
+      } catch {
+        /* best-effort */
+      }
+      return next;
+    });
+  };
+
+  // Bind the turn the user just sent to the run the backend actually started.
+  // The console is remounted with key={runId} the moment a run begins, so the
+  // pending message arrives here by way of localStorage, not props.
+  const { attachRun, completeTurn, hydrated } = session;
+  useEffect(() => {
+    if (!runId || !hydrated) return;
+    attachRun(runId);
+  }, [runId, hydrated, attachRun]);
+
+  // Fill that turn in once the run reaches a terminal state. Guarded on runId
+  // so a transcript restored from cache (which arrives already `done`) can't
+  // resolve a turn that belongs to some earlier run.
+  useEffect(() => {
+    if (!done || !runId || !hydrated) return;
+    const summary = resolveReply(logs);
+    completeTurn({
+      text: summary.text,
+      isError: summary.isError,
+      toolCount: summary.toolCount,
+      spendUSD: summary.spendUSD,
+      elapsedS: elapsed ?? undefined,
+      runId,
+    });
+  }, [done, runId, hydrated, logs, elapsed, completeTurn]);
+
+  const handleSend = (text: string) => {
+    session.startTurn(text);
+    onSendMessage?.(text);
+  };
 
   // Restore the last chosen console height. Read in an effect rather than in
   // useState's initializer so the server render and first client render agree.
@@ -225,7 +303,33 @@ export function ConsolePanel({
               {logs.length} step{logs.length !== 1 ? "s" : ""}
             </span>
           )}
-          {leaseId && open && (
+          {/* The one control that decides which audience this panel serves.
+              Off by default: the answer is the thing most people came for,
+              and the log rows are opt-in rather than mandatory. */}
+          {chatEnabled && open && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleLogs();
+              }}
+              aria-pressed={logsVisible}
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 9.5,
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                padding: "2px 8px",
+                borderRadius: 999,
+                border: `1px solid ${logsVisible ? "var(--accent)" : "var(--border)"}`,
+                color: logsVisible ? "var(--accent)" : "var(--fg-dim)",
+                background: "transparent",
+                cursor: "pointer",
+              }}
+            >
+              Logs
+            </button>
+          )}
+          {leaseId && open && showLogs && (
             <div
               onClick={(e) => e.stopPropagation()}
               style={{ display: "flex", gap: 4 }}
@@ -270,110 +374,151 @@ export function ConsolePanel({
         </span>
       </div>
 
-      {/* Terminal — mounted only while selected; unmounting on tab switch
-          away is intentional (it owns a live WebSocket + SSH session, unlike
-          the log list which is cheap to keep mounted underneath). */}
-      {open && effectiveTab === "terminal" && leaseId && (
-        <div style={{ flex: 1, minHeight: 0 }}>
-          <TerminalTab leaseId={leaseId} onClose={() => setTab("logs")} />
-        </div>
-      )}
-
-      {/* Log lines. Stays mounted (hidden via CSS) when the Terminal tab is
-          active, so switching back does not lose the transcript. */}
+      {/* Body: chat on the left (the human view), logs on the right (the
+          technical one). Siblings in one surface rather than separate
+          features, so a message and the steps it caused sit side by side. */}
       {open && (
-        <div
-          style={{
-            display: effectiveTab === "terminal" ? "none" : "block",
-            flex: 1,
-            overflow: "auto",
-            padding: "6px 14px 10px",
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            lineHeight: 1.7,
-          }}
-        >
-          {logs.length === 0 && !running && !runId && (
-            <div style={{ color: "var(--fg-dim)", paddingTop: 8 }}>
-              run a workflow to see execution logs here.
-            </div>
-          )}
-          {logs.length === 0 && running && (
-            <div style={{ color: "var(--fg-dim)", paddingTop: 8 }}>
-              waiting for first node…
-            </div>
-          )}
-          {logs.map((l, i) => (
+        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+          {chatEnabled && (
             <div
-              key={i}
               style={{
-                display: "grid",
-                gridTemplateColumns: "52px 34px 110px 1fr",
-                gap: 10,
-                alignItems: "baseline",
-                borderBottom: "1px solid var(--border-soft)",
-                padding: "3px 0",
+                width: showLogs ? CHAT_WIDTH : "100%",
+                flexShrink: 0,
+                minWidth: 0,
               }}
             >
-              <span style={{ color: "var(--fg-dim)", fontSize: 9.5 }}>
-                {new Date(l.ts).toLocaleTimeString("en", {
-                  hour12: false,
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  second: "2-digit",
-                })}
-              </span>
-              <span
-                style={{
-                  color: statusColor(l.status),
-                  fontWeight: 600,
-                  fontSize: 9.5,
+              <ChatPane
+                session={session}
+                onSend={handleSend}
+                busy={running}
+                onOpenLogs={() => {
+                  if (!logsVisible) toggleLogs();
                 }}
-              >
-                {statusLabel(l.status)}
-              </span>
-              <span
-                style={{
-                  color: "var(--fg-muted)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <span style={{ color: nodeTypeColor(l.nodeType) }}>
-                  {l.nodeType}
-                </span>
-                {l.durationMs > 0 && (
-                  <span style={{ color: "var(--fg-dim)" }}>
-                    {" "}
-                    · {l.durationMs}ms
-                  </span>
-                )}
-              </span>
-              <OutputCell output={l.output} />
+              />
             </div>
-          ))}
-          {done &&
-            (() => {
-              const succeeded = logs.filter(
-                (l) => l.status === "success",
-              ).length;
-              const hasFailure = logs.some((l) => l.status === "failed");
-              return (
-                <div
-                  style={{
-                    color: hasFailure ? "#F87171" : "var(--accent)",
-                    paddingTop: 6,
-                    fontSize: 10,
-                  }}
-                >
-                  {hasFailure ? "✕ run failed" : "✓ run complete"} ·{" "}
-                  {(elapsed ?? 0).toFixed(1)}s · {succeeded}/{logs.length} nodes
-                  succeeded
+          )}
+
+          {showLogs && (
+            <div
+              style={{
+                flex: 1,
+                minWidth: 0,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              {/* Terminal — mounted only while selected; unmounting on tab
+                  switch away is intentional (it owns a live WebSocket + SSH
+                  session, unlike the log list which is cheap to keep mounted
+                  underneath). */}
+              {effectiveTab === "terminal" && leaseId && (
+                <div style={{ flex: 1, minHeight: 0 }}>
+                  <TerminalTab
+                    leaseId={leaseId}
+                    onClose={() => setTab("logs")}
+                  />
                 </div>
-              );
-            })()}
-          <div ref={bottomRef} />
+              )}
+
+              {/* Log lines. Stays mounted (hidden via CSS) when the Terminal
+                  tab is active, so switching back does not lose the
+                  transcript. */}
+              <div
+                style={{
+                  display: effectiveTab === "terminal" ? "none" : "block",
+                  flex: 1,
+                  overflow: "auto",
+                  padding: "6px 14px 10px",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  lineHeight: 1.7,
+                }}
+              >
+                {logs.length === 0 && !running && !runId && (
+                  <div style={{ color: "var(--fg-dim)", paddingTop: 8 }}>
+                    run a workflow to see execution logs here.
+                  </div>
+                )}
+                {logs.length === 0 && running && (
+                  <div style={{ color: "var(--fg-dim)", paddingTop: 8 }}>
+                    waiting for first node…
+                  </div>
+                )}
+                {logs.map((l, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "52px 34px 110px 1fr",
+                      gap: 10,
+                      alignItems: "baseline",
+                      borderBottom: "1px solid var(--border-soft)",
+                      padding: "3px 0",
+                    }}
+                  >
+                    <span style={{ color: "var(--fg-dim)", fontSize: 9.5 }}>
+                      {new Date(l.ts).toLocaleTimeString("en", {
+                        hour12: false,
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        second: "2-digit",
+                      })}
+                    </span>
+                    <span
+                      style={{
+                        color: statusColor(l.status),
+                        fontWeight: 600,
+                        fontSize: 9.5,
+                      }}
+                    >
+                      {statusLabel(l.status)}
+                    </span>
+                    <span
+                      style={{
+                        color: "var(--fg-muted)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <span style={{ color: nodeTypeColor(l.nodeType) }}>
+                        {l.nodeType}
+                      </span>
+                      {l.durationMs > 0 && (
+                        <span style={{ color: "var(--fg-dim)" }}>
+                          {" "}
+                          · {l.durationMs}ms
+                        </span>
+                      )}
+                    </span>
+                    <OutputCell output={l.output} />
+                  </div>
+                ))}
+                {done &&
+                  (() => {
+                    const succeeded = logs.filter(
+                      (l) => l.status === "success",
+                    ).length;
+                    const hasFailure = logs.some((l) => l.status === "failed");
+                    return (
+                      <div
+                        style={{
+                          color: hasFailure ? "#F87171" : "var(--accent)",
+                          paddingTop: 6,
+                          fontSize: 10,
+                        }}
+                      >
+                        {hasFailure ? "✕ run failed" : "✓ run complete"} ·{" "}
+                        {(elapsed ?? 0).toFixed(1)}s · {succeeded}/{logs.length}{" "}
+                        nodes succeeded
+                      </div>
+                    );
+                  })()}
+                <div ref={bottomRef} />
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

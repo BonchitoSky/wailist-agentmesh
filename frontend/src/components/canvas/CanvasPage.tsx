@@ -51,7 +51,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const [toast, setToast] = useState<string | null>(null);
   const [saveLabel, setSaveLabel] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
-  const [chatPrompt, setChatPrompt] = useState<string | null>(null); // null = closed
   const justLoaded = useRef(true);
 
   // -- Resizable side panels ------------------------------------------------
@@ -282,7 +281,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         setRunId(res.runId);
         setRunning(true);
         setLogOpen(true);
-        setChatPrompt(null);
         showToast(`Run started · ${res.runId.slice(0, 8)}…`);
       } catch (err: unknown) {
         showToast(
@@ -309,7 +307,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       return;
     }
     if (hasChatTrigger) {
-      setChatPrompt(""); // open dialog
+      // A chat workflow is run by talking to it, not by a Run button: open
+      // the console so the conversation is where the message gets typed.
+      setLogOpen(true);
       return;
     }
     await startRun();
@@ -426,6 +426,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
             onToggle={() => setLogOpen((o) => !o)}
             runId={runId}
             running={running}
+            chatEnabled={hasChatTrigger}
+            onSendMessage={(msg) => void startRun({ message: msg })}
             onRunComplete={() => {
               setRunning(false);
               // A run that paid for an x402 call has just debited credits;
@@ -459,15 +461,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       </div>
 
       {toast && <Toast message={toast} />}
-
-      {chatPrompt !== null && (
-        <ChatRunModal
-          value={chatPrompt}
-          onChange={setChatPrompt}
-          onSubmit={(msg) => startRun({ message: msg })}
-          onClose={() => setChatPrompt(null)}
-        />
-      )}
     </div>
   );
 }
@@ -683,148 +676,6 @@ function Stat({
           </span>
         )}
       </span>
-    </div>
-  );
-}
-
-// ── Chat Run Modal ──────────────────────────────────────────────────────────
-function ChatRunModal({
-  value,
-  onChange,
-  onSubmit,
-  onClose,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: (msg: string) => void;
-  onClose: () => void;
-}) {
-  const submit = () => {
-    if (value.trim()) onSubmit(value.trim());
-  };
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(8,7,12,0.7)",
-        backdropFilter: "blur(4px)",
-        zIndex: 100,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          width: 480,
-          background: "var(--bg-elev-2)",
-          border: "1px solid var(--border-strong)",
-          borderRadius: 12,
-          padding: 24,
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: "var(--fg)" }}>
-              Start run
-            </div>
-            <div
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 10,
-                color: "var(--fg-dim)",
-                marginTop: 2,
-              }}
-            >
-              chat trigger · type your message below
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--fg-muted)",
-              cursor: "pointer",
-              fontSize: 16,
-              padding: 4,
-            }}
-          >
-            ✕
-          </button>
-        </div>
-        <textarea
-          autoFocus
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
-          }}
-          placeholder="e.g. What's the weather in Tokyo right now?"
-          style={{
-            width: "100%",
-            minHeight: 100,
-            padding: "10px 12px",
-            background: "var(--bg)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--r-2)",
-            color: "var(--fg)",
-            fontSize: 13,
-            fontFamily: "var(--font-sans)",
-            resize: "vertical",
-            outline: "none",
-            lineHeight: 1.6,
-            boxSizing: "border-box",
-          }}
-        />
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 10,
-              color: "var(--fg-dim)",
-            }}
-          >
-            ⌘ Enter to run
-          </span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={onClose} style={{ ...ghostBtnSm, height: 32 }}>
-              Cancel
-            </button>
-            <button
-              onClick={submit}
-              disabled={!value.trim()}
-              style={{
-                ...primaryBtnStyle,
-                height: 32,
-                opacity: !value.trim() ? 0.5 : 1,
-              }}
-            >
-              <IconPlay size={10} /> Run workflow
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
