@@ -39,7 +39,9 @@ export function ChatPane({ session, onSend, busy, onOpenLogs }: ChatPaneProps) {
       style={{
         display: "flex",
         flexDirection: "column",
-        height: "100%",
+        // flex:1 against the wrapper's explicit column, rather than a
+        // percentage height against an indefinite parent.
+        flex: 1,
         minHeight: 0,
         borderRight: "1px solid var(--border)",
       }}

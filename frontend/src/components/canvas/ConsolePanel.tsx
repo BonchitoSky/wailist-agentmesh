@@ -385,6 +385,13 @@ export function ConsolePanel({
                 width: showLogs ? CHAT_WIDTH : "100%",
                 flexShrink: 0,
                 minWidth: 0,
+                // An explicit column rather than relying on the pane's
+                // height:100% resolving against a stretched flex item, which
+                // collapses to zero the moment this wrapper's own height is
+                // indefinite.
+                display: "flex",
+                flexDirection: "column",
+                minHeight: 0,
               }}
             >
               <ChatPane
