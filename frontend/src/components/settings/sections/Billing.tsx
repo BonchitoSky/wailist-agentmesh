@@ -1,0 +1,142 @@
+"use client";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import type { UserSettings } from "@/lib/api";
+import { useCredits } from "@/lib/credits/store";
+import {
+  FormStatus,
+  SaveButton,
+  SettingRow,
+  SettingsSection,
+  amountInputStyle,
+} from "@/components/settings/ui";
+import { ghostBtnSm } from "@/components/ui";
+
+type SaveState = "idle" | "saving" | "saved" | "error";
+
+// Micros are the storage unit everywhere in this codebase; dollars exist only
+// for display. Rounding on the way in keeps a typed "12.3456789" from becoming
+// a fractional micro the BIGINT column can't hold.
+const microsToUSD = (micros: number): string => (micros / 1e6).toFixed(2);
+const usdToMicros = (usd: number): number => Math.round(usd * 1e6);
+
+export function BillingSection({
+  settings,
+  onSave,
+}: {
+  settings: UserSettings;
+  onSave: (patch: { lowBalanceUsdMicros: number }) => Promise<void>;
+}) {
+  const router = useRouter();
+  const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
+  const [threshold, setThreshold] = useState(
+    microsToUSD(settings.lowBalanceUsdMicros),
+  );
+  const [state, setState] = useState<SaveState>("idle");
+  const [message, setMessage] = useState("");
+
+  // The store only holds a balance once something has fetched one, and it is
+  // deliberately never restored from localStorage (a cached balance goes stale
+  // the moment a run spends credits). Without this the panel shows an em dash
+  // forever — the credits page does the same on mount for the same reason.
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsed = Number(threshold);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setState("error");
+      setMessage("Enter a threshold of zero or more.");
+      return;
+    }
+    setState("saving");
+    try {
+      await onSave({ lowBalanceUsdMicros: usdToMicros(parsed) });
+      setState("saved");
+      setMessage("Low balance threshold saved.");
+    } catch (err) {
+      setState("error");
+      setMessage(err instanceof Error ? err.message : "Could not save.");
+    }
+  };
+
+  return (
+    <SettingsSection
+      id="billing"
+      title="Billing and credits"
+      description="Credits are spent as your agents call paid tools, x402 endpoints, and LLM providers."
+    >
+      <div style={{ display: "grid", gap: 4 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg)" }}>
+          Current balance
+        </span>
+        <span
+          style={{
+            fontSize: 22,
+            fontWeight: 700,
+            color: "var(--fg)",
+            fontFamily: "var(--font-mono)",
+            fontVariantNumeric: "tabular-nums",
+            letterSpacing: "-0.01em",
+          }}
+        >
+          {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
+        </span>
+      </div>
+
+      <form onSubmit={submit} style={{ display: "grid", gap: 18 }}>
+        <SettingRow
+          label="Low balance warning"
+          htmlFor="set-low-balance"
+          hint="Warn me when my balance drops below this. Drives the banner on the credits page and the low-balance indicator on the canvas."
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              maxWidth: 220,
+            }}
+          >
+            <span style={{ fontSize: 13, color: "var(--fg-muted)" }}>$</span>
+            <input
+              id="set-low-balance"
+              inputMode="decimal"
+              value={threshold}
+              onChange={(e) => setThreshold(e.target.value)}
+              style={amountInputStyle}
+            />
+          </div>
+        </SettingRow>
+        <SaveButton saving={state === "saving"} />
+        <FormStatus state={state} message={message} />
+      </form>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <button
+          type="button"
+          style={ghostBtnSm}
+          onClick={() => router.push("/billing")}
+        >
+          Add credits
+        </button>
+        <button
+          type="button"
+          style={ghostBtnSm}
+          onClick={() => router.push("/usage")}
+        >
+          View usage
+        </button>
+        <button
+          type="button"
+          style={ghostBtnSm}
+          onClick={() => router.push("/refund-policy")}
+        >
+          Refund policy
+        </button>
+      </div>
+    </SettingsSection>
+  );
+}
