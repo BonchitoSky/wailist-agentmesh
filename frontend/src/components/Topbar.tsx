@@ -210,7 +210,10 @@ export function Topbar() {
                 <button
                   className="profile-menu__item"
                   role="menuitem"
-                  onClick={() => setMenuState("closed")}
+                  onClick={() => {
+                    setMenuState("closed");
+                    router.push("/settings");
+                  }}
                 >
                   Settings
                 </button>
@@ -303,9 +306,7 @@ function OnboardingModal({
             Tell us who you are so your teammates recognize you.
           </div>
         </div>
-        <label
-          style={{ display: "flex", flexDirection: "column", gap: 6 }}
-        >
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
             Full name
           </span>
@@ -318,9 +319,7 @@ function OnboardingModal({
             style={onboardingInputStyle}
           />
         </label>
-        <label
-          style={{ display: "flex", flexDirection: "column", gap: 6 }}
-        >
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
             Organization (optional)
           </span>
