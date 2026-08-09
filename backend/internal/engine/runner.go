@@ -94,9 +94,29 @@ func (r *Runner) SetTendril(client *tendril.Client, session *tendril.Session) {
 }
 
 // preflightCheck fails a node before it runs if wf.UserID can't cover
-// amountUSDMicros. Blocks outright — no soft overage — matching the
-// prepaid-only model already used for credit top-ups.
+// amountUSDMicros, or if the charge exceeds the user's own per-call spend
+// ceiling. Blocks outright — no soft overage — matching the prepaid-only model
+// already used for credit top-ups.
+//
+// This is the single chokepoint every spend path goes through, which is why the
+// user ceiling is enforced here rather than at each call site: a limit the
+// engine only checks in some branches is worse than no limit, because the
+// settings page would still claim it applies everywhere.
 func (r *Runner) preflightCheck(ctx context.Context, wf models.Workflow, amountUSDMicros int64) error {
+	// Only a real charge can breach a ceiling, so the zero-amount BYOK path
+	// (see executeNode's agentFeeUSDMicros) costs no extra query.
+	if amountUSDMicros > 0 {
+		settings, err := r.store.GetUserSettings(ctx, wf.UserID)
+		if err != nil {
+			return err
+		}
+		// Tightens models.MaxSingleX402QuoteUSDMicros; it can never loosen it,
+		// since PATCH /settings refuses a ceiling above the global cap.
+		if ceiling := settings.MaxCallSpendUSDMicros; ceiling != nil && amountUSDMicros > *ceiling {
+			return fmt.Errorf("call would spend %d micros, above the %d micros per-call limit set for this account", amountUSDMicros, *ceiling)
+		}
+	}
+
 	balance, err := r.store.GetCreditBalance(ctx, wf.UserID)
 	if err != nil {
 		return err
