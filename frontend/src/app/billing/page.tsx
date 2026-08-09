@@ -9,7 +9,6 @@ import { bonusRate, creditsForTopup } from "@/lib/credits/fx";
 import { credits as creditsApi } from "@/lib/api";
 
 const PRESETS_INR = [100, 500, 1000, 2000];
-const LOW_BALANCE_USD = 5;
 
 const HOW_IT_WORKS = [
   "Credits are spent as your agents call paid tools, x402 endpoints, and LLM providers.",
@@ -42,8 +41,13 @@ const panelStyle: React.CSSProperties = {
 const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
 
 export default function BillingPage() {
-  const { balanceUSD, balanceKnown, lastPurchase, refreshBalance } =
-    useCredits();
+  const {
+    balanceUSD,
+    balanceKnown,
+    lastPurchase,
+    refreshBalance,
+    autoRecharge,
+  } = useCredits();
   const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -100,8 +104,11 @@ export default function BillingPage() {
   const credits = creditsForTopup(checkoutAmountINR);
   // Only call a balance "low" once we've actually read it — before the first
   // fetch lands, balanceUSD is 0 because nothing is known, not because the
-  // account is empty.
-  const isLow = balanceKnown && balanceUSD < LOW_BALANCE_USD;
+  // account is empty. The threshold itself is the one the user set in
+  // Settings, not a constant: it was previously hardcoded here as a second $5
+  // beside the store's own default, so the two could disagree the moment
+  // either moved.
+  const isLow = balanceKnown && balanceUSD < autoRecharge.thresholdUSD;
 
   return (
     <div
