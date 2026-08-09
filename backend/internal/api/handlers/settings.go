@@ -118,6 +118,17 @@ func parseSettingsPatch(body io.Reader) (settingsPatch, string) {
 			if *ceiling <= 0 {
 				return patch, "maxCallSpendUsdMicros must be greater than zero — send null to remove the ceiling"
 			}
+			// Below the probe floor the ceiling stops being a spend limit and
+			// becomes an outage. Runner.preflightCheck is also the guard for
+			// X402ProbeFloorUSDMicros — a conservative reservation taken before
+			// a tool402 node's price is even known (runner.go's NodeTypeTool402
+			// branch), not a charge. A ceiling under it therefore rejects every
+			// tool402 node up front, including ones that would have cost a
+			// fraction of a cent, and the failure reads as "above your per-call
+			// limit", which is not what actually went wrong.
+			if *ceiling < models.X402ProbeFloorUSDMicros {
+				return patch, "maxCallSpendUsdMicros cannot be below the $0.05 minimum every paid call is checked against"
+			}
 			// A user ceiling only ever tightens the global one. Accepting a
 			// higher number would read as a raise the engine never honours.
 			if *ceiling > models.MaxSingleX402QuoteUSDMicros {

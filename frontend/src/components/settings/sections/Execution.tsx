@@ -11,10 +11,13 @@ import {
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
-// Mirrors models.MaxSingleX402QuoteUSDMicros. The server is authoritative and
-// rejects anything above it; this exists so the form can say so before a round
-// trip, not as the only check.
+// Mirror models.MaxSingleX402QuoteUSDMicros and models.X402ProbeFloorUSDMicros.
+// The server is authoritative and rejects anything outside this range; these
+// exist so the form can say so before a round trip, not as the only check.
 const PLATFORM_CEILING_USD = 1000;
+// Below this a ceiling stops limiting spend and starts blocking tool402 nodes
+// outright — the engine checks the same floor before a tool's price is known.
+const MIN_CEILING_USD = 0.05;
 
 const microsToUSD = (micros: number): string => String(micros / 1e6);
 const usdToMicros = (usd: number): number => Math.round(usd * 1e6);
@@ -47,6 +50,13 @@ export function ExecutionSection({
         setMessage("Enter a limit greater than zero.");
         return;
       }
+      if (parsed < MIN_CEILING_USD) {
+        setState("error");
+        setMessage(
+          `The lowest usable limit is $${MIN_CEILING_USD.toFixed(2)} — below that, paid tool calls are blocked outright rather than limited.`,
+        );
+        return;
+      }
       if (parsed > PLATFORM_CEILING_USD) {
         setState("error");
         setMessage(
@@ -77,7 +87,7 @@ export function ExecutionSection({
       <form onSubmit={submit} style={{ display: "grid", gap: 18 }}>
         <SettingRow
           label="Per-call spend limit"
-          hint={`Refuse any single paid call above this amount, before it runs. Without one, only the platform ceiling of $${PLATFORM_CEILING_USD} per call applies.`}
+          hint={`Refuse any single paid call above this amount, before it runs. Anywhere from $${MIN_CEILING_USD.toFixed(2)} to $${PLATFORM_CEILING_USD}. Without one, only the platform ceiling of $${PLATFORM_CEILING_USD} per call applies.`}
         >
           <label
             style={{

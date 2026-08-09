@@ -21,6 +21,7 @@ func TestParseSettingsPatchRejectsInvalidInput(t *testing.T) {
 		{"non-numeric threshold", `{"lowBalanceUsdMicros":"5"}`, "whole number of USD micros"},
 		{"zero ceiling", `{"maxCallSpendUsdMicros":0}`, "greater than zero"},
 		{"negative ceiling", `{"maxCallSpendUsdMicros":-500}`, "greater than zero"},
+		{"ceiling below the probe floor", `{"maxCallSpendUsdMicros":10000}`, "below the $0.05 minimum"},
 		{"ceiling above the platform cap", `{"maxCallSpendUsdMicros":1000000001}`, "cannot exceed the platform ceiling"},
 		{"unknown key mode", `{"defaultKeyMode":"free"}`, "must be byok or platform"},
 		{"non-string key mode", `{"defaultKeyMode":7}`, "must be a string"},
@@ -45,6 +46,21 @@ func TestParseSettingsPatchAcceptsTheGlobalCapExactly(t *testing.T) {
 	}
 	if patch.maxCallSpend == nil || *patch.maxCallSpend != models.MaxSingleX402QuoteUSDMicros {
 		t.Fatalf("want ceiling %d, got %v", models.MaxSingleX402QuoteUSDMicros, patch.maxCallSpend)
+	}
+}
+
+// The probe floor is the lower bound, inclusive. Runner.preflightCheck reuses
+// X402ProbeFloorUSDMicros as a pre-price guard on tool402 nodes, so a ceiling
+// exactly at it still lets those nodes run; anything under it would block them
+// outright and report the wrong reason.
+func TestParseSettingsPatchAcceptsTheProbeFloorExactly(t *testing.T) {
+	body := `{"maxCallSpendUsdMicros":50000}`
+	patch, msg := parseSettingsPatch(strings.NewReader(body))
+	if msg != "" {
+		t.Fatalf("want no error, got %q", msg)
+	}
+	if patch.maxCallSpend == nil || *patch.maxCallSpend != models.X402ProbeFloorUSDMicros {
+		t.Fatalf("want ceiling %d, got %v", models.X402ProbeFloorUSDMicros, patch.maxCallSpend)
 	}
 }
 
