@@ -1218,6 +1218,18 @@ func (s *Store) LatestActiveLeaseForUser(ctx context.Context, userID string) (mo
 		 ORDER BY started_at DESC LIMIT 1`, userID))
 }
 
+// UpdatePassword replaces a user's password hash. Verifying the current
+// password is the handler's job (it owns the bcrypt comparison); this only
+// writes, and reports whether the user existed so a deleted account holding a
+// still-valid JWT can't silently no-op its way to a success response.
+func (s *Store) UpdatePassword(ctx context.Context, userID, passwordHash string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, userID, passwordHash)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // GetUserSettings returns the account's settings, or the defaults when it has
 // no user_settings row yet — which is every account until it first changes
 // something. A missing row is the normal case, not an error: returning defaults

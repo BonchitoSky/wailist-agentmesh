@@ -240,6 +240,64 @@ func (d *Deps) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ChangePassword sets a new password for the signed-in user after verifying
+// the current one.
+//
+// Two cases are deliberately distinct. A wrong current password is 401 — the
+// caller is authenticated but failed to prove they know the existing secret.
+// An OAuth-only account is 400: it has no password to verify (password_hash is
+// empty, so bcrypt would reject anything), and quietly letting it set one would
+// grow a second, unverified way into an account whose email we never confirmed.
+//
+// The session cookie is left alone. With no session table and no token
+// blacklist there is nothing to revoke, so pretending a password change signs
+// out other devices would be a lie — see the settings plan's §2.4.
+func (d *Deps) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+
+	var body struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+
+	if len(body.NewPassword) < 8 {
+		respond.Error(w, http.StatusBadRequest, "new password must be at least 8 characters")
+		return
+	}
+
+	user, err := d.Store.GetUserByID(r.Context(), userID)
+	if err != nil {
+		respond.Error(w, http.StatusUnauthorized, "not found")
+		return
+	}
+	if user.PasswordHash == "" {
+		respond.Error(w, http.StatusBadRequest, "this account signs in with Google or GitHub and has no password to change")
+		return
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(body.CurrentPassword)) != nil {
+		respond.Error(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	updated, err := d.Store.UpdatePassword(r.Context(), userID, string(hash))
+	if err != nil {
+		log.Printf("update password: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !updated {
+		respond.Error(w, http.StatusUnauthorized, "not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (d *Deps) issueToken(user models.User) (string, error) {
 	if len(d.JWTSecret) < 32 {
 		return "", errors.New("jwt secret not configured")
