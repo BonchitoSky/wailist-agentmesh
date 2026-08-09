@@ -24,15 +24,20 @@ const memberSince = (iso?: string): string => {
       }).format(d);
 };
 
+// `user` is deliberately non-nullable: the form below seeds its state with
+// useState, which ignores later prop changes, so mounting with a half-loaded
+// user would strand blank inputs and let a save wipe the stored organisation.
+// SettingsPage holds this back until /auth/me resolves — the type is what keeps
+// that contract from being quietly dropped later.
 export function AccountSection({
   user,
   onProfileSaved,
 }: {
-  user: AuthUser | null;
+  user: AuthUser;
   onProfileSaved: (name: string, org: string) => Promise<void>;
 }) {
-  const [name, setName] = useState(user?.name ?? "");
-  const [org, setOrg] = useState(user?.orgName ?? "");
+  const [name, setName] = useState(user.name);
+  const [org, setOrg] = useState(user.orgName);
   const [profileState, setProfileState] = useState<SaveState>("idle");
   const [profileMessage, setProfileMessage] = useState("");
 
@@ -88,10 +93,13 @@ export function AccountSection({
               style={inputStyle}
             />
           </SettingRow>
-          <ReadOnlyRow label="Email" value={user?.email ?? "—"} mono />
+          <ReadOnlyRow label="Email" value={user.email} mono />
+          {/* createdAt stays optional on AuthUser — a response cached from
+              before the field existed won't carry it — so memberSince still
+              handles undefined. */}
           <ReadOnlyRow
             label="Member since"
-            value={memberSince(user?.createdAt)}
+            value={memberSince(user.createdAt)}
           />
           <SaveButton saving={profileState === "saving"} />
           <FormStatus state={profileState} message={profileMessage} />

@@ -41,6 +41,21 @@ const SETTINGS_CSS = `
 }
 `;
 
+// Placeholder shown while a section's data is still in flight. Deliberately a
+// quiet line of text rather than a shimmering block: these panels resolve in
+// one request, and a skeleton that flashes for 150ms is more distracting than
+// the thing it stands in for.
+function SectionSkeleton({ label }: { label: string }) {
+  return (
+    <div
+      style={{ ...panelStyle, fontSize: 13, color: "var(--fg-dim)" }}
+      aria-busy="true"
+    >
+      {label}
+    </div>
+  );
+}
+
 const RAIL = [
   { id: "account", label: "Account" },
   { id: "password", label: "Password" },
@@ -50,7 +65,7 @@ const RAIL = [
 ];
 
 export function SettingsPage() {
-  const { user, completeOnboarding } = useAuth();
+  const { user, loading: userLoading, completeOnboarding } = useAuth();
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [loadError, setLoadError] = useState("");
 
@@ -168,8 +183,26 @@ export function SettingsPage() {
                 </div>
               )}
 
-              <AccountSection user={user} onProfileSaved={completeOnboarding} />
+              {/* Gated on a resolved user, not rendered optimistically with a
+                  null one. AccountSection seeds its form state from these
+                  fields with useState, which ignores later prop changes — so
+                  mounting before /auth/me lands leaves the name and org inputs
+                  permanently blank, and saving from that state would overwrite
+                  the stored organisation with an empty string. */}
+              {userLoading && <SectionSkeleton label="Loading your account…" />}
+              {user && (
+                <AccountSection
+                  user={user}
+                  onProfileSaved={completeOnboarding}
+                />
+              )}
 
+              {/* Same reasoning as the account gate above: both sections seed
+                  useState from `settings`, so they must not mount before it
+                  arrives. */}
+              {!settings && !loadError && (
+                <SectionSkeleton label="Loading your settings…" />
+              )}
               {settings && (
                 <>
                   <BillingSection settings={settings} onSave={save} />
