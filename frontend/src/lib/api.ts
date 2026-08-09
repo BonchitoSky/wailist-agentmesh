@@ -24,6 +24,10 @@ export interface AuthUser {
   email: string;
   name: string;
   orgName: string;
+  // ISO 8601, from users.created_at. Shown as "member since" on the settings
+  // page. Optional because a response cached from before the field existed
+  // would otherwise type as present and render "Invalid Date".
+  createdAt?: string;
   // True for an OAuth account that has never set a name/org — Google and
   // GitHub only hand back a verified email, not an organization.
   needsOnboarding: boolean;
@@ -82,6 +86,7 @@ export const auth = {
       email: "dev@local",
       name: "Dev",
       orgName: "Acme Capital",
+      createdAt: "2026-01-01T00:00:00Z",
       needsOnboarding: false,
     };
   },
@@ -108,6 +113,28 @@ export const auth = {
       orgName,
       needsOnboarding: false,
     };
+  },
+
+  // Changes the signed-in user's password after the server verifies the
+  // current one. Throws with the server's own message so the form can show
+  // "current password is incorrect" and the distinct OAuth-only case
+  // ("this account signs in with Google or GitHub") without guessing which
+  // happened from the status code alone.
+  changePassword: async (
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> => {
+    if (!BASE) throw new Error("changing a password requires a backend");
+    const res = await fetch(`${BASE}/auth/password`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error ?? "could not change password");
+    }
   },
 
   signOut: async (): Promise<void> => {
@@ -309,6 +336,66 @@ export const credits = {
     }
     await delay(120);
     throw new Error("coupons aren't available in mock mode");
+  },
+};
+
+// -- Settings ---------------------------------------------------------------
+// Account-level preferences (user_settings). Amounts are USD micros, matching
+// the ledgers — the UI converts for display and never stores a float.
+export interface UserSettings {
+  lowBalanceUsdMicros: number;
+  // null / absent means no per-call ceiling of the user's own; the platform's
+  // global cap still applies, so this is never "unlimited".
+  maxCallSpendUsdMicros?: number | null;
+  defaultKeyMode: "byok" | "platform";
+}
+
+// A PATCH sends only what changed. maxCallSpendUsdMicros is deliberately
+// `number | null` rather than optional-undefined: the server treats an absent
+// key as "leave it alone" and an explicit null as "remove my ceiling", and
+// collapsing those two would silently drop a user's spend limit on every save.
+export type UserSettingsPatch = Partial<{
+  lowBalanceUsdMicros: number;
+  maxCallSpendUsdMicros: number | null;
+  defaultKeyMode: "byok" | "platform";
+}>;
+
+const MOCK_SETTINGS: UserSettings = {
+  lowBalanceUsdMicros: 5_000_000,
+  maxCallSpendUsdMicros: null,
+  defaultKeyMode: "byok",
+};
+
+export const settings = {
+  // Never 404s: an account with no user_settings row gets the defaults.
+  get: async (): Promise<UserSettings> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/settings`, { credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "settings fetch failed");
+      return data;
+    }
+    await delay(150);
+    return { ...MOCK_SETTINGS };
+  },
+
+  // Returns the full merged settings, so callers replace their state with the
+  // response rather than assuming the patch applied exactly as sent.
+  update: async (patch: UserSettingsPatch): Promise<UserSettings> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/settings`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "could not save settings");
+      return data;
+    }
+    await delay(200);
+    Object.assign(MOCK_SETTINGS, patch);
+    return { ...MOCK_SETTINGS };
   },
 };
 
