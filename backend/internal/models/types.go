@@ -254,6 +254,42 @@ type User struct {
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
+// Key modes a Provider node can resolve its API key through. Mirrors the
+// values WorkflowNode.KeyMode is compared against in engine/nodes/provider.go,
+// and the CHECK constraint on user_settings.default_key_mode.
+const (
+	KeyModeBYOK     = "byok"
+	KeyModePlatform = "platform"
+)
+
+// UserSettings is one row of user_settings — the account-level preferences
+// edited from the settings page. A user with no row is not an error: the store
+// returns DefaultUserSettings, so every account has settings from the moment
+// it exists and the row is written lazily on first change.
+type UserSettings struct {
+	// LowBalanceUSDMicros is the balance below which the UI warns.
+	LowBalanceUSDMicros int64 `json:"lowBalanceUsdMicros"`
+	// MaxCallSpendUSDMicros caps any single metered charge, enforced in
+	// engine.Runner.preflightCheck. nil means no user ceiling — the global
+	// MaxSingleX402QuoteUSDMicros still applies, so nil is a weaker limit,
+	// never an unlimited one.
+	MaxCallSpendUSDMicros *int64 `json:"maxCallSpendUsdMicros,omitempty"`
+	// DefaultKeyMode seeds newly created Provider nodes. A node's own
+	// KeyMode still wins once set.
+	DefaultKeyMode string `json:"defaultKeyMode"`
+}
+
+// DefaultUserSettings is what an account has before it ever opens the settings
+// page. LowBalanceUSDMicros matches both the DEFAULT on user_settings and the
+// frontend's previous hardcoded $5, so moving the threshold to the server
+// changes no existing behaviour.
+func DefaultUserSettings() UserSettings {
+	return UserSettings{
+		LowBalanceUSDMicros: 5_000_000, // $5
+		DefaultKeyMode:      KeyModeBYOK,
+	}
+}
+
 // CreditTransaction is one row of the append-only credit_ledger table.
 type CreditTransaction struct {
 	ID                string     `json:"id"`

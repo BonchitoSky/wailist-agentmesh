@@ -1217,3 +1217,47 @@ func (s *Store) LatestActiveLeaseForUser(ctx context.Context, userID string) (mo
 		 WHERE user_id = $1 AND status = 'active'
 		 ORDER BY started_at DESC LIMIT 1`, userID))
 }
+
+// GetUserSettings returns the account's settings, or the defaults when it has
+// no user_settings row yet — which is every account until it first changes
+// something. A missing row is the normal case, not an error: returning defaults
+// here means signup never has to seed the table and no caller has to special-case
+// a 404 it would only ever answer with the same defaults anyway.
+func (s *Store) GetUserSettings(ctx context.Context, userID string) (models.UserSettings, error) {
+	settings := models.DefaultUserSettings()
+	err := s.pool.QueryRow(ctx, `
+		SELECT low_balance_usd_micros, max_call_spend_usd_micros, default_key_mode
+		FROM user_settings WHERE user_id = $1
+	`, userID).Scan(&settings.LowBalanceUSDMicros, &settings.MaxCallSpendUSDMicros, &settings.DefaultKeyMode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.DefaultUserSettings(), nil
+	}
+	if err != nil {
+		return models.UserSettings{}, err
+	}
+	return settings, nil
+}
+
+// UpsertUserSettings writes the whole settings row, creating it on first save.
+// Callers pass a complete UserSettings — the handler reads the current values,
+// applies the fields the request actually sent, and hands back the merged
+// result, so a partial PATCH never blanks a field it didn't mention.
+//
+// The column CHECK constraints (see migration 000020) are the real guard on
+// range and enum validity; handler validation exists to return a useful 400
+// rather than to be the only thing standing between a bad value and the table.
+func (s *Store) UpsertUserSettings(ctx context.Context, userID string, in models.UserSettings) (models.UserSettings, error) {
+	var out models.UserSettings
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO user_settings (user_id, low_balance_usd_micros, max_call_spend_usd_micros, default_key_mode, updated_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (user_id) DO UPDATE SET
+			low_balance_usd_micros    = EXCLUDED.low_balance_usd_micros,
+			max_call_spend_usd_micros = EXCLUDED.max_call_spend_usd_micros,
+			default_key_mode          = EXCLUDED.default_key_mode,
+			updated_at                = NOW()
+		RETURNING low_balance_usd_micros, max_call_spend_usd_micros, default_key_mode
+	`, userID, in.LowBalanceUSDMicros, in.MaxCallSpendUSDMicros, in.DefaultKeyMode).
+		Scan(&out.LowBalanceUSDMicros, &out.MaxCallSpendUSDMicros, &out.DefaultKeyMode)
+	return out, err
+}
