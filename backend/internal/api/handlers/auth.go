@@ -198,6 +198,9 @@ func (d *Deps) Me(w http.ResponseWriter, r *http.Request) {
 		"email":   user.Email,
 		"name":    user.Name,
 		"orgName": user.OrgName,
+		// Already selected by GetUserByID and previously dropped here. The
+		// settings page shows it as "member since"; nothing else needs it.
+		"createdAt": user.CreatedAt,
 		// OAuth accounts are created with no name — the frontend prompts for
 		// name+org once, right after the provider redirect lands them here.
 		"needsOnboarding": user.Name == "",
