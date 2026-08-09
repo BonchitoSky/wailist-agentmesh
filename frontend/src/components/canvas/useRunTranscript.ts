@@ -163,32 +163,6 @@ export function useRunTranscript({
 
     const url = SSE_BASE ? `${SSE_BASE}/runs/${runId}/stream` : null;
 
-    if (!url) return;
-
-    // withCredentials sends the HttpOnly auth cookie automatically.
-    const es = new EventSource(url, { withCredentials: true });
-    esRef.current = es;
-
-    es.addEventListener("log", (e) => {
-      try {
-        const ev: LogEvent = JSON.parse((e as MessageEvent).data);
-        setLogs((prev) => {
-          // Replace running entry for same nodeId, or append
-          const idx = prev.findIndex(
-            (l) => l.nodeId === ev.nodeId && l.status === "running",
-          );
-          if (idx >= 0) {
-            const next = [...prev];
-            next[idx] = ev;
-            return next;
-          }
-          return [...prev, ev];
-        });
-      } catch {
-        /* ignore parse errors */
-      }
-    });
-
     // The live stream only delivers events to a client subscribed at the
     // exact moment they're published (broker.go's Publish is a non-blocking,
     // unbuffered-per-subscriber send with no replay) -- a run that finishes
@@ -262,6 +236,43 @@ export function useRunTranscript({
         await new Promise((r) => setTimeout(r, 2000));
       }
     };
+
+    // No stream configured at all (NEXT_PUBLIC_API_URL unset -- the frontend's
+    // mock mode). Go straight to the polling path a dead stream would fall
+    // back to anyway, rather than returning early and leaving the run
+    // permanently unfinished. Without this the console, and every chat turn
+    // waiting on it, hangs on "working…" forever with no backend attached.
+    if (!url) {
+      void reconcile();
+      return () => {
+        cancelled = true;
+        clearInterval(timerRef.current!);
+      };
+    }
+
+    // withCredentials sends the HttpOnly auth cookie automatically.
+    const es = new EventSource(url, { withCredentials: true });
+    esRef.current = es;
+
+    es.addEventListener("log", (e) => {
+      try {
+        const ev: LogEvent = JSON.parse((e as MessageEvent).data);
+        setLogs((prev) => {
+          // Replace running entry for same nodeId, or append
+          const idx = prev.findIndex(
+            (l) => l.nodeId === ev.nodeId && l.status === "running",
+          );
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = ev;
+            return next;
+          }
+          return [...prev, ev];
+        });
+      } catch {
+        /* ignore parse errors */
+      }
+    });
 
     es.addEventListener("done", () => {
       clearInterval(timerRef.current!);
