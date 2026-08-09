@@ -1,0 +1,143 @@
+package handlers
+
+import (
+	"encoding/json"
+	"io"
+	"log"
+	"net/http"
+
+	"github.com/agentmesh/backend/internal/models"
+	"github.com/agentmesh/backend/internal/respond"
+)
+
+// Settings returns the signed-in user's account settings. An account with no
+// user_settings row gets the defaults rather than a 404 — see
+// db.Store.GetUserSettings for why a missing row is the normal case.
+func (d *Deps) Settings(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+
+	settings, err := d.Store.GetUserSettings(r.Context(), userID)
+	if err != nil {
+		log.Printf("get user settings: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	respond.JSON(w, http.StatusOK, settings)
+}
+
+// UpdateSettings applies a partial update and returns the full merged result.
+//
+// Presence is decoded by hand rather than with pointer struct fields, because
+// maxCallSpendUsdMicros is nullable and the two cases have to stay distinct:
+// an absent key means "leave the ceiling alone", while an explicit null means
+// "remove my ceiling". Unmarshalling straight into a *int64 collapses both to
+// nil, which would silently clear a user's spend limit on any request that
+// merely didn't mention it.
+func (d *Deps) UpdateSettings(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+
+	// Parse and validate before touching the database: a malformed request is
+	// rejected on its own terms, without a round-trip that can only be thrown away.
+	patch, msg := parseSettingsPatch(r.Body)
+	if msg != "" {
+		respond.Error(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	// Start from what's stored, so fields the request omits survive untouched.
+	settings, err := d.Store.GetUserSettings(r.Context(), userID)
+	if err != nil {
+		log.Printf("get user settings: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	patch.applyTo(&settings)
+
+	saved, err := d.Store.UpsertUserSettings(r.Context(), userID, settings)
+	if err != nil {
+		log.Printf("update user settings: %v", err)
+		respond.Error(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	respond.JSON(w, http.StatusOK, saved)
+}
+
+// settingsPatch is the subset of fields a PATCH actually sent. Each pointer is
+// nil when the key was absent, which is what keeps "leave this alone" distinct
+// from "set this".
+type settingsPatch struct {
+	lowBalanceUSDMicros *int64
+	// setMaxCallSpend records that the key was present at all, so an explicit
+	// null (maxCallSpend stays nil) clears the ceiling instead of being
+	// indistinguishable from omitting the field.
+	setMaxCallSpend bool
+	maxCallSpend    *int64
+	defaultKeyMode  *string
+}
+
+func (p settingsPatch) applyTo(s *models.UserSettings) {
+	if p.lowBalanceUSDMicros != nil {
+		s.LowBalanceUSDMicros = *p.lowBalanceUSDMicros
+	}
+	if p.setMaxCallSpend {
+		s.MaxCallSpendUSDMicros = p.maxCallSpend
+	}
+	if p.defaultKeyMode != nil {
+		s.DefaultKeyMode = *p.defaultKeyMode
+	}
+}
+
+// parseSettingsPatch decodes a PATCH body, returning a human-readable message
+// for the 400 when it is invalid and "" when it is fine. Kept separate from the
+// handler so every validation branch is reachable without a database.
+func parseSettingsPatch(body io.Reader) (settingsPatch, string) {
+	var patch settingsPatch
+
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(body).Decode(&raw); err != nil {
+		return patch, "invalid JSON body"
+	}
+
+	if v, ok := raw["lowBalanceUsdMicros"]; ok {
+		var threshold int64
+		if err := json.Unmarshal(v, &threshold); err != nil {
+			return patch, "lowBalanceUsdMicros must be a whole number of USD micros"
+		}
+		if threshold < 0 {
+			return patch, "lowBalanceUsdMicros cannot be negative"
+		}
+		patch.lowBalanceUSDMicros = &threshold
+	}
+
+	if v, ok := raw["maxCallSpendUsdMicros"]; ok {
+		var ceiling *int64
+		if err := json.Unmarshal(v, &ceiling); err != nil {
+			return patch, "maxCallSpendUsdMicros must be a whole number of USD micros, or null"
+		}
+		if ceiling != nil {
+			if *ceiling <= 0 {
+				return patch, "maxCallSpendUsdMicros must be greater than zero — send null to remove the ceiling"
+			}
+			// A user ceiling only ever tightens the global one. Accepting a
+			// higher number would read as a raise the engine never honours.
+			if *ceiling > models.MaxSingleX402QuoteUSDMicros {
+				return patch, "maxCallSpendUsdMicros cannot exceed the platform ceiling"
+			}
+		}
+		patch.setMaxCallSpend = true
+		patch.maxCallSpend = ceiling
+	}
+
+	if v, ok := raw["defaultKeyMode"]; ok {
+		var mode string
+		if err := json.Unmarshal(v, &mode); err != nil {
+			return patch, "defaultKeyMode must be a string"
+		}
+		if mode != models.KeyModeBYOK && mode != models.KeyModePlatform {
+			return patch, "defaultKeyMode must be byok or platform"
+		}
+		patch.defaultKeyMode = &mode
+	}
+
+	return patch, ""
+}

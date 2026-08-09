@@ -51,6 +51,9 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Get("/auth/me", d.Me)
 		r.Patch("/auth/me", d.UpdateProfile)
 
+		r.Get("/settings", d.Settings)
+		r.Patch("/settings", d.UpdateSettings)
+
 		r.Get("/workflows", d.ListWorkflows)
 		r.Post("/workflows", d.CreateWorkflow)
 		r.Get("/workflows/{id}", d.GetWorkflow)
