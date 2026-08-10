@@ -4,6 +4,7 @@ import {
   DEFAULT_CURRENCY,
   SUPPORTED_CURRENCIES,
   convert,
+  currencyFractionDigits,
   formatCredits,
   formatMoney,
   isSupportedCurrency,
@@ -115,6 +116,32 @@ describe("the supported shortlist", () => {
     for (const code of SUPPORTED_CURRENCIES) {
       expect(() => formatMoney(9.99, code, table)).not.toThrow();
       expect(formatMoney(9.99, code, table)).toBeTruthy();
+    }
+  });
+});
+
+describe("currencyFractionDigits", () => {
+  // The usage page formats bare numbers in a mono column and adds its own
+  // glyph, so it needs the precision separately. Getting this wrong renders
+  // ¥12,355.69 next to an Intl-formatted ¥12,356 on the same screen.
+  it("matches each currency's minor units", () => {
+    expect(currencyFractionDigits("USD")).toBe(2);
+    expect(currencyFractionDigits("EUR")).toBe(2);
+    expect(currencyFractionDigits("JPY")).toBe(0);
+  });
+
+  it("falls back to 2 for an unknown code rather than throwing", () => {
+    expect(currencyFractionDigits("")).toBe(2);
+    expect(currencyFractionDigits("nonsense")).toBe(2);
+  });
+
+  it("agrees with what formatMoney actually renders", () => {
+    // The two paths must not disagree — that inconsistency is the whole reason
+    // this helper exists.
+    for (const code of SUPPORTED_CURRENCIES) {
+      const rendered = formatMoney(1000, code, { [code]: 1 });
+      const decimals = rendered.split(".")[1]?.replace(/\D/g, "").length ?? 0;
+      expect(decimals).toBe(currencyFractionDigits(code));
     }
   });
 });

@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { fx } from "@/lib/api";
 import {
   DEFAULT_CURRENCY,
+  convert,
   formatBalance,
   formatMoney,
   isDefaultCurrency,
@@ -125,6 +126,16 @@ export interface CurrencyView {
   format: (usd: number) => string;
   /** Format a credit balance — credits lead in non-USD mode. See §3. */
   formatBalance: (usd: number) => string;
+  /**
+   * Convert a USD amount to the active currency, or null when that cannot be
+   * done honestly (no rate table, or no rate for this code).
+   *
+   * For call sites that render their own glyph and precision — the usage page
+   * keeps bare numbers in a fixed-width mono column with the currency as a
+   * separate label, which Intl's currency style cannot reproduce. Returns the
+   * input unchanged for USD, so those call sites stay byte-identical.
+   */
+  convertAmount: (usd: number) => number | null;
 }
 
 export function useCurrency(): CurrencyView {
@@ -161,12 +172,18 @@ export function useCurrency(): CurrencyView {
     [currency, snap.rates],
   );
 
+  const convertAmount = useCallback(
+    (usd: number) => convert(usd, currency, snap.rates),
+    [currency, snap.rates],
+  );
+
   return {
     currency,
     isDefault: isDefaultCurrency(currency),
     ratesFailed: !isDefaultCurrency(currency) && snap.status === "failed",
     format,
     formatBalance: balance,
+    convertAmount,
   };
 }
 

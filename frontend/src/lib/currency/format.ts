@@ -42,6 +42,44 @@ export const CURRENCY_LABELS: Record<Currency, string> = {
   CHF: "Swiss franc",
 };
 
+// Prefixes for call sites that render their own glyph next to a bare number
+// (the usage page does this so figures stay in a fixed-width mono column).
+// AED and CHF have no widely-recognised single glyph, so they use their code —
+// "AED 1.50" is the conventional rendering, not a fallback.
+export const CURRENCY_SYMBOLS: Record<Currency, string> = {
+  USD: "$",
+  INR: "₹",
+  EUR: "€",
+  GBP: "£",
+  JPY: "¥",
+  AUD: "A$",
+  CAD: "C$",
+  SGD: "S$",
+  AED: "AED ",
+  CHF: "CHF ",
+};
+
+/**
+ * How many decimal places a currency conventionally shows: 2 for USD/EUR,
+ * 0 for JPY, 3 for the Gulf dinars.
+ *
+ * Call sites that format bare numbers themselves need this, or they render
+ * ¥12,355.69 for a currency with no subunit while the Intl-formatted figures
+ * elsewhere on the same page correctly show ¥12,356.
+ */
+export function currencyFractionDigits(currency: string): number {
+  try {
+    return (
+      new Intl.NumberFormat("en", {
+        style: "currency",
+        currency,
+      }).resolvedOptions().maximumFractionDigits ?? 2
+    );
+  } catch {
+    return 2;
+  }
+}
+
 export function isSupportedCurrency(code: string): code is Currency {
   return (SUPPORTED_CURRENCIES as readonly string[]).includes(code);
 }
