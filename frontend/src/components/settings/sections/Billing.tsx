@@ -1,14 +1,20 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { UserSettings } from "@/lib/api";
+import type { UserSettings, UserSettingsPatch } from "@/lib/api";
 import { useCredits } from "@/lib/credits/store";
+import {
+  CURRENCY_LABELS,
+  SUPPORTED_CURRENCIES,
+  isSupportedCurrency,
+} from "@/lib/currency/format";
 import {
   FormStatus,
   SaveButton,
   SettingRow,
   SettingsSection,
   amountInputStyle,
+  inputStyle,
 } from "@/components/settings/ui";
 import { ghostBtnSm } from "@/components/ui";
 
@@ -25,7 +31,7 @@ export function BillingSection({
   onSave,
 }: {
   settings: UserSettings;
-  onSave: (patch: { lowBalanceUsdMicros: number }) => Promise<void>;
+  onSave: (patch: UserSettingsPatch) => Promise<void>;
 }) {
   const router = useRouter();
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
@@ -34,6 +40,30 @@ export function BillingSection({
   );
   const [state, setState] = useState<SaveState>("idle");
   const [message, setMessage] = useState("");
+  const [currencyState, setCurrencyState] = useState<SaveState>("idle");
+  const [currencyMessage, setCurrencyMessage] = useState("");
+
+  // Saved on change rather than behind a button: it is a single-choice display
+  // preference with an immediately visible effect, so a "Save" step would just
+  // be a second click before seeing what you picked.
+  const changeCurrency = async (code: string) => {
+    if (!isSupportedCurrency(code)) return;
+    setCurrencyState("saving");
+    try {
+      await onSave({ displayCurrency: code });
+      setCurrencyState("saved");
+      setCurrencyMessage(
+        code === "USD"
+          ? "Showing amounts in US dollars."
+          : `Showing amounts in ${CURRENCY_LABELS[code]}.`,
+      );
+    } catch (err) {
+      setCurrencyState("error");
+      setCurrencyMessage(
+        err instanceof Error ? err.message : "Could not change currency.",
+      );
+    }
+  };
 
   // The store only holds a balance once something has fetched one, and it is
   // deliberately never restored from localStorage (a cached balance goes stale
@@ -68,6 +98,27 @@ export function BillingSection({
       title="Billing and credits"
       description="Credits are spent as your agents call paid tools, x402 endpoints, and LLM providers."
     >
+      <SettingRow
+        label="Display currency"
+        htmlFor="set-currency"
+        hint="Changes how amounts are shown across the app. It does not change what you are charged — top-ups are always billed in INR, and credits are always spent in USD."
+      >
+        <select
+          id="set-currency"
+          value={settings.displayCurrency}
+          onChange={(e) => changeCurrency(e.target.value)}
+          disabled={currencyState === "saving"}
+          style={{ ...inputStyle, maxWidth: 260 }}
+        >
+          {SUPPORTED_CURRENCIES.map((code) => (
+            <option key={code} value={code}>
+              {code} · {CURRENCY_LABELS[code]}
+            </option>
+          ))}
+        </select>
+        <FormStatus state={currencyState} message={currencyMessage} />
+      </SettingRow>
+
       <div style={{ display: "grid", gap: 4 }}>
         <span style={{ fontSize: 12.5, fontWeight: 500, color: "var(--fg)" }}>
           Current balance
