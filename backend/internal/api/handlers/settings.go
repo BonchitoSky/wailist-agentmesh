@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/respond"
@@ -73,6 +74,7 @@ type settingsPatch struct {
 	setMaxCallSpend bool
 	maxCallSpend    *int64
 	defaultKeyMode  *string
+	displayCurrency *string
 }
 
 func (p settingsPatch) applyTo(s *models.UserSettings) {
@@ -84,6 +86,9 @@ func (p settingsPatch) applyTo(s *models.UserSettings) {
 	}
 	if p.defaultKeyMode != nil {
 		s.DefaultKeyMode = *p.defaultKeyMode
+	}
+	if p.displayCurrency != nil {
+		s.DisplayCurrency = *p.displayCurrency
 	}
 }
 
@@ -148,6 +153,20 @@ func parseSettingsPatch(body io.Reader) (settingsPatch, string) {
 			return patch, "defaultKeyMode must be byok or platform"
 		}
 		patch.defaultKeyMode = &mode
+	}
+
+	if v, ok := raw["displayCurrency"]; ok {
+		var code string
+		if err := json.Unmarshal(v, &code); err != nil {
+			return patch, "displayCurrency must be a string"
+		}
+		// Rejected here as well as by the column's CHECK so an unsupported code
+		// comes back as a 400 the settings form can show, not a 500 from a
+		// constraint violation.
+		if !models.IsSupportedCurrency(code) {
+			return patch, "displayCurrency must be one of " + strings.Join(models.SupportedCurrencies, ", ")
+		}
+		patch.displayCurrency = &code
 	}
 
 	return patch, ""

@@ -262,6 +262,30 @@ const (
 	KeyModePlatform = "platform"
 )
 
+// DefaultCurrency is what every account renders in until someone chooses
+// otherwise. While a user is on this value the frontend must behave exactly as
+// it did before display currency existed — no conversion, no rate lookup. It
+// matches the DEFAULT on user_settings.display_currency.
+const DefaultCurrency = "USD"
+
+// SupportedCurrencies is the curated shortlist offered in settings, and the
+// same set the user_settings.display_currency CHECK constraint enforces. Kept
+// short deliberately: every code here is liquid, widely recognised, and has had
+// its formatting checked (JPY has no minor units).
+var SupportedCurrencies = []string{
+	"USD", "INR", "EUR", "GBP", "JPY", "AUD", "CAD", "SGD", "AED", "CHF",
+}
+
+// IsSupportedCurrency reports whether code is one the platform will render.
+func IsSupportedCurrency(code string) bool {
+	for _, c := range SupportedCurrencies {
+		if c == code {
+			return true
+		}
+	}
+	return false
+}
+
 // UserSettings is one row of user_settings — the account-level preferences
 // edited from the settings page. A user with no row is not an error: the store
 // returns DefaultUserSettings, so every account has settings from the moment
@@ -277,6 +301,10 @@ type UserSettings struct {
 	// DefaultKeyMode seeds newly created Provider nodes. A node's own
 	// KeyMode still wins once set.
 	DefaultKeyMode string `json:"defaultKeyMode"`
+	// DisplayCurrency is presentation only — it changes what the UI renders,
+	// never what is stored, charged, or settled. DefaultCurrency means "render
+	// exactly as before this field existed".
+	DisplayCurrency string `json:"displayCurrency"`
 }
 
 // DefaultUserSettings is what an account has before it ever opens the settings
@@ -287,6 +315,7 @@ func DefaultUserSettings() UserSettings {
 	return UserSettings{
 		LowBalanceUSDMicros: 5_000_000, // $5
 		DefaultKeyMode:      KeyModeBYOK,
+		DisplayCurrency:     DefaultCurrency,
 	}
 }
 

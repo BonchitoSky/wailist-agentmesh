@@ -1238,9 +1238,10 @@ func (s *Store) UpdatePassword(ctx context.Context, userID, passwordHash string)
 func (s *Store) GetUserSettings(ctx context.Context, userID string) (models.UserSettings, error) {
 	settings := models.DefaultUserSettings()
 	err := s.pool.QueryRow(ctx, `
-		SELECT low_balance_usd_micros, max_call_spend_usd_micros, default_key_mode
+		SELECT low_balance_usd_micros, max_call_spend_usd_micros, default_key_mode, display_currency
 		FROM user_settings WHERE user_id = $1
-	`, userID).Scan(&settings.LowBalanceUSDMicros, &settings.MaxCallSpendUSDMicros, &settings.DefaultKeyMode)
+	`, userID).Scan(&settings.LowBalanceUSDMicros, &settings.MaxCallSpendUSDMicros,
+		&settings.DefaultKeyMode, &settings.DisplayCurrency)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return models.DefaultUserSettings(), nil
 	}
@@ -1261,15 +1262,16 @@ func (s *Store) GetUserSettings(ctx context.Context, userID string) (models.User
 func (s *Store) UpsertUserSettings(ctx context.Context, userID string, in models.UserSettings) (models.UserSettings, error) {
 	var out models.UserSettings
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO user_settings (user_id, low_balance_usd_micros, max_call_spend_usd_micros, default_key_mode, updated_at)
-		VALUES ($1, $2, $3, $4, NOW())
+		INSERT INTO user_settings (user_id, low_balance_usd_micros, max_call_spend_usd_micros, default_key_mode, display_currency, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())
 		ON CONFLICT (user_id) DO UPDATE SET
 			low_balance_usd_micros    = EXCLUDED.low_balance_usd_micros,
 			max_call_spend_usd_micros = EXCLUDED.max_call_spend_usd_micros,
 			default_key_mode          = EXCLUDED.default_key_mode,
+			display_currency          = EXCLUDED.display_currency,
 			updated_at                = NOW()
-		RETURNING low_balance_usd_micros, max_call_spend_usd_micros, default_key_mode
-	`, userID, in.LowBalanceUSDMicros, in.MaxCallSpendUSDMicros, in.DefaultKeyMode).
-		Scan(&out.LowBalanceUSDMicros, &out.MaxCallSpendUSDMicros, &out.DefaultKeyMode)
+		RETURNING low_balance_usd_micros, max_call_spend_usd_micros, default_key_mode, display_currency
+	`, userID, in.LowBalanceUSDMicros, in.MaxCallSpendUSDMicros, in.DefaultKeyMode, in.DisplayCurrency).
+		Scan(&out.LowBalanceUSDMicros, &out.MaxCallSpendUSDMicros, &out.DefaultKeyMode, &out.DisplayCurrency)
 	return out, err
 }

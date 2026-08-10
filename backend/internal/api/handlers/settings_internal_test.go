@@ -25,6 +25,9 @@ func TestParseSettingsPatchRejectsInvalidInput(t *testing.T) {
 		{"ceiling above the platform cap", `{"maxCallSpendUsdMicros":1000000001}`, "cannot exceed the platform ceiling"},
 		{"unknown key mode", `{"defaultKeyMode":"free"}`, "must be byok or platform"},
 		{"non-string key mode", `{"defaultKeyMode":7}`, "must be a string"},
+		{"unsupported currency", `{"displayCurrency":"XYZ"}`, "displayCurrency must be one of"},
+		{"lowercase currency", `{"displayCurrency":"eur"}`, "displayCurrency must be one of"},
+		{"non-string currency", `{"displayCurrency":5}`, "displayCurrency must be a string"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,5 +124,42 @@ func TestDefaultUserSettingsMatchTheMigration(t *testing.T) {
 	}
 	if d.MaxCallSpendUSDMicros != nil {
 		t.Errorf("ceiling should default to unset, got %d", *d.MaxCallSpendUSDMicros)
+	}
+	// The opt-in invariant starts here: an account that has never chosen a
+	// currency must report USD, so the frontend renders exactly as it did
+	// before this feature existed.
+	if d.DisplayCurrency != models.DefaultCurrency {
+		t.Errorf("currency default: want %q, got %q", models.DefaultCurrency, d.DisplayCurrency)
+	}
+}
+
+// Selecting a currency must not disturb the other settings, and USD must remain
+// selectable so a user can switch back to the default rendering.
+func TestParseSettingsPatchAcceptsEverySupportedCurrency(t *testing.T) {
+	for _, code := range models.SupportedCurrencies {
+		t.Run(code, func(t *testing.T) {
+			ceiling := int64(250_000)
+			settings := models.UserSettings{
+				LowBalanceUSDMicros:   9_000_000,
+				MaxCallSpendUSDMicros: &ceiling,
+				DefaultKeyMode:        models.KeyModePlatform,
+				DisplayCurrency:       models.DefaultCurrency,
+			}
+
+			patch, msg := parseSettingsPatch(strings.NewReader(`{"displayCurrency":"` + code + `"}`))
+			if msg != "" {
+				t.Fatalf("want %s accepted, got %q", code, msg)
+			}
+			patch.applyTo(&settings)
+
+			if settings.DisplayCurrency != code {
+				t.Errorf("currency: want %q, got %q", code, settings.DisplayCurrency)
+			}
+			if settings.LowBalanceUSDMicros != 9_000_000 ||
+				settings.MaxCallSpendUSDMicros == nil || *settings.MaxCallSpendUSDMicros != ceiling ||
+				settings.DefaultKeyMode != models.KeyModePlatform {
+				t.Error("changing currency must not disturb the other settings")
+			}
+		})
 	}
 }
