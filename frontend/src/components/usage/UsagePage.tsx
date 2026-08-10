@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCredits } from "@/lib/credits/store";
+import { useCurrency } from "@/lib/currency/store";
 import { LowBalanceBanner } from "@/components/billing/LowBalanceBanner";
 import { IconSearch, Card, ghostBtnSm } from "@/components/ui";
 import { Topbar } from "@/components/Topbar";
@@ -287,6 +288,13 @@ function UsageBody({
 }) {
   const { timeseries, byWorkflow, byEndpoint } = data;
   const { balanceUSD, refreshBalance } = useCredits();
+  const { format: formatMoney, isDefault: isUSD } = useCurrency();
+  // The USD branch keeps the trailing " USD" the tooltip has always shown;
+  // formatMoney alone would drop it and change the default rendering.
+  const formatCurrency = useCallback(
+    (usd: number) => (isUSD ? `$${usd.toFixed(2)} USD` : formatMoney(usd)),
+    [isUSD, formatMoney],
+  );
   const [localSettlements, setLocalSettlements] = useState<Settlement[]>([]);
   const [tendrilSettlements, setTendrilSettlements] = useState<Settlement[]>(
     [],
@@ -552,7 +560,11 @@ function UsageBody({
           }
         />
         <div style={{ padding: "4px 4px 0" }}>
-          <AreaChart data={timeseries} algoUsd={ALGO_USD} />
+          <AreaChart
+            data={timeseries}
+            algoUsd={ALGO_USD}
+            formatSpend={formatCurrency}
+          />
         </div>
       </Card>
 
