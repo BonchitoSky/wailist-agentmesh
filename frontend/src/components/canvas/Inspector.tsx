@@ -17,6 +17,10 @@ import { IconClose, StatusDot } from "@/components/ui";
 import { BrandLogo } from "./nodes/brandLogos";
 import { tools as toolsApi } from "@/lib/api";
 import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
+// Used for the platform's own USD fees below. Deliberately NOT applied to
+// node.price / node.asset, which are on-chain USDC amounts an endpoint actually
+// charges — converting those would misstate the contract (CURRENCY_PLAN.md §2).
+import { useCurrency } from "@/lib/currency/store";
 import {
   tendril as tendrilApi,
   estimateLeaseHoursCostUSD,
@@ -561,6 +565,7 @@ function ProviderInspector({
   onUpdate: (n: WorkflowNode) => void;
 }) {
   const tpl = PROVIDER_TEMPLATES.find((t) => t.id === node.template);
+  const { format: formatMoney } = useCurrency();
   return (
     <>
       <Section label="Model">
@@ -690,7 +695,7 @@ function ProviderInspector({
                 <input
                   style={monoInputStyle}
                   readOnly
-                  value={`${tier} tier · $${TIER_FEES[tier].toFixed(2)}/call`}
+                  value={`${tier} tier · ${formatMoney(TIER_FEES[tier])}/call`}
                 />
               );
             })()}
@@ -839,7 +844,8 @@ function validateBodyTemplate(
   const missing = new Set<string>();
   for (const m of template.matchAll(BODY_PLACEHOLDER)) {
     const name = m[2].trim();
-    const isDiscoveredValue = m[1] === "param" && paramDefaults?.[name] !== undefined;
+    const isDiscoveredValue =
+      m[1] === "param" && paramDefaults?.[name] !== undefined;
     if (!known.has(name) && !isDiscoveredValue) missing.add(m[0]);
   }
   if (missing.size > 0) {
@@ -870,7 +876,6 @@ function bodySkeleton(fields: CustomParam[]): string {
   );
   return `{\n${lines.join(",\n")}\n}`;
 }
-
 
 function formatFileSize(base64: string): string {
   const bytes = Math.floor((base64.length * 3) / 4);
@@ -948,7 +953,11 @@ function Tool402Inspector({
   const bodyMode = node.bodyMode === "json" ? "json" : "params";
   const bodyTemplate = node.bodyTemplate ?? "";
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
-  const bodyError = validateBodyTemplate(bodyTemplate, custom, node.paramDefaults);
+  const bodyError = validateBodyTemplate(
+    bodyTemplate,
+    custom,
+    node.paramDefaults,
+  );
   // How the configured values will actually reach the endpoint — worth
   // stating outright, since it changes with the mode, the method, and
   // whether a file is attached (a file forces multipart, a body forces POST).
@@ -1605,7 +1614,9 @@ function Tool402Inspector({
                   <>
                     <span style={{ color: "var(--accent)" }}>✓ valid JSON</span>
                     {" — keys must match what the endpoint documents; field"}
-                    {" names are yours, they only appear inside {{…}}. A file's"}
+                    {
+                      " names are yours, they only appear inside {{…}}. A file's"
+                    }
                     {" bytes are filled in at call time, never pasted here."}
                   </>
                 ) : (
@@ -2535,14 +2546,21 @@ function TendrilInspector({
   const [credit, setCredit] = useState<number | null>(null);
   const [machines, setMachines] = useState<TendrilMachine[]>([]);
   const action = node.tendrilAction ?? "rent";
+  const { format: formatMoney } = useCurrency();
 
   useEffect(() => {
-    tendrilApi.credit().then(setCredit).catch(() => setCredit(null));
+    tendrilApi
+      .credit()
+      .then(setCredit)
+      .catch(() => setCredit(null));
   }, []);
 
   useEffect(() => {
     if (action !== "rent") return;
-    tendrilApi.machines().then(setMachines).catch(() => setMachines([]));
+    tendrilApi
+      .machines()
+      .then(setMachines)
+      .catch(() => setMachines([]));
   }, [action]);
 
   const selectedMachine =
@@ -2569,12 +2587,12 @@ function TendrilInspector({
   return (
     <>
       <div style={{ fontSize: 12, opacity: 0.85 }}>
-        Tendril credit: <strong>${creditVal.toFixed(2)}</strong>
+        Tendril credit: <strong>{formatMoney(creditVal)}</strong>
         {selectedMachine && (
           <>
             {" "}
-            — about {(creditVal / selectedMachine.pricePerHourUsd).toFixed(1)}{" "}
-            h on {selectedMachine.label || selectedMachine.id}
+            — about {(creditVal / selectedMachine.pricePerHourUsd).toFixed(1)} h
+            on {selectedMachine.label || selectedMachine.id}
           </>
         )}
         <div style={{ opacity: 0.6, marginTop: 2 }}>
@@ -2590,8 +2608,7 @@ function TendrilInspector({
             onChange={(e) =>
               onUpdate({
                 ...node,
-                tendrilAction: e.target
-                  .value as WorkflowNode["tendrilAction"],
+                tendrilAction: e.target.value as WorkflowNode["tendrilAction"],
               })
             }
           >
@@ -2618,7 +2635,7 @@ function TendrilInspector({
             />
           </Field>
           <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
-            Converts ${topupAmount.toFixed(2)} of your AgentMesh credits into
+            Converts {formatMoney(topupAmount)} of your AgentMesh credits into
             Tendril credit.
           </div>
         </Section>
@@ -2663,7 +2680,7 @@ function TendrilInspector({
                 color: cost > creditVal ? "var(--danger)" : "var(--fg-dim)",
               }}
             >
-              Costs ${cost.toFixed(2)} of Tendril credit
+              Costs {formatMoney(cost)} of Tendril credit
               {cost > creditVal &&
                 " — not enough Tendril credit, add a Topup node"}
             </div>

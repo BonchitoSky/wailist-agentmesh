@@ -8,6 +8,7 @@ import {
   SettingsSection,
   amountInputStyle,
 } from "@/components/settings/ui";
+import { useCurrency } from "@/lib/currency/store";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -37,6 +38,7 @@ export function ExecutionSection({
   const [keyMode, setKeyMode] = useState(settings.defaultKeyMode);
   const [state, setState] = useState<SaveState>("idle");
   const [message, setMessage] = useState("");
+  const { format: formatMoney, isDefault: isUSD } = useCurrency();
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -111,24 +113,46 @@ export function ExecutionSection({
             Set a limit for this account
           </label>
           {limited && (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                maxWidth: 220,
-              }}
-            >
-              <span style={{ fontSize: 13, color: "var(--fg-muted)" }}>$</span>
-              <input
-                id="set-call-ceiling"
-                inputMode="decimal"
-                value={ceiling}
-                onChange={(e) => setCeiling(e.target.value)}
-                aria-label="Per-call spend limit in USD"
-                style={amountInputStyle}
-              />
-            </div>
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  maxWidth: 220,
+                }}
+              >
+                <span style={{ fontSize: 13, color: "var(--fg-muted)" }}>
+                  $
+                </span>
+                <input
+                  id="set-call-ceiling"
+                  inputMode="decimal"
+                  value={ceiling}
+                  onChange={(e) => setCeiling(e.target.value)}
+                  aria-label="Per-call spend limit in USD"
+                  style={amountInputStyle}
+                />
+              </div>
+              {/* The field stays USD even in another display currency, because
+                  the engine enforces this limit in USD micros. Accepting euros
+                  here would mean converting on save and back on load, so the
+                  number would drift by the day's rate every time it was
+                  reopened. A read-only preview is honest and stable. */}
+              {!isUSD && Number.isFinite(Number(ceiling)) && (
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 12,
+                    color: "var(--fg-dim)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  ≈ {formatMoney(Number(ceiling))} at today&apos;s rate ·
+                  enforced in USD
+                </p>
+              )}
+            </>
           )}
         </SettingRow>
 
