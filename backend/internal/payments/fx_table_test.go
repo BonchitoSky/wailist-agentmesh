@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -149,6 +151,39 @@ func TestFetchRateTableServesStaleOnUpstreamFailure(t *testing.T) {
 	}
 	if table.Rates["EUR"] != 0.86 {
 		t.Errorf("want the last good rate, got %v", table.Rates["EUR"])
+	}
+}
+
+// A cold cache under concurrent load must produce one upstream call, not one
+// per caller. Before the fetch lock this measured 20-for-20 against a free API
+// that publishes once a day — the exact shape of request that gets an app
+// rate-limited.
+func TestFetchRateTableCollapsesConcurrentColdFetches(t *testing.T) {
+	var calls int64
+	SetFetchRateTableForTest(func(context.Context) (map[string]float64, error) {
+		atomic.AddInt64(&calls, 1)
+		// Long enough that every goroutine is genuinely in flight together;
+		// without it the first call could finish before the others start and
+		// the test would pass for the wrong reason.
+		time.Sleep(50 * time.Millisecond)
+		return map[string]float64{"USD": 1, "EUR": 0.86}, nil
+	})
+	t.Cleanup(func() { SetFetchRateTableForTest(nil) })
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := FetchRateTable(context.Background(), []string{"EUR"}); err != nil {
+				t.Errorf("concurrent fetch: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt64(&calls); got != 1 {
+		t.Fatalf("want 1 upstream call for 20 concurrent cold requests, got %d", got)
 	}
 }
 
