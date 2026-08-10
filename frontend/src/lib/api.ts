@@ -28,6 +28,11 @@ export interface AuthUser {
   // page. Optional because a response cached from before the field existed
   // would otherwise type as present and render "Invalid Date".
   createdAt?: string;
+  // Which currency the UI renders amounts in. Carried here rather than fetched
+  // separately because every page already calls /auth/me, so a USD user gains
+  // no extra request. Optional so a response cached from before the field
+  // existed falls back to the default rather than reading as undefined.
+  displayCurrency?: string;
   // True for an OAuth account that has never set a name/org — Google and
   // GitHub only hand back a verified email, not an organization.
   needsOnboarding: boolean;
@@ -87,6 +92,7 @@ export const auth = {
       name: "Dev",
       orgName: "Acme Capital",
       createdAt: "2026-01-01T00:00:00Z",
+      displayCurrency: "USD",
       needsOnboarding: false,
     };
   },
@@ -343,6 +349,9 @@ export const credits = {
 // Account-level preferences (user_settings). Amounts are USD micros, matching
 // the ledgers — the UI converts for display and never stores a float.
 export interface UserSettings {
+  // Presentation only — never affects what is stored, charged, or settled.
+  // "USD" means render exactly as the app did before this feature.
+  displayCurrency: string;
   lowBalanceUsdMicros: number;
   // null / absent means no per-call ceiling of the user's own; the platform's
   // global cap still applies, so this is never "unlimited".
@@ -355,12 +364,14 @@ export interface UserSettings {
 // key as "leave it alone" and an explicit null as "remove my ceiling", and
 // collapsing those two would silently drop a user's spend limit on every save.
 export type UserSettingsPatch = Partial<{
+  displayCurrency: string;
   lowBalanceUsdMicros: number;
   maxCallSpendUsdMicros: number | null;
   defaultKeyMode: "byok" | "platform";
 }>;
 
 const MOCK_SETTINGS: UserSettings = {
+  displayCurrency: "USD",
   lowBalanceUsdMicros: 5_000_000,
   maxCallSpendUsdMicros: null,
   defaultKeyMode: "byok",
@@ -396,6 +407,47 @@ export const settings = {
     await delay(200);
     Object.assign(MOCK_SETTINGS, patch);
     return { ...MOCK_SETTINGS };
+  },
+};
+
+// -- Exchange rates ---------------------------------------------------------
+// Display only. Top-ups never use these: the server fetches its own fresh rate
+// at order time and locks it into the ledger row. Callers must only reach for
+// this when the user's display currency is not USD.
+export interface FXRateTable {
+  base: string;
+  rates: Record<string, number>;
+  fetchedAt: string;
+}
+
+const MOCK_RATES: FXRateTable = {
+  base: "USD",
+  // Illustrative only, for mock mode. Real values come from the backend.
+  rates: {
+    USD: 1,
+    INR: 95.25,
+    EUR: 0.8655,
+    GBP: 0.7415,
+    JPY: 157.88,
+    AUD: 1.4164,
+    CAD: 1.3954,
+    SGD: 1.2791,
+    AED: 3.6725,
+    CHF: 0.8085,
+  },
+  fetchedAt: "2026-08-10T00:02:31Z",
+};
+
+export const fx = {
+  rates: async (): Promise<FXRateTable> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/fx/rates`, { credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "exchange rate fetch failed");
+      return data;
+    }
+    await delay(150);
+    return { ...MOCK_RATES };
   },
 };
 
