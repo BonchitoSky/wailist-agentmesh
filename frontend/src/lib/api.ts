@@ -92,7 +92,10 @@ export const auth = {
       name: "Dev",
       orgName: "Acme Capital",
       createdAt: "2026-01-01T00:00:00Z",
-      displayCurrency: "USD",
+      // Read from the same mock the settings endpoints mutate, so changing
+      // currency in mock mode propagates exactly as it does in real mode
+      // (where the server persists it and /auth/me reads it back).
+      displayCurrency: MOCK_SETTINGS.displayCurrency,
       needsOnboarding: false,
     };
   },

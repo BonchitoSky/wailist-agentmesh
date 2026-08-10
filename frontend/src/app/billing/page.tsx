@@ -5,6 +5,7 @@ import { Topbar } from "@/components/Topbar";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { CheckoutModal } from "@/components/checkout/CheckoutModal";
 import { useCredits } from "@/lib/credits/store";
+import { useCurrency } from "@/lib/currency/store";
 import { bonusRate, creditsForTopup } from "@/lib/credits/fx";
 import { credits as creditsApi } from "@/lib/api";
 
@@ -38,6 +39,10 @@ const panelStyle: React.CSSProperties = {
   padding: 20,
 };
 
+// Still used by the top-up estimates below, which stay USD-denominated: they
+// sit inside the ₹ purchase flow that CURRENCY_PLAN.md §4 excludes, and they
+// are computed from the placeholder FX in lib/credits/fx.ts (§9), not the real
+// rate table. The balance figures use the display currency instead.
 const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
 
 export default function BillingPage() {
@@ -48,6 +53,7 @@ export default function BillingPage() {
     refreshBalance,
     autoRecharge,
   } = useCredits();
+  const { formatBalance } = useCurrency();
   const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -82,7 +88,7 @@ export default function BillingPage() {
       await refreshBalance();
       setCouponState("success");
       setCouponMessage(
-        `Coupon applied — ${fmtUSD(creditedUSD)} added to your balance.`,
+        `Coupon applied — ${formatBalance(creditedUSD)} added to your balance.`,
       );
       setCouponCode("");
     } catch (e) {
@@ -223,7 +229,7 @@ export default function BillingPage() {
                         fontVariantNumeric: "tabular-nums",
                       }}
                     >
-                      {balanceKnown ? fmtUSD(balanceUSD) : "—"}
+                      {balanceKnown ? formatBalance(balanceUSD) : "—"}
                     </div>
                   </div>
                   <span

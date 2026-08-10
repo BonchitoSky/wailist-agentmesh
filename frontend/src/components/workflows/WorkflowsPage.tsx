@@ -14,6 +14,7 @@ import { Topbar } from "@/components/Topbar";
 import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
 import { useCredits } from "@/lib/credits/store";
+import { useCurrency } from "@/lib/currency/store";
 import { tendril } from "@/lib/tendril";
 
 export function WorkflowsPage() {
@@ -27,6 +28,7 @@ export function WorkflowsPage() {
   const [creatingTendril, setCreatingTendril] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
+  const { formatBalance } = useCurrency();
 
   useEffect(() => {
     workflowsApi
@@ -219,7 +221,7 @@ export function WorkflowsPage() {
                   color: "var(--fg)",
                 }}
               >
-                {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
+                {balanceKnown ? formatBalance(balanceUSD) : "—"}
               </div>
               <div
                 style={{ marginTop: 4, fontSize: 11, color: "var(--fg-muted)" }}

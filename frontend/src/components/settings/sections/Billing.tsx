@@ -8,6 +8,7 @@ import {
   SUPPORTED_CURRENCIES,
   isSupportedCurrency,
 } from "@/lib/currency/format";
+import { applyDisplayCurrency, useCurrency } from "@/lib/currency/store";
 import {
   FormStatus,
   SaveButton,
@@ -35,6 +36,7 @@ export function BillingSection({
 }) {
   const router = useRouter();
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
+  const { formatBalance, isDefault: isUSD } = useCurrency();
   const [threshold, setThreshold] = useState(
     microsToUSD(settings.lowBalanceUsdMicros),
   );
@@ -51,6 +53,9 @@ export function BillingSection({
     setCurrencyState("saving");
     try {
       await onSave({ displayCurrency: code });
+      // Only after the server has stored it. useAuth caches the user from
+      // mount, so this is what makes the change visible without a reload.
+      applyDisplayCurrency(code);
       setCurrencyState("saved");
       setCurrencyMessage(
         code === "USD"
@@ -133,8 +138,17 @@ export function BillingSection({
             letterSpacing: "-0.01em",
           }}
         >
-          {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
+          {balanceKnown ? formatBalance(balanceUSD) : "—"}
         </span>
+        {/* Shown only once a fiat estimate is on screen. The terms say credits
+            are not currency and the refund policy says they cannot be exchanged
+            for cash, so the converted figure must not read as a cash value.
+            On USD there is no estimate and therefore nothing to qualify. */}
+        {!isUSD && balanceKnown && (
+          <span style={{ fontSize: 11.5, color: "var(--fg-dim)" }}>
+            Converted at today&apos;s rate. Credits are not redeemable for cash.
+          </span>
+        )}
       </div>
 
       <form onSubmit={submit} style={{ display: "grid", gap: 18 }}>

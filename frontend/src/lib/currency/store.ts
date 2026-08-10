@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { fx } from "@/lib/api";
 import {
   DEFAULT_CURRENCY,
+  formatBalance,
   formatMoney,
   isDefaultCurrency,
   isSupportedCurrency,
@@ -17,22 +18,33 @@ import {
 // the default experience. That is the §0 invariant in CURRENCY_PLAN.md.
 
 type Status = "idle" | "loading" | "ready" | "failed";
+type Snapshot = {
+  rates: Rates | null;
+  status: Status;
+  override: string | null;
+};
 
 let rates: Rates | null = null;
 let status: Status = "idle";
+// Set when the user changes currency in settings. useAuth caches the user it
+// fetched at mount and has no refresh, so without this the new currency would
+// not appear until a full page reload.
+let override: string | null = null;
 const listeners = new Set<() => void>();
 
 // One stable object per state change: useSyncExternalStore compares snapshots by
 // identity, so returning a fresh literal each call would loop forever.
-let snapshot: { rates: Rates | null; status: Status } = { rates, status };
-const SERVER_SNAPSHOT: { rates: Rates | null; status: Status } = {
+let snapshot: Snapshot = { rates, status, override };
+const SERVER_SNAPSHOT: Snapshot = {
   rates: null,
   status: "idle",
+  override: null,
 };
 
-function commit(next: { rates: Rates | null; status: Status }): void {
+function commit(next: Snapshot): void {
   rates = next.rates;
   status = next.status;
+  override = next.override;
   snapshot = next;
   listeners.forEach((l) => l());
 }
@@ -49,13 +61,26 @@ const getServerSnapshot = () => SERVER_SNAPSHOT;
 
 function ensureRates(): void {
   if (status !== "idle") return;
-  commit({ rates, status: "loading" });
+  commit({ rates, status: "loading", override });
   fx.rates()
-    .then((table) => commit({ rates: table.rates, status: "ready" }))
+    .then((table) => commit({ rates: table.rates, status: "ready", override }))
     // Leaves rates null, which makes formatMoney fall back to USD. Showing a
     // figure derived from a rate we could not fetch would be worse than showing
     // the underlying one.
-    .catch(() => commit({ rates: null, status: "failed" }));
+    .catch(() => commit({ rates: null, status: "failed", override }));
+}
+
+/**
+ * Apply a currency the user just chose, without waiting for a reload.
+ *
+ * Call only after PATCH /settings has succeeded — this is a reflection of
+ * persisted state, not a substitute for persisting it.
+ */
+export function applyDisplayCurrency(code: string): void {
+  if (!isSupportedCurrency(code)) return;
+  cacheCurrency(code);
+  commit({ rates, status, override: code });
+  if (!isDefaultCurrency(code)) ensureRates();
 }
 
 // Last-known currency, mirrored so a returning non-USD user's first paint is
@@ -91,6 +116,8 @@ export interface CurrencyView {
   ratesFailed: boolean;
   /** Format a USD amount for display. USD input renders byte-identically. */
   format: (usd: number) => string;
+  /** Format a credit balance — credits lead in non-USD mode. See §3. */
+  formatBalance: (usd: number) => string;
 }
 
 export function useCurrency(): CurrencyView {
@@ -101,11 +128,17 @@ export function useCurrency(): CurrencyView {
   // lands. Both fall back to USD, so an unauthenticated or still-loading render
   // is the default experience rather than a guess.
   const currency =
-    user?.displayCurrency ?? readCachedCurrency() ?? DEFAULT_CURRENCY;
+    snap.override ??
+    user?.displayCurrency ??
+    readCachedCurrency() ??
+    DEFAULT_CURRENCY;
 
   useEffect(() => {
-    if (isDefaultCurrency(currency)) return;
+    // Cached unconditionally, including USD: switching back to the default has
+    // to clear a previously cached non-USD code, or the next first paint would
+    // briefly render the currency the user just left.
     cacheCurrency(currency);
+    if (isDefaultCurrency(currency)) return;
     ensureRates();
   }, [currency]);
 
@@ -114,15 +147,21 @@ export function useCurrency(): CurrencyView {
     [currency, snap.rates],
   );
 
+  const balance = useCallback(
+    (usd: number) => formatBalance(usd, currency, snap.rates),
+    [currency, snap.rates],
+  );
+
   return {
     currency,
     isDefault: isDefaultCurrency(currency),
     ratesFailed: !isDefaultCurrency(currency) && snap.status === "failed",
     format,
+    formatBalance: balance,
   };
 }
 
 /** Test-only: drop the module-level rate cache between cases. */
 export function __resetCurrencyStoreForTest(): void {
-  commit({ rates: null, status: "idle" });
+  commit({ rates: null, status: "idle", override: null });
 }

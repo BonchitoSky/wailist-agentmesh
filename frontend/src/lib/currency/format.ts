@@ -114,3 +114,23 @@ export function formatMoney(
  */
 export const formatCredits = (usd: number): string =>
   `${usd.toFixed(2)} credits`;
+
+/**
+ * A credit balance, for the inline/compact places that need one string.
+ *
+ * USD is unchanged — `$12.50`, exactly as before. In another currency the
+ * credits lead and the fiat figure trails as an estimate, because the terms say
+ * credits are not currency and the refund policy says they have no monetary
+ * value (CURRENCY_PLAN.md §3). If the rate is unavailable this degrades all the
+ * way back to plain USD rather than showing "12.50 credits (≈ $12.50)", which
+ * would be noise.
+ */
+export function formatBalance(
+  usd: number,
+  currency: string = DEFAULT_CURRENCY,
+  rates: Rates | null = null,
+): string {
+  if (isDefaultCurrency(currency)) return formatUSD(usd);
+  if (convert(usd, currency, rates) === null) return formatUSD(usd);
+  return `${formatCredits(usd)} (≈ ${formatMoney(usd, currency, rates)})`;
+}
