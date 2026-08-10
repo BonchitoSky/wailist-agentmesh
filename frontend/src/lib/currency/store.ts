@@ -59,8 +59,13 @@ function subscribe(listener: () => void): () => void {
 const getSnapshot = () => snapshot;
 const getServerSnapshot = () => SERVER_SNAPSHOT;
 
-function ensureRates(): void {
-  if (status !== "idle") return;
+// `allowRetry` re-attempts after a previous failure. Callers pass it only from
+// places that fire on a deliberate change (mount, or the user picking a
+// currency), never from render — without it a transient FX outage would strand
+// the session on USD until a full page reload.
+function ensureRates(allowRetry = false): void {
+  if (status === "loading" || status === "ready") return;
+  if (status === "failed" && !allowRetry) return;
   commit({ rates, status: "loading", override });
   fx.rates()
     .then((table) => commit({ rates: table.rates, status: "ready", override }))
@@ -80,7 +85,9 @@ export function applyDisplayCurrency(code: string): void {
   if (!isSupportedCurrency(code)) return;
   cacheCurrency(code);
   commit({ rates, status, override: code });
-  if (!isDefaultCurrency(code)) ensureRates();
+  // Retries a previous failure: picking a currency is a deliberate act, and is
+  // the natural moment to try the rate table again.
+  if (!isDefaultCurrency(code)) ensureRates(true);
 }
 
 // Last-known currency, mirrored so a returning non-USD user's first paint is
@@ -139,7 +146,9 @@ export function useCurrency(): CurrencyView {
     // briefly render the currency the user just left.
     cacheCurrency(currency);
     if (isDefaultCurrency(currency)) return;
-    ensureRates();
+    // Only fires when the currency actually changes (or on mount), so passing
+    // the retry flag here cannot loop on a persistent outage.
+    ensureRates(true);
   }, [currency]);
 
   const format = useCallback(

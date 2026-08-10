@@ -36,7 +36,7 @@ export function BillingSection({
 }) {
   const router = useRouter();
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
-  const { formatBalance, isDefault: isUSD } = useCurrency();
+  const { formatBalance, isDefault: isUSD, ratesFailed } = useCurrency();
   const [threshold, setThreshold] = useState(
     microsToUSD(settings.lowBalanceUsdMicros),
   );
@@ -122,6 +122,26 @@ export function BillingSection({
           ))}
         </select>
         <FormStatus state={currencyState} message={currencyMessage} />
+        {/* The one place the fallback is admitted to the user. Amounts quietly
+            render in USD when the rate table can't be fetched — silently
+            showing dollars to someone who asked for euros looks like a bug,
+            and a converted figure from an unknown rate would be worse. */}
+        {ratesFailed && (
+          <p
+            role="status"
+            style={{
+              margin: 0,
+              maxWidth: "60ch",
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: "var(--warm)",
+            }}
+          >
+            Exchange rates are unavailable right now, so amounts are shown in US
+            dollars. Your currency preference is saved and will apply once rates
+            are reachable again.
+          </p>
+        )}
       </SettingRow>
 
       <div style={{ display: "grid", gap: 4 }}>
