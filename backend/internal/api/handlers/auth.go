@@ -193,11 +193,24 @@ func (d *Deps) Me(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusUnauthorized, "not found")
 		return
 	}
+	// Carried on /auth/me rather than fetched separately, because every page
+	// already calls this endpoint once and none of them should gain a second
+	// request for a preference that is USD for most accounts. Costs one indexed
+	// primary-key lookup; a failure here must not sign the user out, so it
+	// degrades to the default rather than propagating.
+	displayCurrency := models.DefaultCurrency
+	if settings, sErr := d.Store.GetUserSettings(r.Context(), userID); sErr == nil {
+		displayCurrency = settings.DisplayCurrency
+	} else {
+		log.Printf("me: display currency: %v", sErr)
+	}
+
 	respond.JSON(w, http.StatusOK, map[string]any{
-		"id":      user.ID,
-		"email":   user.Email,
-		"name":    user.Name,
-		"orgName": user.OrgName,
+		"id":              user.ID,
+		"email":           user.Email,
+		"name":            user.Name,
+		"orgName":         user.OrgName,
+		"displayCurrency": displayCurrency,
 		// Already selected by GetUserByID and previously dropped here. The
 		// settings page shows it as "member since"; nothing else needs it.
 		"createdAt": user.CreatedAt,
