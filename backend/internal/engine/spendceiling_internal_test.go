@@ -13,8 +13,20 @@ import (
 	"github.com/agentmesh/backend/internal/sse"
 )
 
-// ceilingFixture seeds a funded user with a workflow, so preflightCheck's
-// balance branch always passes and the only thing under test is the ceiling.
+// CreateCreditTransaction takes INR paise and derives the credit itself:
+//
+//	credit_usd_micros = round(amountINRPaise / 100 * fxRate * 1e6)
+//
+// A rate of 1e-4 makes that conversion the identity, so the fixture funds
+// exactly fundUSDMicros and every assertion below can be written in the same
+// units preflightCheck compares against. Passing 1.0 instead scales the balance
+// by 10,000x, quietly funding $1000 where $0.10 was meant — which makes a
+// balance assertion impossible to fail rather than making it wrong.
+const paiseToMicrosIdentityRate = 0.0001
+
+// ceilingFixture seeds a user funded with exactly fundUSDMicros, plus a
+// workflow. Fund generously to isolate the ceiling; fund below the charge to
+// exercise the balance branch underneath it.
 func ceilingFixture(t *testing.T, fundUSDMicros int64) (*Runner, models.Workflow) {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
@@ -34,7 +46,7 @@ func ceilingFixture(t *testing.T, fundUSDMicros int64) (*Runner, models.Workflow
 		t.Fatal(err)
 	}
 	orderID := fmt.Sprintf("fund_%s_%d", user.ID, time.Now().UnixNano())
-	if _, err := store.CreateCreditTransaction(ctx, user.ID, orderID, fundUSDMicros, 1.0); err != nil {
+	if _, err := store.CreateCreditTransaction(ctx, user.ID, orderID, fundUSDMicros, paiseToMicrosIdentityRate); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := store.CompleteCreditTransaction(ctx, "cashfree", orderID, "pay_"+orderID); err != nil {
