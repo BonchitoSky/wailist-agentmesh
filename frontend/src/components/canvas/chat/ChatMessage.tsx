@@ -88,14 +88,21 @@ export function ChatMessage({ message, onOpenLogs }: ChatMessageProps) {
             // ~65ch keeps an agent's long answer readable instead of running
             // the full width of a wide pane.
             maxWidth: "62ch",
-            color: message.isError ? "var(--danger)" : "var(--fg)",
+            color: message.isError
+              ? "var(--danger)"
+              : message.interrupted
+                ? "var(--fg-muted)"
+                : "var(--fg)",
             fontSize: 13,
             lineHeight: 1.6,
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
           }}
         >
-          {message.isError && (
+          {/* "interrupted" is not "failed": the run may have succeeded, this
+              tab just stopped watching it after a reload. Labelling it as a
+              failure would report an outcome we don't actually know. */}
+          {(message.isError || message.interrupted) && (
             <span
               style={{
                 fontFamily: "var(--font-mono)",
@@ -104,9 +111,10 @@ export function ChatMessage({ message, onOpenLogs }: ChatMessageProps) {
                 letterSpacing: "0.08em",
                 display: "block",
                 marginBottom: 4,
+                color: message.isError ? "var(--danger)" : "var(--warm)",
               }}
             >
-              run failed
+              {message.isError ? "run failed" : "interrupted"}
             </span>
           )}
           {message.text}

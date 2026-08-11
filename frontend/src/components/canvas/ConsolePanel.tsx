@@ -11,6 +11,8 @@ import {
 import { ChatPane } from "./chat/ChatPane";
 import { useChatSession } from "./chat/useChatSession";
 import { resolveReply } from "./chat/resolveReply";
+import { recoverPendingTurn } from "./chat/recoverPendingTurn";
+import { runs as runsApi, type RunLogRecord } from "@/lib/api";
 
 interface ConsolePanelProps {
   open: boolean;
@@ -125,6 +127,63 @@ export function ConsolePanel({
       runId,
     });
   }, [done, runId, hydrated, logs, elapsed, completeTurn]);
+
+  // Recover a turn stranded by a page reload.
+  //
+  // CanvasPage holds runId in useState, so a refresh puts it back to null while
+  // useChatSession has already persisted the pending turn. The two effects
+  // above are both gated on a live runId, so nothing would ever settle it: the
+  // bubble would spin forever, and — since a stale pending sits earlier in the
+  // transcript — it would also absorb the next turn's answer.
+  //
+  // Guarded by a ref so this runs once per mount, against the transcript as
+  // hydrated. Without that, the turn the user sends *next* would briefly have
+  // no runId yet and get recovered out from under itself.
+  const recoveredRef = useRef(false);
+  const { messages } = session;
+  useEffect(() => {
+    if (!hydrated || runId || recoveredRef.current) return;
+    const stranded = [...messages].reverse().find((m) => m.pending);
+    if (!stranded) return;
+    recoveredRef.current = true;
+
+    let cancelled = false;
+    void (async () => {
+      let record: { status: string } | null = null;
+      let rows: RunLogRecord[] = [];
+      if (stranded.runId) {
+        try {
+          const res = await runsApi.get(stranded.runId);
+          record = res.run;
+          rows = res.logs;
+        } catch {
+          // Leave record null: recoverPendingTurn reports it as interrupted
+          // rather than inventing an outcome.
+        }
+      }
+      if (cancelled) return;
+      const recovery = recoverPendingTurn(record, rows);
+      completeTurn(
+        recovery.kind === "resolved"
+          ? {
+              text: recovery.text,
+              isError: recovery.isError,
+              toolCount: recovery.toolCount,
+              spendUSD: recovery.spendUSD,
+              runId: stranded.runId,
+            }
+          : {
+              text: recovery.text,
+              interrupted: true,
+              runId: stranded.runId,
+            },
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, runId, messages, completeTurn]);
 
   const handleSend = (text: string) => {
     session.startTurn(text);

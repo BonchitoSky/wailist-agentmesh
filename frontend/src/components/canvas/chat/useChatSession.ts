@@ -23,6 +23,11 @@ export interface ChatMessage {
   /** An assistant turn still waiting on its run. */
   pending?: boolean;
   isError?: boolean;
+  /**
+   * The turn was stranded — a reload cut it off from its run. Distinct from
+   * isError: the run itself may well have succeeded, we just stopped watching.
+   */
+  interrupted?: boolean;
   /** Activity-strip figures, filled in when the run finishes. */
   toolCount?: number;
   elapsedS?: number;
@@ -53,6 +58,23 @@ const MAX_STORED_BYTES = 256 * 1024;
 interface StoredSession {
   sessionId: string;
   messages: ChatMessage[];
+}
+
+/**
+ * Index of the most recent turn still waiting on a run, or -1.
+ *
+ * Deliberately the LAST pending turn, not the first. A turn stranded by a
+ * reload sits earlier in the transcript than any turn sent afterwards, so
+ * matching the first pending would hand a fresh turn's answer to the stale
+ * bubble and leave the fresh one spinning — one interrupted run would corrupt
+ * every turn after it. Recovery on hydration clears strays too; this is the
+ * cheap structural guard that holds even if one slips through.
+ */
+function lastPendingIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].pending) return i;
+  }
+  return -1;
 }
 
 function newSessionId(): string {
@@ -132,7 +154,7 @@ export function useChatSession(workflowId: string | undefined): ChatSession {
 
   const attachRun = useCallback((runId: string) => {
     setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.pending);
+      const idx = lastPendingIndex(prev);
       if (idx < 0) return prev;
       const next = [...prev];
       next[idx] = { ...next[idx], runId };
@@ -143,7 +165,7 @@ export function useChatSession(workflowId: string | undefined): ChatSession {
   const completeTurn = useCallback(
     (patch: Omit<ChatMessage, "id" | "sender" | "ts">) => {
       setMessages((prev) => {
-        const idx = prev.findIndex((m) => m.pending);
+        const idx = lastPendingIndex(prev);
         if (idx < 0) return prev;
         const next = [...prev];
         next[idx] = { ...next[idx], ...patch, pending: false };
