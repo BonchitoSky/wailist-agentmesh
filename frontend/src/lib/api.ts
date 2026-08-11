@@ -354,6 +354,10 @@ export const runs = {
     // SAMPLE_WORKFLOW's node ids and its $0.065/call x402 weather endpoint.
     const now = Date.now();
     const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
+    // One id, referenced everywhere it appears. Spelling it out per-field let
+    // the receipt, the explorer link and the payment list drift apart.
+    const mockTxId =
+      "7F2AC9D1E4B8A6350C1D9E2F4A7B8C3D5E6F1A2B3C4D5E6F7A8B9C0D1E2F3A4B";
     return {
       run: { status: "success" },
       logs: [
@@ -365,11 +369,11 @@ export const runs = {
           nodeType: "tool402",
           status: "success",
           output: {
-            txId: "7F2AC9D1E4B8A6350C1D9E2F4A7B8C3D5E6F1A2B3C4D5E6F7A8B9C0D1E2F3A4B",
+            txId: mockTxId,
             amount: "0.065",
             settledUsdMicros: 65000,
             nodeName: "x402 Weather",
-            explorerURL: "https://allo.info/tx/7F2AC9D1E4B8A635",
+            explorerURL: `https://allo.info/tx/${mockTxId}`,
             response: {
               location: "San Francisco, CA",
               tempC: 14.2,
@@ -392,7 +396,7 @@ export const runs = {
               "It's 14.2°C in San Francisco right now and partly cloudy, with " +
               "winds around 18 km/h. Mild, but the wind makes it feel cooler — " +
               "worth a light jacket if you're heading out.",
-            x402Payments: [{ txId: "7F2AC9D1E4B8A635", amount: "0.065" }],
+            x402Payments: [{ txId: mockTxId, amount: "0.065" }],
           },
           durationMs: 4400,
           ts: iso(1900),
