@@ -15,10 +15,10 @@ interface ChatPaneProps {
   onSend: (text: string) => void;
   /** True while a run is in flight — the composer waits rather than queueing. */
   busy: boolean;
-  onOpenLogs?: (runId: string) => void;
+  onShowLogs?: () => void;
 }
 
-export function ChatPane({ session, onSend, busy, onOpenLogs }: ChatPaneProps) {
+export function ChatPane({ session, onSend, busy, onShowLogs }: ChatPaneProps) {
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -93,7 +93,7 @@ export function ChatPane({ session, onSend, busy, onOpenLogs }: ChatPaneProps) {
         )}
 
         {session.messages.map((m) => (
-          <ChatMessage key={m.id} message={m} onOpenLogs={onOpenLogs} />
+          <ChatMessage key={m.id} message={m} onShowLogs={onShowLogs} />
         ))}
         <div ref={bottomRef} />
       </div>

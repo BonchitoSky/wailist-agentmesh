@@ -10,8 +10,8 @@ import type { ChatMessage as Message } from "./useChatSession";
 
 interface ChatMessageProps {
   message: Message;
-  /** Opens the logs pane filtered to this message's run. */
-  onOpenLogs?: (runId: string) => void;
+  /** Reveals the logs pane. Not yet filtered to this turn's run. */
+  onShowLogs?: () => void;
 }
 
 /** "2 tools · 8.2s · $0.0042" — omitting whatever isn't known. */
@@ -30,7 +30,7 @@ function activityParts(m: Message): string[] {
   return parts;
 }
 
-export function ChatMessage({ message, onOpenLogs }: ChatMessageProps) {
+export function ChatMessage({ message, onShowLogs }: ChatMessageProps) {
   const isUser = message.sender === "user";
 
   if (isUser) {
@@ -60,7 +60,7 @@ export function ChatMessage({ message, onOpenLogs }: ChatMessageProps) {
   }
 
   const parts = activityParts(message);
-  const canOpenLogs = !!(message.runId && onOpenLogs);
+  const canShowLogs = !!onShowLogs;
 
   return (
     <div
@@ -124,13 +124,13 @@ export function ChatMessage({ message, onOpenLogs }: ChatMessageProps) {
       {/* The activity strip. This is the bridge between the two audiences:
           everything technical about the turn, compressed to one dim line that
           opens the full logs. */}
-      {!message.pending && (parts.length > 0 || canOpenLogs) && (
+      {!message.pending && (parts.length > 0 || canShowLogs) && (
         <button
           type="button"
           className="chat-activity"
-          disabled={!canOpenLogs}
-          onClick={() => message.runId && onOpenLogs?.(message.runId)}
-          title={canOpenLogs ? "Show this run's logs" : undefined}
+          disabled={!canShowLogs}
+          onClick={() => onShowLogs?.()}
+          title={canShowLogs ? "Show the run logs" : undefined}
           style={{
             alignSelf: "flex-start",
             marginTop: 5,
@@ -141,12 +141,12 @@ export function ChatMessage({ message, onOpenLogs }: ChatMessageProps) {
             fontSize: 10,
             fontVariantNumeric: "tabular-nums",
             color: "var(--fg-dim)",
-            cursor: canOpenLogs ? "pointer" : "default",
+            cursor: canShowLogs ? "pointer" : "default",
             letterSpacing: "0.02em",
           }}
         >
           {parts.length > 0 ? parts.join(" · ") : "details"}
-          {canOpenLogs && <span aria-hidden> ›</span>}
+          {canShowLogs && <span aria-hidden> ›</span>}
         </button>
       )}
     </div>
