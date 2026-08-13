@@ -45,16 +45,9 @@ func (d *Deps) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Start from what's stored, so fields the request omits survive untouched.
-	settings, err := d.Store.GetUserSettings(r.Context(), userID)
-	if err != nil {
-		log.Printf("get user settings: %v", err)
-		respond.Error(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	patch.applyTo(&settings)
-
-	saved, err := d.Store.UpsertUserSettings(r.Context(), userID, settings)
+	// Applied in one statement: the store merges per column, so a concurrent
+	// PATCH to a different section cannot be clobbered by a stale read here.
+	saved, err := d.Store.UpsertUserSettings(r.Context(), userID, patch)
 	if err != nil {
 		log.Printf("update user settings: %v", err)
 		respond.Error(w, http.StatusInternalServerError, "internal error")
@@ -63,36 +56,11 @@ func (d *Deps) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, saved)
 }
 
-// settingsPatch is the subset of fields a PATCH actually sent. Each pointer is
-// nil when the key was absent, which is what keeps "leave this alone" distinct
-// from "set this".
-type settingsPatch struct {
-	lowBalanceUSDMicros *int64
-	// setMaxCallSpend records that the key was present at all, so an explicit
-	// null (maxCallSpend stays nil) clears the ceiling instead of being
-	// indistinguishable from omitting the field.
-	setMaxCallSpend bool
-	maxCallSpend    *int64
-	displayCurrency *string
-}
-
-func (p settingsPatch) applyTo(s *models.UserSettings) {
-	if p.lowBalanceUSDMicros != nil {
-		s.LowBalanceUSDMicros = *p.lowBalanceUSDMicros
-	}
-	if p.setMaxCallSpend {
-		s.MaxCallSpendUSDMicros = p.maxCallSpend
-	}
-	if p.displayCurrency != nil {
-		s.DisplayCurrency = *p.displayCurrency
-	}
-}
-
 // parseSettingsPatch decodes a PATCH body, returning a human-readable message
 // for the 400 when it is invalid and "" when it is fine. Kept separate from the
 // handler so every validation branch is reachable without a database.
-func parseSettingsPatch(body io.Reader) (settingsPatch, string) {
-	var patch settingsPatch
+func parseSettingsPatch(body io.Reader) (models.UserSettingsPatch, string) {
+	var patch models.UserSettingsPatch
 
 	var raw map[string]json.RawMessage
 	if err := json.NewDecoder(body).Decode(&raw); err != nil {
@@ -107,7 +75,7 @@ func parseSettingsPatch(body io.Reader) (settingsPatch, string) {
 		if threshold < 0 {
 			return patch, "lowBalanceUsdMicros cannot be negative"
 		}
-		patch.lowBalanceUSDMicros = &threshold
+		patch.LowBalanceUSDMicros = &threshold
 	}
 
 	if v, ok := raw["maxCallSpendUsdMicros"]; ok {
@@ -136,8 +104,8 @@ func parseSettingsPatch(body io.Reader) (settingsPatch, string) {
 				return patch, "maxCallSpendUsdMicros cannot exceed the platform ceiling"
 			}
 		}
-		patch.setMaxCallSpend = true
-		patch.maxCallSpend = ceiling
+		patch.SetMaxCallSpend = true
+		patch.MaxCallSpendUSDMicros = ceiling
 	}
 
 	if v, ok := raw["displayCurrency"]; ok {
@@ -151,7 +119,7 @@ func parseSettingsPatch(body io.Reader) (settingsPatch, string) {
 		if !models.IsSupportedCurrency(code) {
 			return patch, "displayCurrency must be one of " + strings.Join(models.SupportedCurrencies, ", ")
 		}
-		patch.displayCurrency = &code
+		patch.DisplayCurrency = &code
 	}
 
 	return patch, ""

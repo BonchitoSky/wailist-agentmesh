@@ -1251,26 +1251,35 @@ func (s *Store) GetUserSettings(ctx context.Context, userID string) (models.User
 	return settings, nil
 }
 
-// UpsertUserSettings writes the whole settings row, creating it on first save.
-// Callers pass a complete UserSettings — the handler reads the current values,
-// applies the fields the request actually sent, and hands back the merged
-// result, so a partial PATCH never blanks a field it didn't mention.
+// UpsertUserSettings applies a patch, creating the row on first save.
+//
+// Deliberately not read-modify-write. Two concurrent PATCHes — two tabs saving
+// different sections — would each write back their own stale copy of the fields
+// they never touched, and the later one would win silently. Merging per column
+// in SQL means a request only ever moves what it actually sent, and costs one
+// round trip rather than two.
 //
 // The column CHECK constraints (see migration 000020) are the real guard on
-// range and enum validity; handler validation exists to return a useful 400
-// rather than to be the only thing standing between a bad value and the table.
-func (s *Store) UpsertUserSettings(ctx context.Context, userID string, in models.UserSettings) (models.UserSettings, error) {
+// range validity; handler validation exists to return a useful 400 rather than
+// to be the only thing standing between a bad value and the table.
+func (s *Store) UpsertUserSettings(ctx context.Context, userID string, p models.UserSettingsPatch) (models.UserSettings, error) {
+	// The INSERT branch needs a complete row, so anything the request omitted
+	// falls back to the documented defaults instead of a Go zero value.
+	insert := models.DefaultUserSettings()
+	p.ApplyTo(&insert)
+
 	var out models.UserSettings
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO user_settings (user_id, low_balance_usd_micros, max_call_spend_usd_micros, display_currency, updated_at)
 		VALUES ($1, $2, $3, $4, NOW())
 		ON CONFLICT (user_id) DO UPDATE SET
-			low_balance_usd_micros    = EXCLUDED.low_balance_usd_micros,
-			max_call_spend_usd_micros = EXCLUDED.max_call_spend_usd_micros,
-			display_currency          = EXCLUDED.display_currency,
+			low_balance_usd_micros    = CASE WHEN $5 THEN EXCLUDED.low_balance_usd_micros    ELSE user_settings.low_balance_usd_micros    END,
+			max_call_spend_usd_micros = CASE WHEN $6 THEN EXCLUDED.max_call_spend_usd_micros ELSE user_settings.max_call_spend_usd_micros END,
+			display_currency          = CASE WHEN $7 THEN EXCLUDED.display_currency          ELSE user_settings.display_currency          END,
 			updated_at                = NOW()
 		RETURNING low_balance_usd_micros, max_call_spend_usd_micros, display_currency
-	`, userID, in.LowBalanceUSDMicros, in.MaxCallSpendUSDMicros, in.DisplayCurrency).
+	`, userID, insert.LowBalanceUSDMicros, insert.MaxCallSpendUSDMicros, insert.DisplayCurrency,
+		p.LowBalanceUSDMicros != nil, p.SetMaxCallSpend, p.DisplayCurrency != nil).
 		Scan(&out.LowBalanceUSDMicros, &out.MaxCallSpendUSDMicros, &out.DisplayCurrency)
 	return out, err
 }

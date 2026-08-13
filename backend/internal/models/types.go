@@ -307,6 +307,34 @@ func DefaultUserSettings() UserSettings {
 	}
 }
 
+// UserSettingsPatch is the subset of fields a PATCH actually sent. Each pointer
+// is nil when the key was absent, which is what keeps "leave this alone"
+// distinct from "set this".
+type UserSettingsPatch struct {
+	LowBalanceUSDMicros *int64
+	// SetMaxCallSpend records that the key was present at all, so an explicit
+	// null (MaxCallSpendUSDMicros stays nil) clears the ceiling instead of
+	// being indistinguishable from omitting the field.
+	SetMaxCallSpend       bool
+	MaxCallSpendUSDMicros *int64
+	DisplayCurrency       *string
+}
+
+// ApplyTo merges the patch onto s, leaving fields the request omitted alone.
+// Used for the insert case, where an account with no stored row starts from
+// DefaultUserSettings; the update case merges per column in SQL instead.
+func (p UserSettingsPatch) ApplyTo(s *UserSettings) {
+	if p.LowBalanceUSDMicros != nil {
+		s.LowBalanceUSDMicros = *p.LowBalanceUSDMicros
+	}
+	if p.SetMaxCallSpend {
+		s.MaxCallSpendUSDMicros = p.MaxCallSpendUSDMicros
+	}
+	if p.DisplayCurrency != nil {
+		s.DisplayCurrency = *p.DisplayCurrency
+	}
+}
+
 // CreditTransaction is one row of the append-only credit_ledger table.
 type CreditTransaction struct {
 	ID                string     `json:"id"`

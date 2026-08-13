@@ -46,8 +46,8 @@ func TestParseSettingsPatchAcceptsTheGlobalCapExactly(t *testing.T) {
 	if msg != "" {
 		t.Fatalf("want no error, got %q", msg)
 	}
-	if patch.maxCallSpend == nil || *patch.maxCallSpend != models.MaxSingleX402QuoteUSDMicros {
-		t.Fatalf("want ceiling %d, got %v", models.MaxSingleX402QuoteUSDMicros, patch.maxCallSpend)
+	if patch.MaxCallSpendUSDMicros == nil || *patch.MaxCallSpendUSDMicros != models.MaxSingleX402QuoteUSDMicros {
+		t.Fatalf("want ceiling %d, got %v", models.MaxSingleX402QuoteUSDMicros, patch.MaxCallSpendUSDMicros)
 	}
 }
 
@@ -61,8 +61,8 @@ func TestParseSettingsPatchAcceptsTheProbeFloorExactly(t *testing.T) {
 	if msg != "" {
 		t.Fatalf("want no error, got %q", msg)
 	}
-	if patch.maxCallSpend == nil || *patch.maxCallSpend != models.X402ProbeFloorUSDMicros {
-		t.Fatalf("want ceiling %d, got %v", models.X402ProbeFloorUSDMicros, patch.maxCallSpend)
+	if patch.MaxCallSpendUSDMicros == nil || *patch.MaxCallSpendUSDMicros != models.X402ProbeFloorUSDMicros {
+		t.Fatalf("want ceiling %d, got %v", models.X402ProbeFloorUSDMicros, patch.MaxCallSpendUSDMicros)
 	}
 }
 
@@ -79,7 +79,7 @@ func TestParseSettingsPatchLeavesOmittedFieldsUntouched(t *testing.T) {
 	if msg != "" {
 		t.Fatalf("want no error, got %q", msg)
 	}
-	patch.applyTo(&settings)
+	patch.ApplyTo(&settings)
 
 	if settings.LowBalanceUSDMicros != 1_000_000 {
 		t.Errorf("threshold: want 1000000, got %d", settings.LowBalanceUSDMicros)
@@ -100,7 +100,7 @@ func TestParseSettingsPatchClearsCeilingOnExplicitNull(t *testing.T) {
 	if msg != "" {
 		t.Fatalf("want no error, got %q", msg)
 	}
-	patch.applyTo(&settings)
+	patch.ApplyTo(&settings)
 
 	if settings.MaxCallSpendUSDMicros != nil {
 		t.Fatalf("want ceiling cleared, got %d", *settings.MaxCallSpendUSDMicros)
@@ -141,7 +141,7 @@ func TestParseSettingsPatchAcceptsEverySupportedCurrency(t *testing.T) {
 			if msg != "" {
 				t.Fatalf("want %s accepted, got %q", code, msg)
 			}
-			patch.applyTo(&settings)
+			patch.ApplyTo(&settings)
 
 			if settings.DisplayCurrency != code {
 				t.Errorf("currency: want %q, got %q", code, settings.DisplayCurrency)

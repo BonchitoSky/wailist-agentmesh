@@ -65,9 +65,8 @@ func ceilingFixture(t *testing.T, fundUSDMicros int64) (*Runner, models.Workflow
 
 func setCeiling(t *testing.T, r *Runner, userID string, ceilingUSDMicros int64) {
 	t.Helper()
-	settings := models.DefaultUserSettings()
-	settings.MaxCallSpendUSDMicros = &ceilingUSDMicros
-	if _, err := r.store.UpsertUserSettings(context.Background(), userID, settings); err != nil {
+	patch := models.UserSettingsPatch{SetMaxCallSpend: true, MaxCallSpendUSDMicros: &ceilingUSDMicros}
+	if _, err := r.store.UpsertUserSettings(context.Background(), userID, patch); err != nil {
 		t.Fatal(err)
 	}
 }
