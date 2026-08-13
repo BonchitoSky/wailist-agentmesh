@@ -37,12 +37,24 @@ export interface ChatMessage {
 export interface ChatSession {
   messages: ChatMessage[];
   sessionId: string;
-  /** Records the user's turn plus the pending assistant turn awaiting it. */
-  startTurn: (text: string) => void;
+  /**
+   * Records the user's turn plus the pending assistant turn awaiting it.
+   * Returns the assistant turn's id so the caller can settle that exact turn
+   * if the run never starts.
+   */
+  startTurn: (text: string) => string;
   /** Binds the pending turn to the run the backend actually started. */
   attachRun: (runId: string) => void;
-  /** Fills the pending turn in with the finished run's answer. */
-  completeTurn: (patch: Omit<ChatMessage, "id" | "sender" | "ts">) => void;
+  /** Fills in the turn bound to this run. */
+  completeTurnForRun: (
+    runId: string,
+    patch: Omit<ChatMessage, "id" | "sender" | "ts">,
+  ) => void;
+  /** Fills in one exact turn, by id. */
+  completeTurnById: (
+    id: string,
+    patch: Omit<ChatMessage, "id" | "sender" | "ts">,
+  ) => void;
   /** Clears the transcript and starts a new session id. */
   reset: () => void;
   hydrated: boolean;
@@ -75,6 +87,23 @@ function lastPendingIndex(messages: ChatMessage[]): number {
     if (messages[i].pending) return i;
   }
   return -1;
+}
+
+/**
+ * Settle the first pending turn matching `match`. Exported for tests: the
+ * targeting rules here are what keep an answer attached to the question that
+ * asked it, so they are worth asserting directly.
+ */
+export function settleIn(
+  messages: ChatMessage[],
+  match: (m: ChatMessage) => boolean,
+  patch: Omit<ChatMessage, "id" | "sender" | "ts">,
+): ChatMessage[] {
+  const idx = messages.findIndex((m) => m.pending && match(m));
+  if (idx < 0) return messages;
+  const next = [...messages];
+  next[idx] = { ...next[idx], ...patch, pending: false };
+  return next;
 }
 
 function newSessionId(): string {
@@ -137,19 +166,25 @@ export function useChatSession(workflowId: string | undefined): ChatSession {
     write(workflowId, { sessionId, messages });
   }, [hydrated, workflowId, sessionId, messages]);
 
-  const startTurn = useCallback((text: string) => {
+  const startTurn = useCallback((text: string): string => {
     const now = new Date().toISOString();
+    // Ids are built outside the updater so the assistant turn's id can be
+    // returned; deriving them from prev.length kept them inside the closure
+    // and left the caller with no handle on the turn it had just created.
+    const seq = Math.random().toString(36).slice(2, 8);
+    const assistantId = `a-${now}-${seq}`;
     setMessages((prev) => [
       ...prev,
-      { id: `u-${now}-${prev.length}`, sender: "user", text, ts: now },
+      { id: `u-${now}-${seq}`, sender: "user", text, ts: now },
       {
-        id: `a-${now}-${prev.length}`,
+        id: assistantId,
         sender: "assistant",
         text: "",
         ts: now,
         pending: true,
       },
     ]);
+    return assistantId;
   }, []);
 
   const attachRun = useCallback((runId: string) => {
@@ -162,17 +197,31 @@ export function useChatSession(workflowId: string | undefined): ChatSession {
     });
   }, []);
 
-  const completeTurn = useCallback(
-    (patch: Omit<ChatMessage, "id" | "sender" | "ts">) => {
-      setMessages((prev) => {
-        const idx = lastPendingIndex(prev);
-        if (idx < 0) return prev;
-        const next = [...prev];
-        next[idx] = { ...next[idx], ...patch, pending: false };
-        return next;
-      });
-    },
+  // Settling a turn targets it by identity, never by position. Position was
+  // wrong in two ways: a recovery result could land on a turn sent while its
+  // fetch was in flight, and two runs started before the first settled would
+  // resolve in the wrong order. Both showed up as an answer appearing under
+  // somebody else's question.
+  const settle = useCallback(
+    (
+      match: (m: ChatMessage) => boolean,
+      patch: Omit<ChatMessage, "id" | "sender" | "ts">,
+    ) => setMessages((prev) => settleIn(prev, match, patch)),
     [],
+  );
+
+  /** Settle the turn bound to this run. Survives the key={runId} remount. */
+  const completeTurnForRun = useCallback(
+    (runId: string, patch: Omit<ChatMessage, "id" | "sender" | "ts">) =>
+      settle((m) => m.runId === runId, patch),
+    [settle],
+  );
+
+  /** Settle one exact turn — used by recovery, which knows the stranded id. */
+  const completeTurnById = useCallback(
+    (id: string, patch: Omit<ChatMessage, "id" | "sender" | "ts">) =>
+      settle((m) => m.id === id, patch),
+    [settle],
   );
 
   const reset = useCallback(() => {
@@ -185,7 +234,8 @@ export function useChatSession(workflowId: string | undefined): ChatSession {
     sessionId,
     startTurn,
     attachRun,
-    completeTurn,
+    completeTurnForRun,
+    completeTurnById,
     reset,
     hydrated,
   };
