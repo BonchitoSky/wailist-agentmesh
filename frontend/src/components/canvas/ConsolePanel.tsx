@@ -25,8 +25,8 @@ interface ConsolePanelProps {
   workflowId?: string;
   /** True when the workflow has a chat trigger, so it can be talked to. */
   chatEnabled?: boolean;
-  /** Starts a run from a chat message. */
-  onSendMessage?: (text: string) => void;
+  /** Starts a run from a chat message; resolves false if none started. */
+  onSendMessage?: (text: string) => Promise<boolean>;
 }
 
 const HEIGHT_KEY = "agentmesh_console_height";
@@ -106,7 +106,7 @@ export function ConsolePanel({
   // Bind the turn the user just sent to the run the backend actually started.
   // The console is remounted with key={runId} the moment a run begins, so the
   // pending message arrives here by way of localStorage, not props.
-  const { attachRun, completeTurn, hydrated } = session;
+  const { attachRun, completeTurnForRun, completeTurnById, hydrated } = session;
   useEffect(() => {
     if (!runId || !hydrated) return;
     attachRun(runId);
@@ -118,7 +118,7 @@ export function ConsolePanel({
   useEffect(() => {
     if (!done || !runId || !hydrated) return;
     const summary = resolveReply(logs);
-    completeTurn({
+    completeTurnForRun(runId, {
       text: summary.text,
       isError: summary.isError,
       toolCount: summary.toolCount,
@@ -126,26 +126,41 @@ export function ConsolePanel({
       elapsedS: elapsed ?? undefined,
       runId,
     });
-  }, [done, runId, hydrated, logs, elapsed, completeTurn]);
+  }, [done, runId, hydrated, logs, elapsed, completeTurnForRun]);
 
   // Recover a turn stranded by a page reload.
   //
   // CanvasPage holds runId in useState, so a refresh puts it back to null while
   // useChatSession has already persisted the pending turn. The two effects
-  // above are both gated on a live runId, so nothing would ever settle it: the
-  // bubble would spin forever, and — since a stale pending sits earlier in the
-  // transcript — it would also absorb the next turn's answer.
+  // above are both gated on a live runId, so nothing would otherwise settle it.
   //
-  // Guarded by a ref so this runs once per mount, against the transcript as
-  // hydrated. Without that, the turn the user sends *next* would briefly have
-  // no runId yet and get recovered out from under itself.
+  // The ref is armed the moment hydration completes, BEFORE looking for a
+  // stranded turn -- not after. Arming it only when one was found left it live
+  // on a clean mount, and the next thing to touch the transcript is startTurn,
+  // whose brand-new turn has no runId yet: this effect would read that as
+  // stranded and settle it as "interrupted" before its run even began, then
+  // discard the real answer when it arrived. Against a real backend the
+  // network round trip guarantees that ordering, so it destroyed the first
+  // message after every page load.
+  //
+  // `messages` is deliberately NOT a dependency. Re-firing on every transcript
+  // change is what made the above possible, and its cleanup could also cancel
+  // an in-flight recovery fetch that the armed ref then refused to retry --
+  // stranding the turn permanently. One snapshot, one attempt.
   const recoveredRef = useRef(false);
-  const { messages } = session;
+  // Mirrored in an effect rather than assigned during render (refs must not be
+  // written while rendering). Declared before the recovery effect so it is
+  // already current when that one runs on the same commit.
+  const messagesRef = useRef(session.messages);
+  useEffect(() => {
+    messagesRef.current = session.messages;
+  }, [session.messages]);
   useEffect(() => {
     if (!hydrated || runId || recoveredRef.current) return;
-    const stranded = [...messages].reverse().find((m) => m.pending);
-    if (!stranded) return;
     recoveredRef.current = true;
+
+    const stranded = [...messagesRef.current].reverse().find((m) => m.pending);
+    if (!stranded) return;
 
     let cancelled = false;
     void (async () => {
@@ -163,7 +178,8 @@ export function ConsolePanel({
       }
       if (cancelled) return;
       const recovery = recoverPendingTurn(record, rows);
-      completeTurn(
+      completeTurnById(
+        stranded.id,
         recovery.kind === "resolved"
           ? {
               text: recovery.text,
@@ -183,12 +199,29 @@ export function ConsolePanel({
     return () => {
       cancelled = true;
     };
-  }, [hydrated, runId, messages, completeTurn]);
+  }, [hydrated, runId, completeTurnById]);
 
   const handleSend = (text: string) => {
-    session.startTurn(text);
-    onSendMessage?.(text);
+    const turnId = session.startTurn(text);
+    // A send that never becomes a run (offline, not deployed, backend refusal)
+    // has nothing left to settle its turn -- startRun only surfaces a toast --
+    // so the bubble would spin forever. Settle it here instead.
+    void (async () => {
+      const ok = (await onSendMessage?.(text)) ?? false;
+      if (!ok) {
+        completeTurnById(turnId, {
+          text: "Could not start this run — see the notification for why, then try again.",
+          isError: true,
+        });
+      }
+    })();
   };
+
+  // The composer must lock the instant a turn is created, not when `running`
+  // flips -- CanvasPage sets that only after workflows.run() resolves, leaving
+  // the whole round trip open to a double Send that starts two real, billed
+  // runs. A pending turn is the earliest honest signal that we are busy.
+  const busy = running || session.messages.some((m) => m.pending);
 
   // Restore the last chosen console height. Read in an effect rather than in
   // useState's initializer so the server render and first client render agree.
@@ -456,8 +489,8 @@ export function ConsolePanel({
               <ChatPane
                 session={session}
                 onSend={handleSend}
-                busy={running}
-                onOpenLogs={() => {
+                busy={busy}
+                onShowLogs={() => {
                   if (!logsVisible) toggleLogs();
                 }}
               />

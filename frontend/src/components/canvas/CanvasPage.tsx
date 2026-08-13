@@ -273,22 +273,35 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [workflow],
   );
 
+  // Returns the new run's id, or null when no run started. Callers that own a
+  // chat turn need that signal: a failure here only raises a toast, and
+  // without an answer the turn would sit on "working…" forever.
+  //
+  // The deployed check lives here, not only in onRun: the chat panel calls
+  // startRun directly, so keeping the guard upstream silently dropped
+  // "Deploy first to run" for every message sent from the console.
   const startRun = useCallback(
-    async (input?: Record<string, unknown>) => {
-      if (!workflow) return;
+    async (input?: Record<string, unknown>): Promise<string | null> => {
+      if (!workflow) return null;
+      if (!deployed) {
+        showToast("Deploy first to run");
+        return null;
+      }
       try {
         const res = await workflowsApi.run(workflow.id, input);
         setRunId(res.runId);
         setRunning(true);
         setLogOpen(true);
         showToast(`Run started · ${res.runId.slice(0, 8)}…`);
+        return res.runId;
       } catch (err: unknown) {
         showToast(
           `Run failed · ${err instanceof Error ? err.message : "unknown error"}`,
         );
+        return null;
       }
     },
-    [workflow, showToast],
+    [workflow, deployed, showToast],
   );
 
   const onRun = useCallback(async () => {
@@ -427,7 +440,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
             runId={runId}
             running={running}
             chatEnabled={hasChatTrigger}
-            onSendMessage={(msg) => void startRun({ message: msg })}
+            onSendMessage={async (msg) =>
+              (await startRun({ message: msg })) !== null
+            }
             onRunComplete={() => {
               setRunning(false);
               // A run that paid for an x402 call has just debited credits;
