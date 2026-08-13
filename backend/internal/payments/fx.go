@@ -222,7 +222,7 @@ func LiveFetchRateTableForTest(ctx context.Context, url string) (map[string]floa
 func fetchRateTableFromURL(ctx context.Context, url string) (map[string]float64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fx table: build request: %w", err)
 	}
 	resp, err := fxHTTPClient.Do(req)
 	if err != nil {
@@ -234,7 +234,7 @@ func fetchRateTableFromURL(ctx context.Context, url string) (map[string]float64,
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fx table: read response: %w", err)
 	}
 	var parsed struct {
 		Rates map[string]float64 `json:"rates"`
