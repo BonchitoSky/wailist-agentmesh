@@ -103,9 +103,15 @@ func (r *Runner) SetTendril(client *tendril.Client, session *tendril.Session) {
 // engine only checks in some branches is worse than no limit, because the
 // settings page would still claim it applies everywhere.
 func (r *Runner) preflightCheck(ctx context.Context, wf models.Workflow, amountUSDMicros int64) error {
-	// Only a real charge can breach a ceiling, so the zero-amount BYOK path
-	// (see executeNode's agentFeeUSDMicros) costs no extra query.
-	if amountUSDMicros > 0 {
+	// Skipped entirely at or below the probe floor, which keeps this off the
+	// hot path: nodes.executeFunctionCall calls checkBalance with
+	// X402ProbeFloorUSDMicros before every attached tool402 call, up to 15 times
+	// in one agent run. That is sound rather than merely cheap — a stored ceiling
+	// can never sit below the floor (parseSettingsPatch rejects it, and
+	// user_settings_max_call_spend_above_probe_floor enforces it for every other
+	// writer), so an amount that small cannot breach one. Real charges above the
+	// floor are still checked in full.
+	if amountUSDMicros > models.X402ProbeFloorUSDMicros {
 		settings, err := r.store.GetUserSettings(ctx, wf.UserID)
 		if err != nil {
 			return err

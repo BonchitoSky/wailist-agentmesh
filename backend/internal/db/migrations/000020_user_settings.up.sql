@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS user_settings (
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT user_settings_low_balance_non_negative
         CHECK (low_balance_usd_micros >= 0),
-    CONSTRAINT user_settings_max_call_spend_positive
-        CHECK (max_call_spend_usd_micros IS NULL OR max_call_spend_usd_micros > 0)
+    -- Not merely "> 0": Runner.preflightCheck skips its settings lookup for any
+    -- amount at or below models.X402ProbeFloorUSDMicros ($0.05), which is only
+    -- sound if no stored ceiling can sit beneath that floor. parseSettingsPatch
+    -- validates the same bound; this constraint is what makes it true for every
+    -- other writer.
+    CONSTRAINT user_settings_max_call_spend_above_probe_floor
+        CHECK (max_call_spend_usd_micros IS NULL OR max_call_spend_usd_micros >= 50000)
 );

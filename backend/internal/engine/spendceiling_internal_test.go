@@ -119,3 +119,16 @@ func TestPreflightCheckStillEnforcesBalanceUnderACeiling(t *testing.T) {
 		t.Fatalf("want an insufficient-credits error, got %v", err)
 	}
 }
+
+// preflightCheck skips the ceiling lookup at or below the probe floor. The
+// balance check underneath it must still run, or a user with no credits would
+// sail through every tool402 pre-check in an agent's function-calling loop.
+func TestPreflightCheckEnforcesBalanceAtTheProbeFloor(t *testing.T) {
+	r, wf := ceilingFixture(t, 10_000) // $0.01, under the $0.05 probe floor
+	setCeiling(t, r, wf.UserID, 900_000)
+
+	err := r.preflightCheck(context.Background(), wf, models.X402ProbeFloorUSDMicros)
+	if err == nil || !strings.Contains(err.Error(), "insufficient credits") {
+		t.Fatalf("want an insufficient-credits error at the probe floor, got %v", err)
+	}
+}

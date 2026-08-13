@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -150,5 +151,20 @@ func TestParseSettingsPatchAcceptsEverySupportedCurrency(t *testing.T) {
 				t.Error("changing currency must not disturb the other settings")
 			}
 		})
+	}
+}
+
+// preflightCheck skips its settings lookup at or below the probe floor, which
+// is only sound while this validation refuses anything beneath it. Pinned here
+// so lowering one without the other fails loudly instead of quietly making a
+// sub-floor ceiling storable and unenforced.
+func TestParseSettingsPatchCeilingFloorTracksTheProbeFloor(t *testing.T) {
+	below := fmt.Sprintf(`{"maxCallSpendUsdMicros":%d}`, models.X402ProbeFloorUSDMicros-1)
+	if _, msg := parseSettingsPatch(strings.NewReader(below)); msg == "" {
+		t.Error("want a ceiling one micro below the probe floor rejected, got accepted")
+	}
+	at := fmt.Sprintf(`{"maxCallSpendUsdMicros":%d}`, models.X402ProbeFloorUSDMicros)
+	if _, msg := parseSettingsPatch(strings.NewReader(at)); msg != "" {
+		t.Errorf("want a ceiling exactly at the probe floor accepted, got %q", msg)
 	}
 }
