@@ -35,7 +35,6 @@ export function ExecutionSection({
   const [ceiling, setCeiling] = useState(
     stored != null ? microsToUSD(stored) : "1",
   );
-  const [keyMode, setKeyMode] = useState(settings.defaultKeyMode);
   const [state, setState] = useState<SaveState>("idle");
   const [message, setMessage] = useState("");
   const { format: formatMoney, isDefault: isUSD } = useCurrency();
@@ -71,7 +70,7 @@ export function ExecutionSection({
 
     setState("saving");
     try {
-      await onSave({ maxCallSpendUsdMicros, defaultKeyMode: keyMode });
+      await onSave({ maxCallSpendUsdMicros });
       setState("saved");
       setMessage("Execution settings saved.");
     } catch (err) {
@@ -154,26 +153,6 @@ export function ExecutionSection({
               )}
             </>
           )}
-        </SettingRow>
-
-        <SettingRow
-          label="Default API key mode"
-          htmlFor="set-key-mode"
-          hint="Which key new provider nodes start with. You can still switch any individual node in the canvas."
-        >
-          <select
-            id="set-key-mode"
-            value={keyMode}
-            onChange={(e) => setKeyMode(e.target.value as "byok" | "platform")}
-            style={{
-              ...amountInputStyle,
-              fontFamily: "var(--font-sans)",
-              maxWidth: 260,
-            }}
-          >
-            <option value="byok">Bring your own key</option>
-            <option value="platform">Use the AgentMesh platform key</option>
-          </select>
         </SettingRow>
 
         <SaveButton saving={state === "saving"} />

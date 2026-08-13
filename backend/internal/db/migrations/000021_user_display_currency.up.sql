@@ -8,7 +8,7 @@
 ALTER TABLE user_settings
     ADD COLUMN IF NOT EXISTS display_currency TEXT NOT NULL DEFAULT 'USD';
 
--- Same approach as 000020's default_key_mode: an unsupported code becomes a
+-- Same approach as 000020's CHECK constraints: an unsupported code becomes a
 -- database error rather than a render-time crash somewhere in the UI. The list
 -- is the curated shortlist the frontend offers; adding one later is a one-line
 -- migration.

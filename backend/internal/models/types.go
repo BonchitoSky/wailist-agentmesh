@@ -254,14 +254,6 @@ type User struct {
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
-// Key modes a Provider node can resolve its API key through. Mirrors the
-// values WorkflowNode.KeyMode is compared against in engine/nodes/provider.go,
-// and the CHECK constraint on user_settings.default_key_mode.
-const (
-	KeyModeBYOK     = "byok"
-	KeyModePlatform = "platform"
-)
-
 // DefaultCurrency is what every account renders in until someone chooses
 // otherwise. While a user is on this value the frontend must behave exactly as
 // it did before display currency existed — no conversion, no rate lookup. It
@@ -298,9 +290,6 @@ type UserSettings struct {
 	// MaxSingleX402QuoteUSDMicros still applies, so nil is a weaker limit,
 	// never an unlimited one.
 	MaxCallSpendUSDMicros *int64 `json:"maxCallSpendUsdMicros,omitempty"`
-	// DefaultKeyMode seeds newly created Provider nodes. A node's own
-	// KeyMode still wins once set.
-	DefaultKeyMode string `json:"defaultKeyMode"`
 	// DisplayCurrency is presentation only — it changes what the UI renders,
 	// never what is stored, charged, or settled. DefaultCurrency means "render
 	// exactly as before this field existed".
@@ -314,7 +303,6 @@ type UserSettings struct {
 func DefaultUserSettings() UserSettings {
 	return UserSettings{
 		LowBalanceUSDMicros: 5_000_000, // $5
-		DefaultKeyMode:      KeyModeBYOK,
 		DisplayCurrency:     DefaultCurrency,
 	}
 }

@@ -359,7 +359,6 @@ export interface UserSettings {
   // null / absent means no per-call ceiling of the user's own; the platform's
   // global cap still applies, so this is never "unlimited".
   maxCallSpendUsdMicros?: number | null;
-  defaultKeyMode: "byok" | "platform";
 }
 
 // A PATCH sends only what changed. maxCallSpendUsdMicros is deliberately
@@ -370,14 +369,12 @@ export type UserSettingsPatch = Partial<{
   displayCurrency: string;
   lowBalanceUsdMicros: number;
   maxCallSpendUsdMicros: number | null;
-  defaultKeyMode: "byok" | "platform";
 }>;
 
 const MOCK_SETTINGS: UserSettings = {
   displayCurrency: "USD",
   lowBalanceUsdMicros: 5_000_000,
   maxCallSpendUsdMicros: null,
-  defaultKeyMode: "byok",
 };
 
 export const settings = {

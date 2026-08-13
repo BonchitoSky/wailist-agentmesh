@@ -17,12 +17,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
     -- NULL means "no user ceiling" — the global MaxSingleX402QuoteUSDMicros
     -- still applies, so NULL is a weaker limit, never an unlimited one.
     max_call_spend_usd_micros  BIGINT,
-    -- Which API key newly created Provider nodes default to. A node's own
-    -- keyMode still wins; this only seeds the canvas.
-    default_key_mode           TEXT   NOT NULL DEFAULT 'byok',
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT user_settings_key_mode_valid
-        CHECK (default_key_mode IN ('byok', 'platform')),
     CONSTRAINT user_settings_low_balance_non_negative
         CHECK (low_balance_usd_micros >= 0),
     CONSTRAINT user_settings_max_call_spend_positive

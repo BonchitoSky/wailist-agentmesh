@@ -8,7 +8,7 @@ import (
 )
 
 // The validation branches are the whole point of parseSettingsPatch: they are
-// what stops an out-of-range ceiling or an unknown key mode from reaching a
+// what stops an out-of-range ceiling or an unsupported currency from reaching a
 // table whose CHECK constraints would reject it as a 500 instead of a 400.
 func TestParseSettingsPatchRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
@@ -23,8 +23,6 @@ func TestParseSettingsPatchRejectsInvalidInput(t *testing.T) {
 		{"negative ceiling", `{"maxCallSpendUsdMicros":-500}`, "greater than zero"},
 		{"ceiling below the probe floor", `{"maxCallSpendUsdMicros":10000}`, "below the $0.05 minimum"},
 		{"ceiling above the platform cap", `{"maxCallSpendUsdMicros":1000000001}`, "cannot exceed the platform ceiling"},
-		{"unknown key mode", `{"defaultKeyMode":"free"}`, "must be byok or platform"},
-		{"non-string key mode", `{"defaultKeyMode":7}`, "must be a string"},
 		{"unsupported currency", `{"displayCurrency":"XYZ"}`, "displayCurrency must be one of"},
 		{"lowercase currency", `{"displayCurrency":"eur"}`, "displayCurrency must be one of"},
 		{"non-string currency", `{"displayCurrency":5}`, "displayCurrency must be a string"},
@@ -74,7 +72,6 @@ func TestParseSettingsPatchLeavesOmittedFieldsUntouched(t *testing.T) {
 	settings := models.UserSettings{
 		LowBalanceUSDMicros:   9_000_000,
 		MaxCallSpendUSDMicros: &existing,
-		DefaultKeyMode:        models.KeyModePlatform,
 	}
 
 	patch, msg := parseSettingsPatch(strings.NewReader(`{"lowBalanceUsdMicros":1000000}`))
@@ -88,9 +85,6 @@ func TestParseSettingsPatchLeavesOmittedFieldsUntouched(t *testing.T) {
 	}
 	if settings.MaxCallSpendUSDMicros == nil || *settings.MaxCallSpendUSDMicros != existing {
 		t.Errorf("ceiling should survive an unrelated patch, got %v", settings.MaxCallSpendUSDMicros)
-	}
-	if settings.DefaultKeyMode != models.KeyModePlatform {
-		t.Errorf("key mode should survive an unrelated patch, got %q", settings.DefaultKeyMode)
 	}
 }
 
@@ -119,9 +113,6 @@ func TestDefaultUserSettingsMatchTheMigration(t *testing.T) {
 	if d.LowBalanceUSDMicros != 5_000_000 {
 		t.Errorf("low balance default: want 5000000, got %d", d.LowBalanceUSDMicros)
 	}
-	if d.DefaultKeyMode != models.KeyModeBYOK {
-		t.Errorf("key mode default: want %q, got %q", models.KeyModeBYOK, d.DefaultKeyMode)
-	}
 	if d.MaxCallSpendUSDMicros != nil {
 		t.Errorf("ceiling should default to unset, got %d", *d.MaxCallSpendUSDMicros)
 	}
@@ -142,7 +133,6 @@ func TestParseSettingsPatchAcceptsEverySupportedCurrency(t *testing.T) {
 			settings := models.UserSettings{
 				LowBalanceUSDMicros:   9_000_000,
 				MaxCallSpendUSDMicros: &ceiling,
-				DefaultKeyMode:        models.KeyModePlatform,
 				DisplayCurrency:       models.DefaultCurrency,
 			}
 
@@ -156,8 +146,7 @@ func TestParseSettingsPatchAcceptsEverySupportedCurrency(t *testing.T) {
 				t.Errorf("currency: want %q, got %q", code, settings.DisplayCurrency)
 			}
 			if settings.LowBalanceUSDMicros != 9_000_000 ||
-				settings.MaxCallSpendUSDMicros == nil || *settings.MaxCallSpendUSDMicros != ceiling ||
-				settings.DefaultKeyMode != models.KeyModePlatform {
+				settings.MaxCallSpendUSDMicros == nil || *settings.MaxCallSpendUSDMicros != ceiling {
 				t.Error("changing currency must not disturb the other settings")
 			}
 		})

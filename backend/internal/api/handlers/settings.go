@@ -73,7 +73,6 @@ type settingsPatch struct {
 	// indistinguishable from omitting the field.
 	setMaxCallSpend bool
 	maxCallSpend    *int64
-	defaultKeyMode  *string
 	displayCurrency *string
 }
 
@@ -83,9 +82,6 @@ func (p settingsPatch) applyTo(s *models.UserSettings) {
 	}
 	if p.setMaxCallSpend {
 		s.MaxCallSpendUSDMicros = p.maxCallSpend
-	}
-	if p.defaultKeyMode != nil {
-		s.DefaultKeyMode = *p.defaultKeyMode
 	}
 	if p.displayCurrency != nil {
 		s.DisplayCurrency = *p.displayCurrency
@@ -142,17 +138,6 @@ func parseSettingsPatch(body io.Reader) (settingsPatch, string) {
 		}
 		patch.setMaxCallSpend = true
 		patch.maxCallSpend = ceiling
-	}
-
-	if v, ok := raw["defaultKeyMode"]; ok {
-		var mode string
-		if err := json.Unmarshal(v, &mode); err != nil {
-			return patch, "defaultKeyMode must be a string"
-		}
-		if mode != models.KeyModeBYOK && mode != models.KeyModePlatform {
-			return patch, "defaultKeyMode must be byok or platform"
-		}
-		patch.defaultKeyMode = &mode
 	}
 
 	if v, ok := raw["displayCurrency"]; ok {
