@@ -126,4 +126,31 @@ describe("resolveReply", () => {
     const r = resolveReply([log({ output: { rows: [1, 2] } })]);
     expect(r.text).toContain("rows");
   });
+  it("counts a settled payment that carries no tx id", () => {
+    // paymentReceipt omits txId when the settlement returned none, but the
+    // credits were still debited -- these runs used to display no cost at all.
+    const r = resolveReply([
+      log({
+        nodeId: "t1",
+        nodeType: "tool402",
+        output: { settledUsdMicros: 65000, nodeName: "x402 Weather" },
+      }),
+    ]);
+    expect(r.spendUSD).toBeCloseTo(0.065, 6);
+  });
+
+  it("adds the platform fee to the settled amount", () => {
+    const r = resolveReply([
+      log({
+        nodeId: "t1",
+        nodeType: "tool402",
+        output: {
+          txId: "aa",
+          settledUsdMicros: 65000,
+          platformFeeUsdMicros: 5000,
+        },
+      }),
+    ]);
+    expect(r.spendUSD).toBeCloseTo(0.07, 6);
+  });
 });

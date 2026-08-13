@@ -1,5 +1,4 @@
 import type { LogEvent } from "../useRunTranscript";
-import { isX402Payment } from "../useRunTranscript";
 
 // Turns a run's raw log events into the one thing a non-technical reader
 // actually wants: the agent's answer, plus a one-line summary of what it cost.
@@ -63,12 +62,32 @@ function errorFromOutput(output: unknown): string {
   return "The run failed without returning a reason.";
 }
 
-/** Settled USD for one log event, 0 when the step paid for nothing. */
+/**
+ * Total USD charged for one step, 0 when the step paid for nothing.
+ *
+ * Keyed off settledUsdMicros rather than a txId. paymentReceipt (provider.go)
+ * writes settledUsdMicros unconditionally but includes txId only when
+ * p.TxID != "", so a v2/relay call that settles without returning a tx id is a
+ * real, billed payment carrying no id -- testing for txId reported those runs
+ * as having cost nothing.
+ *
+ * platformFeeUsdMicros is added because it is a separate component of the
+ * charge, not a duplicate of it: paymentReceipt's own comment states that
+ * "settledUsdMicros alone is NOT the total charged for a v2 call ... a consumer
+ * that wants the real total must add both fields."
+ */
 function spendOf(log: LogEvent): number {
-  if (!isX402Payment(log.output)) return 0;
-  const micros = (log.output as { settledUsdMicros?: unknown })
-    .settledUsdMicros;
-  return typeof micros === "number" ? micros / 1e6 : 0;
+  const out = log.output;
+  if (typeof out !== "object" || out === null) return 0;
+  const rec = out as {
+    settledUsdMicros?: unknown;
+    platformFeeUsdMicros?: unknown;
+  };
+  const settled =
+    typeof rec.settledUsdMicros === "number" ? rec.settledUsdMicros : 0;
+  const fee =
+    typeof rec.platformFeeUsdMicros === "number" ? rec.platformFeeUsdMicros : 0;
+  return (settled + fee) / 1e6;
 }
 
 export function resolveReply(logs: LogEvent[]): RunSummary {
