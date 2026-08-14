@@ -157,7 +157,8 @@ func (d *Deps) BuildWorkflow(w http.ResponseWriter, r *http.Request) {
 	graph := models.WorkflowGraph{Nodes: encryptedNodes, Edges: result.Graph.Edges}
 	wf, err := d.Store.UpdateWorkflow(r.Context(), id, existing.Name, graph)
 	if err != nil {
-		respond.Error(w, http.StatusInternalServerError, err.Error())
+		log.Printf("build workflow %s: save: %v", id, err)
+		respond.Error(w, http.StatusInternalServerError, "could not save the updated workflow")
 		return
 	}
 	wf.Nodes = maskNodes(wf.Nodes)

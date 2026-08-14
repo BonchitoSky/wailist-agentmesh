@@ -80,12 +80,12 @@ type Deps struct {
 	// meta-agent (nodes.BuildGraph) -- independent of engine.Runner's own
 	// platform-key map (main.go's runner.SetPlatformKeys call) since Deps
 	// has no access to Runner's private fields.
-	PlatformGeminiAPIKey           string
-	FacilitatorClient              *x402.FacilitatorClient
-	USDCAssetID                    uint64
-	RelayNetwork                   string
-	RelayFeePayer                  string
-	USDCSigner                     USDCSigner
+	PlatformGeminiAPIKey string
+	FacilitatorClient    *x402.FacilitatorClient
+	USDCAssetID          uint64
+	RelayNetwork         string
+	RelayFeePayer        string
+	USDCSigner           USDCSigner
 	// MaxRelayOutboundUSDMicros caps a single outbound relay payment
 	// (Wallet 2 -> target). The relay fetches a target's price quote twice
 	// per cycle (once for the public challenge preview, once again at

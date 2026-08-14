@@ -317,26 +317,18 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   const buildMode = !hasProviderNode || manualBuildMode;
 
-  // The rail is the only place chat lives, so it has to be on screen whenever
-  // chat is usable -- including on a brand-new canvas, which has no chat
-  // trigger node yet but is exactly where building one from chat starts.
-  const showChatRail = hasChatTrigger || buildMode;
-
-  // Selecting a node on a chat workflow reveals its config in the bottom
-  // dock's Inspector tab -- that dock is closed/on Logs by default, so a
-  // plain setSelectedId would select the node into a tab nobody's looking
-  // at. Non-chat workflows keep Inspector in the right rail, always visible,
-  // so they don't need this.
-  const selectNode = useCallback(
-    (id: string | null) => {
-      setSelectedId(id);
-      if (id && hasChatTrigger) {
-        setDockTab("inspector");
-        setLogOpen(true);
-      }
-    },
-    [hasChatTrigger],
-  );
+  // Selecting a node reveals its config in the bottom dock's Inspector tab
+  // -- that dock is closed/on Logs by default, so a plain setSelectedId
+  // would select the node into a tab nobody's looking at. The chat rail is
+  // always on screen now (see below), so the dock is always where Inspector
+  // lives -- this always fires, not just for chat-trigger workflows.
+  const selectNode = useCallback((id: string | null) => {
+    setSelectedId(id);
+    if (id) {
+      setDockTab("inspector");
+      setLogOpen(true);
+    }
+  }, []);
 
   // Returns the new run's id, or null when no run started. Callers that own a
   // chat turn need that signal: a failure here only raises a toast, and
@@ -561,16 +553,14 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   tab={dockTab}
                   onTabChange={setDockTab}
                   inspectorNode={
-                    showChatRail ? (
-                      <Inspector
-                        selected={selected}
-                        workflowId={workflow.id}
-                        onUpdate={onUpdate}
-                        onDelete={onDelete}
-                        onClose={() => setSelectedId(null)}
-                        width="100%"
-                      />
-                    ) : undefined
+                    <Inspector
+                      selected={selected}
+                      workflowId={workflow.id}
+                      onUpdate={onUpdate}
+                      onDelete={onDelete}
+                      onClose={() => setSelectedId(null)}
+                      width="100%"
+                    />
                   }
                 />
               </div>
@@ -580,9 +570,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 value={inspectorW}
                 min={INSPECTOR.min}
                 max={INSPECTOR.max}
-                ariaLabel={
-                  showChatRail ? "Resize chat panel" : "Resize inspector panel"
-                }
+                ariaLabel="Resize chat panel"
                 onChange={resizeInspector}
                 onCommit={persistWidths}
                 onReset={() => {
@@ -590,30 +578,19 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   persistWidths();
                 }}
               />
-              {showChatRail ? (
-                <ChatRail
-                  session={chat.session}
-                  onSend={chat.handleSend}
-                  busy={chat.busy}
-                  onShowLogs={() => {
-                    setDockTab("logs");
-                    setLogOpen(true);
-                  }}
-                  width={inspectorW}
-                  buildMode={buildMode}
-                  canToggleBuildMode={hasProviderNode}
-                  onToggleBuildMode={() => setManualBuildMode((v) => !v)}
-                />
-              ) : (
-                <Inspector
-                  selected={selected}
-                  workflowId={workflow.id}
-                  onUpdate={onUpdate}
-                  onDelete={onDelete}
-                  onClose={() => setSelectedId(null)}
-                  width={inspectorW}
-                />
-              )}
+              <ChatRail
+                session={chat.session}
+                onSend={chat.handleSend}
+                busy={chat.busy}
+                onShowLogs={() => {
+                  setDockTab("logs");
+                  setLogOpen(true);
+                }}
+                width={inspectorW}
+                buildMode={buildMode}
+                canToggleBuildMode={hasProviderNode}
+                onToggleBuildMode={() => setManualBuildMode((v) => !v)}
+              />
             </>
           )}
         </ChatConsoleHost>
