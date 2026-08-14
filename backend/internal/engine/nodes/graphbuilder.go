@@ -1,6 +1,8 @@
 package nodes
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -214,4 +216,163 @@ func graphHasNode(graph *models.WorkflowGraph, id string) bool {
 		}
 	}
 	return false
+}
+
+func graphToolDecls() []funcDecl {
+	fieldsSchema := map[string]any{
+		"type":        "OBJECT",
+		"description": "Extra node fields, all optional strings. Recognized keys: systemPrompt, model, keyMode (byok|platform), apiKey, url, method, endpoint, price, unit, provider, description, emailTo, emailFrom, emailSubject, emailBody, emailProvider.",
+		"properties":  map[string]any{},
+	}
+	return []funcDecl{
+		{
+			Name:        "add_node",
+			Description: "Add a new node to the workflow canvas.",
+			Parameters: map[string]any{
+				"type": "OBJECT",
+				"properties": map[string]any{
+					"type":     map[string]any{"type": "string", "description": "One of: trigger, agent, provider, tool, tool402, action, end, tendril."},
+					"template": map[string]any{"type": "string", "description": "Template id within the type, e.g. \"chat\" for trigger, \"gemini\" for provider, \"agent\" for agent, \"email\" for action."},
+					"name":     map[string]any{"type": "string", "description": "Display name for the node."},
+					"fields":   fieldsSchema,
+				},
+				"required": []string{"type", "template"},
+			},
+		},
+		{
+			Name:        "update_node",
+			Description: "Update fields on an existing node.",
+			Parameters: map[string]any{
+				"type": "OBJECT",
+				"properties": map[string]any{
+					"id":       map[string]any{"type": "string", "description": "Node id to update."},
+					"name":     map[string]any{"type": "string"},
+					"template": map[string]any{"type": "string"},
+					"fields":   fieldsSchema,
+				},
+				"required": []string{"id"},
+			},
+		},
+		{
+			Name:        "remove_node",
+			Description: "Remove a node and any edges connected to it.",
+			Parameters: map[string]any{
+				"type":       "OBJECT",
+				"properties": map[string]any{"id": map[string]any{"type": "string"}},
+				"required":   []string{"id"},
+			},
+		},
+		{
+			Name:        "add_edge",
+			Description: "Connect two nodes. Use kind=\"attach\" with toPort=\"model\" or \"tools\" to attach a provider or tool to an agent; otherwise use kind=\"flow\" for the main execution path.",
+			Parameters: map[string]any{
+				"type": "OBJECT",
+				"properties": map[string]any{
+					"from":   map[string]any{"type": "string"},
+					"to":     map[string]any{"type": "string"},
+					"kind":   map[string]any{"type": "string", "description": "flow or attach"},
+					"toPort": map[string]any{"type": "string", "description": "model or tools, only for kind=attach"},
+				},
+				"required": []string{"from", "to"},
+			},
+		},
+		{
+			Name:        "remove_edge",
+			Description: "Remove an edge by id.",
+			Parameters: map[string]any{
+				"type":       "OBJECT",
+				"properties": map[string]any{"id": map[string]any{"type": "string"}},
+				"required":   []string{"id"},
+			},
+		},
+	}
+}
+
+const buildAgentModel = "gemini-2.5-flash"
+
+const buildSystemPrompt = `You are the workflow builder for AgentMesh, a visual agent-workflow canvas.
+You edit a workflow graph by calling the add_node, update_node, remove_node, add_edge, and remove_edge tools.
+Node types and their templates:
+- trigger: manual, chat, webhook, cron
+- agent: agent, router, human
+- provider: gemini, openai, anthropic, mistral, groq (attach to an agent's "model" port via an attach edge)
+- tool: http, code, calc, vector, memory (attach to an agent's "tools" port via an attach edge)
+- tool402: tavily, firecrawl, alpaca, ocr, flux, weather (attach to an agent's "tools" port via an attach edge)
+- action: email, slack, db, discord, teams, google_chat, ntfy, telegram, github, notion, airtable, hubspot, trello, asana, clickup, jira, mailchimp, linear, todoist, gitlab, sentry, supabase, woocommerce, elevenlabs
+- end: http, done
+- tendril: tendril_topup, tendril_rent, tendril_run, tendril_release
+
+A typical workflow: a trigger node, connected via a flow edge to an agent node, with a provider node attached to
+the agent's "model" port and zero or more tool/tool402 nodes attached to its "tools" port, flowing on to an
+action or end node. Make small, sensible workflows unless asked for something more elaborate. When you are done
+making changes, reply with a short plain-text summary of what you built or changed -- do not call any more tools
+once you're done.`
+
+// BuildGraphResult is what a build-mode chat turn resolves to: a
+// user-facing summary plus the graph after every requested tool call has
+// been applied.
+type BuildGraphResult struct {
+	Reply string
+	Graph models.WorkflowGraph
+}
+
+// BuildGraph runs a bounded tool-calling loop against the Gemini Flash
+// meta-agent, letting it edit graph via the 5 graph_tool_decls tools until
+// it responds with plain text instead of a function call (or the iteration
+// cap is hit). graph should already be masked by the caller -- see
+// handlers.BuildWorkflow's doc comment for why.
+func BuildGraph(ctx context.Context, apiKey, userMessage string, graph models.WorkflowGraph) (BuildGraphResult, error) {
+	apiURL := fmt.Sprintf("%s/v1beta/models/%s:generateContent", geminiBaseURL, buildAgentModel)
+	apiHeaders := map[string]string{"x-goog-api-key": apiKey}
+
+	graphJSON, _ := json.Marshal(graph)
+	contents := []map[string]any{
+		{"role": "user", "parts": []map[string]any{{"text": fmt.Sprintf("Current graph:\n%s\n\nRequest: %s", graphJSON, userMessage)}}},
+	}
+	payload := map[string]any{
+		"contents": contents,
+		"systemInstruction": map[string]any{
+			"parts": []map[string]string{{"text": buildSystemPrompt}},
+		},
+		"tools": []map[string]any{{"functionDeclarations": graphToolDecls()}},
+	}
+
+	for iter := 0; iter < maxToolIterations; iter++ {
+		resp, err := postLLMJSON(ctx, apiURL, apiHeaders, payload)
+		if err != nil {
+			return BuildGraphResult{}, err
+		}
+		calls := extractGeminiFunctionCalls(resp)
+		if len(calls) == 0 {
+			text, err := extractGeminiText(resp)
+			if err != nil {
+				return BuildGraphResult{}, err
+			}
+			return BuildGraphResult{Reply: text, Graph: graph}, nil
+		}
+
+		modelParts := make([]map[string]any, len(calls))
+		for i, c := range calls {
+			modelParts[i] = map[string]any{"functionCall": map[string]any{"name": c.name, "args": c.args}}
+		}
+		contents = append(contents, map[string]any{"role": "model", "parts": modelParts})
+
+		responseParts := make([]map[string]any, 0, len(calls))
+		for _, c := range calls {
+			result, err := applyGraphOp(&graph, c.name, c.args)
+			if err != nil {
+				result = "error: " + err.Error()
+			}
+			responseParts = append(responseParts, map[string]any{
+				"functionResponse": map[string]any{
+					"name":     c.name,
+					"response": map[string]any{"result": result},
+				},
+			})
+		}
+		contents = append(contents, map[string]any{"role": "user", "parts": responseParts})
+		payload["contents"] = contents
+	}
+
+	return BuildGraphResult{}, fmt.Errorf("workflow builder exceeded maximum tool call iterations (%d)", maxToolIterations)
 }

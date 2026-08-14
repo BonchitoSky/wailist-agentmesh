@@ -1,6 +1,10 @@
 package nodes
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/agentmesh/backend/internal/models"
@@ -128,5 +132,71 @@ func TestApplyGraphOpUnknownTool(t *testing.T) {
 	_, err := applyGraphOp(graph, "delete_everything", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown tool")
+	}
+}
+
+func TestBuildGraphAddsNodeThenReturnsReply(t *testing.T) {
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		if callCount == 1 {
+			json.NewEncoder(w).Encode(map[string]any{
+				"candidates": []map[string]any{
+					{"content": map[string]any{"parts": []map[string]any{
+						{"functionCall": map[string]any{
+							"name": "add_node",
+							"args": map[string]any{"type": "trigger", "template": "chat", "name": "On Chat"},
+						}},
+					}}},
+				},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{"content": map[string]any{"parts": []map[string]any{
+					{"text": "Added a chat trigger node."},
+				}}},
+			},
+		})
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	result, err := BuildGraph(context.Background(), "test-key", "add a chat trigger", models.WorkflowGraph{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Reply != "Added a chat trigger node." {
+		t.Fatalf("unexpected reply: %q", result.Reply)
+	}
+	if len(result.Graph.Nodes) != 1 || result.Graph.Nodes[0].Template != "chat" {
+		t.Fatalf("unexpected graph: %+v", result.Graph.Nodes)
+	}
+	if callCount != 2 {
+		t.Fatalf("expected 2 calls, got %d", callCount)
+	}
+}
+
+func TestBuildGraphIterationCap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{"content": map[string]any{"parts": []map[string]any{
+					{"functionCall": map[string]any{"name": "remove_edge", "args": map[string]any{"id": "nope"}}},
+				}}},
+			},
+		})
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	_, err := BuildGraph(context.Background(), "test-key", "loop forever", models.WorkflowGraph{})
+	if err == nil {
+		t.Fatal("expected iteration cap error")
 	}
 }
