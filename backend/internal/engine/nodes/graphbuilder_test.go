@@ -39,6 +39,21 @@ func TestApplyGraphOpAddNodeInvalidType(t *testing.T) {
 	}
 }
 
+func TestApplyGraphOpAddNodeFieldTypeMismatch(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	_, err := applyGraphOp(graph, "add_node", map[string]any{
+		"type":     "provider",
+		"template": "gemini",
+		"name":     "Test Provider",
+		"fields": map[string]any{
+			"model": 42,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for non-string field value")
+	}
+}
+
 func TestApplyGraphOpUpdateNode(t *testing.T) {
 	graph := &models.WorkflowGraph{Nodes: []models.WorkflowNode{{ID: "n_1", Type: models.NodeTypeProvider, Template: "gemini"}}}
 	_, err := applyGraphOp(graph, "update_node", map[string]any{

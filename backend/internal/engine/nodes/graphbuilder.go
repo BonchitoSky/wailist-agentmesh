@@ -67,24 +67,30 @@ func argString(args map[string]any, key string) string {
 	return v
 }
 
-func argFields(args map[string]any) map[string]string {
+func argFields(args map[string]any) (map[string]string, error) {
 	out := map[string]string{}
 	raw, ok := args["fields"].(map[string]any)
 	if !ok {
-		return out
+		return out, nil
 	}
 	for k, v := range raw {
 		if s, ok := v.(string); ok {
 			out[k] = s
+		} else {
+			return nil, fmt.Errorf("field %q must be a string, got %T", k, v)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func addGraphNode(graph *models.WorkflowGraph, args map[string]any) (string, error) {
 	nodeType := argString(args, "type")
 	if !graphNodeTypes[nodeType] {
 		return "", fmt.Errorf("add_node: invalid type %q", nodeType)
+	}
+	fields, err := argFields(args)
+	if err != nil {
+		return "", err
 	}
 	id := newGraphID("n_")
 	node := models.WorkflowNode{
@@ -95,7 +101,7 @@ func addGraphNode(graph *models.WorkflowGraph, args map[string]any) (string, err
 		X:        80 + 240*float64(len(graph.Nodes)%4),
 		Y:        120 + 160*float64(len(graph.Nodes)/4),
 	}
-	for k, v := range argFields(args) {
+	for k, v := range fields {
 		if set, ok := nodeFieldSetters[k]; ok {
 			set(&node, v)
 		}
@@ -116,7 +122,11 @@ func updateGraphNode(graph *models.WorkflowGraph, args map[string]any) (string, 
 		if template := argString(args, "template"); template != "" {
 			graph.Nodes[i].Template = template
 		}
-		for k, v := range argFields(args) {
+		fields, err := argFields(args)
+		if err != nil {
+			return "", err
+		}
+		for k, v := range fields {
 			if set, ok := nodeFieldSetters[k]; ok {
 				set(&graph.Nodes[i], v)
 			}
