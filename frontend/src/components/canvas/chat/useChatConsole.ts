@@ -34,7 +34,7 @@ export function useChatConsole({
   workflowId,
   onSendMessage,
 }: UseChatConsoleArgs): ChatConsole {
-  const { logs, elapsed, done, leaseId } = useRunTranscript({
+  const { logs, elapsed, done, leaseId, stopped } = useRunTranscript({
     runId,
     running,
     onRunComplete,
@@ -46,8 +46,7 @@ export function useChatConsole({
   // Bind the turn the user just sent to the run the backend actually started.
   // The caller remounts this hook's host with key={runId}, so the pending
   // message arrives here by way of localStorage, not props.
-  const { attachRun, completeTurnForRun, completeTurnById, hydrated } =
-    session;
+  const { attachRun, completeTurnForRun, completeTurnById, hydrated } = session;
   useEffect(() => {
     if (!runId || !hydrated) return;
     attachRun(runId);
@@ -58,6 +57,22 @@ export function useChatConsole({
   // resolve a turn that belongs to some earlier run.
   useEffect(() => {
     if (!done || !runId || !hydrated) return;
+
+    // A stopped run is finished but has no answer. Sending it through
+    // resolveReply would report "The run finished." off a transcript with no
+    // terminal rows -- stating an outcome we never got. Reuse the existing
+    // `interrupted` state instead: same honest "we stopped watching" framing
+    // as a reload-stranded turn, and it already renders with a warm label.
+    if (stopped) {
+      completeTurnForRun(runId, {
+        text: "Run stopped. Whatever finished before then is in the logs.",
+        interrupted: true,
+        elapsedS: elapsed ?? undefined,
+        runId,
+      });
+      return;
+    }
+
     const summary = resolveReply(logs);
     completeTurnForRun(runId, {
       text: summary.text,
@@ -67,7 +82,7 @@ export function useChatConsole({
       elapsedS: elapsed ?? undefined,
       runId,
     });
-  }, [done, runId, hydrated, logs, elapsed, completeTurnForRun]);
+  }, [done, stopped, runId, hydrated, logs, elapsed, completeTurnForRun]);
 
   // Recover a turn stranded by a page reload. See ConsolePanel's former
   // version of this effect for the full ordering rationale -- unchanged here,
@@ -81,9 +96,7 @@ export function useChatConsole({
     if (!hydrated || runId || recoveredRef.current) return;
     recoveredRef.current = true;
 
-    const stranded = [...messagesRef.current]
-      .reverse()
-      .find((m) => m.pending);
+    const stranded = [...messagesRef.current].reverse().find((m) => m.pending);
     if (!stranded) return;
 
     let cancelled = false;
@@ -146,7 +159,12 @@ export function useChatConsole({
   // leaving the whole round trip open to a double Send that starts two real,
   // billed runs. A pending turn is the earliest honest signal that we are
   // busy.
-  const busy = running || session.messages.some((m) => m.pending);
+  // `!hydrated` matters as much as the other two: hydration lands one
+  // requestAnimationFrame after mount, and a send inside that window is
+  // appended to in-memory state and then wiped by the deferred
+  // setMessages(stored...) -- while workflows.run() has already fired and can
+  // bill. The run happens, the chat has no record of it.
+  const busy = !hydrated || running || session.messages.some((m) => m.pending);
 
   return { logs, elapsed, done, leaseId, session, busy, handleSend };
 }

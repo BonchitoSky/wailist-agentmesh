@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { runs as runsApi, auth as authApi, type RunLogRecord } from "@/lib/api";
 import { recordSettlements } from "@/lib/settlements";
 
@@ -120,6 +120,8 @@ export interface RunTranscript {
   done: boolean;
   /** Lease opened by a Tendril rent step in this run, if any. */
   leaseId: string | null;
+  /** The run was stopped from the UI rather than reaching its own end. */
+  stopped: boolean;
 }
 
 export function useRunTranscript({
@@ -136,6 +138,7 @@ export function useRunTranscript({
     cached?.elapsed ?? null,
   );
   const [done, setDone] = useState(!!cached);
+  const [stopped, setStopped] = useState(false);
   const esRef = useRef<EventSource | null>(null);
   const startRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -148,6 +151,20 @@ export function useRunTranscript({
   useEffect(() => {
     onRunCompleteRef.current = onRunComplete;
   }, [onRunComplete]);
+
+  // A run finishes once, so its completion callback fires once. The "done"
+  // event already marks the run complete and then hands off to reconcile(),
+  // whose first poll sees the same terminal status and would fire the
+  // callback a second time -- a redundant GET /runs/:id and a duplicate
+  // refreshCredits() on every single run. reconcile() itself stays: it is
+  // there to fill in rows the DB had not written when the terminal event
+  // arrived. Only the double callback is the bug.
+  const completedRef = useRef(false);
+  const completeOnce = useCallback(() => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    onRunCompleteRef.current();
+  }, []);
 
   // Connect SSE for the run. No state resets needed: the parent renders the
   // console with key={runId}, so a new run remounts it with fresh initial
@@ -226,7 +243,7 @@ export function useRunTranscript({
             // what "complete" means.
             clearInterval(timerRef.current!);
             setDone(true);
-            onRunCompleteRef.current();
+            completeOnce();
             return;
           }
         } catch {
@@ -277,7 +294,7 @@ export function useRunTranscript({
     es.addEventListener("done", () => {
       clearInterval(timerRef.current!);
       setDone(true);
-      onRunCompleteRef.current();
+      completeOnce();
       es.close();
       void reconcile();
     });
@@ -299,16 +316,25 @@ export function useRunTranscript({
       clearInterval(timerRef.current!);
       es.close();
     };
-  }, [runId]);
+    // completeOnce is a stable useCallback([]), so listing it keeps the
+    // linter happy without re-running this effect -- which must stay keyed on
+    // runId alone, per the note above.
+  }, [runId, completeOnce]);
 
-  // Close SSE when stopped externally
+  // Stopped externally (the Run button's stop branch). Closing the stream is
+  // not enough: the run is over, so the transcript has to say so. Leaving
+  // `done` false stranded the chat turn that started it -- and because the
+  // composer locks on `running || any pending turn`, that turn kept it
+  // disabled until a full page reload.
   useEffect(() => {
-    if (!running && esRef.current) {
-      clearInterval(timerRef.current!);
-      esRef.current.close();
-      esRef.current = null;
-    }
-  }, [running]);
+    if (running || !esRef.current) return;
+    clearInterval(timerRef.current!);
+    esRef.current.close();
+    esRef.current = null;
+    setStopped(true);
+    setDone(true);
+    completeOnce();
+  }, [running, completeOnce]);
 
   // Persist any settlements this run produced, scoped to the signed-in user,
   // so the usage page can show them (see lib/settlements.ts for why this is
@@ -371,5 +397,5 @@ export function useRunTranscript({
     return null;
   }, [logs]);
 
-  return { logs, elapsed, done, leaseId };
+  return { logs, elapsed, done, leaseId, stopped };
 }
