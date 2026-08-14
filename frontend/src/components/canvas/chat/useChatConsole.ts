@@ -1,0 +1,152 @@
+"use client";
+import { useEffect, useRef } from "react";
+import { useRunTranscript, type LogEvent } from "../useRunTranscript";
+import { useChatSession, type ChatSession } from "./useChatSession";
+import { resolveReply } from "./resolveReply";
+import { recoverPendingTurn } from "./recoverPendingTurn";
+import { runs as runsApi, type RunLogRecord } from "@/lib/api";
+
+interface UseChatConsoleArgs {
+  runId: string | null;
+  running: boolean;
+  onRunComplete: () => void;
+  workflowId?: string;
+  onSendMessage?: (text: string) => Promise<boolean>;
+}
+
+export interface ChatConsole {
+  logs: LogEvent[];
+  elapsed: number | null;
+  done: boolean;
+  leaseId: string | null;
+  session: ChatSession;
+  busy: boolean;
+  handleSend: (text: string) => void;
+}
+
+// Owns the run transcript (SSE + reconciliation) and the chat session
+// together, as a single hook call, so the right-side chat rail and the
+// bottom-dock log list share one subscription instead of racing two.
+export function useChatConsole({
+  runId,
+  running,
+  onRunComplete,
+  workflowId,
+  onSendMessage,
+}: UseChatConsoleArgs): ChatConsole {
+  const { logs, elapsed, done, leaseId } = useRunTranscript({
+    runId,
+    running,
+    onRunComplete,
+    workflowId,
+  });
+
+  const session = useChatSession(workflowId);
+
+  // Bind the turn the user just sent to the run the backend actually started.
+  // The caller remounts this hook's host with key={runId}, so the pending
+  // message arrives here by way of localStorage, not props.
+  const { attachRun, completeTurnForRun, completeTurnById, hydrated } =
+    session;
+  useEffect(() => {
+    if (!runId || !hydrated) return;
+    attachRun(runId);
+  }, [runId, hydrated, attachRun]);
+
+  // Fill that turn in once the run reaches a terminal state. Guarded on runId
+  // so a transcript restored from cache (which arrives already `done`) can't
+  // resolve a turn that belongs to some earlier run.
+  useEffect(() => {
+    if (!done || !runId || !hydrated) return;
+    const summary = resolveReply(logs);
+    completeTurnForRun(runId, {
+      text: summary.text,
+      isError: summary.isError,
+      toolCount: summary.toolCount,
+      spendUSD: summary.spendUSD,
+      elapsedS: elapsed ?? undefined,
+      runId,
+    });
+  }, [done, runId, hydrated, logs, elapsed, completeTurnForRun]);
+
+  // Recover a turn stranded by a page reload. See ConsolePanel's former
+  // version of this effect for the full ordering rationale -- unchanged here,
+  // just relocated.
+  const recoveredRef = useRef(false);
+  const messagesRef = useRef(session.messages);
+  useEffect(() => {
+    messagesRef.current = session.messages;
+  }, [session.messages]);
+  useEffect(() => {
+    if (!hydrated || runId || recoveredRef.current) return;
+    recoveredRef.current = true;
+
+    const stranded = [...messagesRef.current]
+      .reverse()
+      .find((m) => m.pending);
+    if (!stranded) return;
+
+    let cancelled = false;
+    void (async () => {
+      let record: { status: string } | null = null;
+      let rows: RunLogRecord[] = [];
+      if (stranded.runId) {
+        try {
+          const res = await runsApi.get(stranded.runId);
+          record = res.run;
+          rows = res.logs;
+        } catch {
+          // Leave record null: recoverPendingTurn reports it as interrupted
+          // rather than inventing an outcome.
+        }
+      }
+      if (cancelled) return;
+      const recovery = recoverPendingTurn(record, rows);
+      completeTurnById(
+        stranded.id,
+        recovery.kind === "resolved"
+          ? {
+              text: recovery.text,
+              isError: recovery.isError,
+              toolCount: recovery.toolCount,
+              spendUSD: recovery.spendUSD,
+              runId: stranded.runId,
+            }
+          : {
+              text: recovery.text,
+              interrupted: true,
+              runId: stranded.runId,
+            },
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, runId, completeTurnById]);
+
+  const handleSend = (text: string) => {
+    const turnId = session.startTurn(text);
+    // A send that never becomes a run (offline, not deployed, backend
+    // refusal) has nothing left to settle its turn -- startRun only surfaces
+    // a toast -- so the bubble would spin forever. Settle it here instead.
+    void (async () => {
+      const ok = (await onSendMessage?.(text)) ?? false;
+      if (!ok) {
+        completeTurnById(turnId, {
+          text: "Could not start this run — see the notification for why, then try again.",
+          isError: true,
+        });
+      }
+    })();
+  };
+
+  // The composer must lock the instant a turn is created, not when `running`
+  // flips -- CanvasPage sets that only after workflows.run() resolves,
+  // leaving the whole round trip open to a double Send that starts two real,
+  // billed runs. A pending turn is the earliest honest signal that we are
+  // busy.
+  const busy = running || session.messages.some((m) => m.pending);
+
+  return { logs, elapsed, done, leaseId, session, busy, handleSend };
+}

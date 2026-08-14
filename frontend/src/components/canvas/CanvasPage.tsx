@@ -18,8 +18,10 @@ import {
 import { CanvasGraph } from "./CanvasGraph";
 import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
-import { ConsolePanel } from "./ConsolePanel";
+import { ConsolePanel, type ConsoleTab } from "./ConsolePanel";
 import { ResizeHandle } from "./ResizeHandle";
+import { ChatRail } from "./chat/ChatRail";
+import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
 import {
   PALETTE,
   INSPECTOR,
@@ -46,6 +48,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
+  const [dockTab, setDockTab] = useState<ConsoleTab>("logs");
   const [deployed, setDeployed] = useState(false);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -273,6 +276,22 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [workflow],
   );
 
+  // Selecting a node on a chat workflow reveals its config in the bottom
+  // dock's Inspector tab -- that dock is closed/on Logs by default, so a
+  // plain setSelectedId would select the node into a tab nobody's looking
+  // at. Non-chat workflows keep Inspector in the right rail, always visible,
+  // so they don't need this.
+  const selectNode = useCallback(
+    (id: string | null) => {
+      setSelectedId(id);
+      if (id && hasChatTrigger) {
+        setDockTab("inspector");
+        setLogOpen(true);
+      }
+    },
+    [hasChatTrigger],
+  );
+
   // Returns the new run's id, or null when no run started. Callers that own a
   // chat turn need that signal: a failure here only raises a toast, and
   // without an answer the turn would sit on "working…" forever.
@@ -412,73 +431,146 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           }}
         />
 
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            position: "relative",
-            display: "flex",
-            flexDirection: "column",
+        {/* key remounts the host per run, so logs/elapsed/done reset via
+            initial state instead of a setState cascade inside its effect --
+            same reset this used to get from ConsolePanel's own key. */}
+        <ChatConsoleHost
+          key={runId ?? "idle"}
+          runId={runId}
+          running={running}
+          workflowId={workflow?.id}
+          onSendMessage={async (msg) =>
+            (await startRun({ message: msg })) !== null
+          }
+          onRunComplete={() => {
+            setRunning(false);
+            // A run that paid for an x402 call has just debited credits;
+            // re-read the balance so the topbar reflects the spend instead
+            // of the pre-run figure.
+            void refreshCredits();
           }}
         >
-          <CanvasGraph
-            workflow={workflow}
-            setWorkflow={setWorkflowNN}
-            selectedId={selectedId}
-            setSelectedId={setSelectedId}
-            deployed={deployed}
-            running={running}
-            attachedSummaries={attachedSummaries}
-          />
-          {/* key remounts the drawer per run, so logs/elapsed/done reset via
-              initial state instead of a setState cascade inside its effect. */}
-          <ConsolePanel
-            key={runId ?? "idle"}
-            workflowId={workflow?.id}
-            open={logOpen}
-            onToggle={() => setLogOpen((o) => !o)}
-            runId={runId}
-            running={running}
-            chatEnabled={hasChatTrigger}
-            onSendMessage={async (msg) =>
-              (await startRun({ message: msg })) !== null
-            }
-            onRunComplete={() => {
-              setRunning(false);
-              // A run that paid for an x402 call has just debited credits;
-              // re-read the balance so the topbar reflects the spend instead
-              // of the pre-run figure.
-              void refreshCredits();
-            }}
-          />
-        </div>
+          {(chat) => (
+            <>
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  position: "relative",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <CanvasGraph
+                  workflow={workflow}
+                  setWorkflow={setWorkflowNN}
+                  selectedId={selectedId}
+                  setSelectedId={selectNode}
+                  deployed={deployed}
+                  running={running}
+                  attachedSummaries={attachedSummaries}
+                />
+                <ConsolePanel
+                  open={logOpen}
+                  onToggle={() => setLogOpen((o) => !o)}
+                  runId={runId}
+                  running={running}
+                  logs={chat.logs}
+                  elapsed={chat.elapsed}
+                  done={chat.done}
+                  leaseId={chat.leaseId}
+                  tab={dockTab}
+                  onTabChange={setDockTab}
+                  inspectorNode={
+                    hasChatTrigger ? (
+                      <Inspector
+                        selected={selected}
+                        workflowId={workflow.id}
+                        onUpdate={onUpdate}
+                        onDelete={onDelete}
+                        onClose={() => setSelectedId(null)}
+                        width="100%"
+                      />
+                    ) : undefined
+                  }
+                />
+              </div>
 
-        <ResizeHandle
-          side="right"
-          value={inspectorW}
-          min={INSPECTOR.min}
-          max={INSPECTOR.max}
-          ariaLabel="Resize inspector panel"
-          onChange={resizeInspector}
-          onCommit={persistWidths}
-          onReset={() => {
-            setInspectorW(INSPECTOR.default);
-            persistWidths();
-          }}
-        />
-        <Inspector
-          selected={selected}
-          workflowId={workflow.id}
-          onUpdate={onUpdate}
-          onDelete={onDelete}
-          onClose={() => setSelectedId(null)}
-          width={inspectorW}
-        />
+              <ResizeHandle
+                side="right"
+                value={inspectorW}
+                min={INSPECTOR.min}
+                max={INSPECTOR.max}
+                ariaLabel={
+                  hasChatTrigger ? "Resize chat panel" : "Resize inspector panel"
+                }
+                onChange={resizeInspector}
+                onCommit={persistWidths}
+                onReset={() => {
+                  setInspectorW(INSPECTOR.default);
+                  persistWidths();
+                }}
+              />
+              {hasChatTrigger ? (
+                <ChatRail
+                  session={chat.session}
+                  onSend={chat.handleSend}
+                  busy={chat.busy}
+                  onShowLogs={() => {
+                    setDockTab("logs");
+                    setLogOpen(true);
+                  }}
+                  width={inspectorW}
+                />
+              ) : (
+                <Inspector
+                  selected={selected}
+                  workflowId={workflow.id}
+                  onUpdate={onUpdate}
+                  onDelete={onDelete}
+                  onClose={() => setSelectedId(null)}
+                  width={inspectorW}
+                />
+              )}
+            </>
+          )}
+        </ChatConsoleHost>
       </div>
 
       {toast && <Toast message={toast} />}
     </div>
   );
+}
+
+// ── Chat/console state host ──────────────────────────────────────────────
+// Owns the single useChatConsole call (SSE + chat session) that the chat
+// rail and the bottom dock's log list both read from, so remounting it
+// per run -- via the key on this component, same as ConsolePanel's old
+// key={runId ?? "idle"} -- resets both of their views together instead of
+// racing two independent subscriptions to the same run.
+function ChatConsoleHost({
+  runId,
+  running,
+  onRunComplete,
+  workflowId,
+  onSendMessage,
+  children,
+}: {
+  runId: string | null;
+  running: boolean;
+  onRunComplete: () => void;
+  workflowId?: string;
+  onSendMessage?: (text: string) => Promise<boolean>;
+  children: (chat: ChatConsole) => React.ReactNode;
+}) {
+  const chat = useChatConsole({
+    runId,
+    running,
+    onRunComplete,
+    workflowId,
+    onSendMessage,
+  });
+  return <>{children(chat)}</>;
 }
 
 // ── Topbar ─────────────────────────────────────────────────────────────────
