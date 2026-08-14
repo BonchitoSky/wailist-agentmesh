@@ -51,6 +51,7 @@ export function ChatPane({ session, onSend, busy, onShowLogs }: ChatPaneProps) {
         role="log"
         aria-live="polite"
         aria-label="Conversation"
+        className="chat-transcript"
         style={{
           flex: 1,
           minHeight: 0,

@@ -36,8 +36,14 @@ const HEIGHT_KEY = "agentmesh_console_height";
 // only wants the answer never touches it.
 const LOGS_VISIBLE_KEY = "agentmesh_console_logs_visible";
 // Chat keeps a comfortable reading column when the logs sit beside it; when
-// they are hidden it takes the full width instead.
+// they are hidden it takes the full width instead. Draggable via the divider,
+// so this is just the fallback before a saved width loads.
 const CHAT_WIDTH = 380;
+const CHAT_WIDTH_KEY = "agentmesh_console_chat_width";
+const MIN_CHAT_WIDTH = 260;
+// Leave room for the logs column: a chat pane dragged to fill the console
+// would hide the steps it caused.
+const MIN_LOGS_WIDTH = 220;
 const DEFAULT_HEIGHT = 240;
 const MIN_HEIGHT = 120;
 // Leave room for the topbar and some canvas: a console dragged to fill the
@@ -70,9 +76,12 @@ export function ConsolePanel({
   const session = useChatSession(workflowId);
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [resizing, setResizing] = useState(false);
+  const [chatWidth, setChatWidth] = useState(CHAT_WIDTH);
+  const [hResizing, setHResizing] = useState(false);
   const [tab, setTab] = useState<"logs" | "terminal">("logs");
   const [logsVisible, setLogsVisible] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   // A workflow with no chat trigger has nothing but logs to show, so the
   // toggle only applies to chat-capable ones.
@@ -239,6 +248,53 @@ export function ConsolePanel({
     });
     return () => cancelAnimationFrame(id);
   }, []);
+
+  // Restore the last chosen chat/logs split, same next-frame pattern as
+  // height above and for the same hydration reason.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      try {
+        const saved = Number(window.localStorage.getItem(CHAT_WIDTH_KEY));
+        if (saved >= MIN_CHAT_WIDTH) setChatWidth(saved);
+      } catch {
+        /* unavailable storage: keep the default */
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  // Drag the divider between chat and logs to resize the split. Bounded on
+  // both sides so neither pane can be dragged out from under its content.
+  const startHResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setHResizing(true);
+    const startX = e.clientX;
+    const startWidth = chatWidth;
+    const onMove = (ev: MouseEvent) => {
+      const bodyWidth = bodyRef.current?.clientWidth ?? Infinity;
+      const max = Math.max(MIN_CHAT_WIDTH, bodyWidth - MIN_LOGS_WIDTH);
+      const next = Math.min(
+        max,
+        Math.max(MIN_CHAT_WIDTH, startWidth + (ev.clientX - startX)),
+      );
+      setChatWidth(next);
+    };
+    const onUp = () => {
+      setHResizing(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setChatWidth((w) => {
+        try {
+          window.localStorage.setItem(CHAT_WIDTH_KEY, String(w));
+        } catch {
+          /* best-effort */
+        }
+        return w;
+      });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   // Drag the top edge to resize. Listeners live on the window, not the handle,
   // so a fast drag that outruns the pointer doesn't drop the gesture.
@@ -470,11 +526,14 @@ export function ConsolePanel({
           technical one). Siblings in one surface rather than separate
           features, so a message and the steps it caused sit side by side. */}
       {open && (
-        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+        <div
+          ref={bodyRef}
+          style={{ flex: 1, minHeight: 0, display: "flex" }}
+        >
           {chatEnabled && (
             <div
               style={{
-                width: showLogs ? CHAT_WIDTH : "100%",
+                width: showLogs ? chatWidth : "100%",
                 flexShrink: 0,
                 minWidth: 0,
                 // An explicit column rather than relying on the pane's
@@ -492,6 +551,34 @@ export function ConsolePanel({
                 busy={busy}
                 onShowLogs={() => {
                   if (!logsVisible) toggleLogs();
+                }}
+              />
+            </div>
+          )}
+
+          {/* Divider between chat and logs. Only meaningful with both panes
+              on screen -- chat-only and logs-only workflows have nothing to
+              split. */}
+          {chatEnabled && showLogs && (
+            <div
+              onMouseDown={startHResize}
+              title="Drag to resize chat"
+              style={{
+                width: 9,
+                flexShrink: 0,
+                cursor: "col-resize",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1,
+              }}
+            >
+              <div
+                style={{
+                  width: 3,
+                  height: 40,
+                  borderRadius: 2,
+                  background: hResizing ? "var(--accent)" : "var(--border-strong)",
                 }}
               />
             </div>

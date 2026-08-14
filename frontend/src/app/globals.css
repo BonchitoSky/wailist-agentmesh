@@ -73,6 +73,12 @@ body {
 *::-webkit-scrollbar-thumb:hover {
   background: var(--border-strong);
 }
+.chat-transcript {
+  scrollbar-width: none;
+}
+.chat-transcript::-webkit-scrollbar {
+  display: none;
+}
 
 /* ── Keyframes ────────────────────────────────────────────────────────── */
 @keyframes fade-up {
