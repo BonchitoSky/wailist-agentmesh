@@ -1,4 +1,4 @@
-import type { LogEvent } from "../useRunTranscript";
+import { settledUsdOf, type LogEvent } from "../useRunTranscript";
 
 // Turns a run's raw log events into the one thing a non-technical reader
 // actually wants: the agent's answer, plus a one-line summary of what it cost.
@@ -65,29 +65,11 @@ function errorFromOutput(output: unknown): string {
 /**
  * Total USD charged for one step, 0 when the step paid for nothing.
  *
- * Keyed off settledUsdMicros rather than a txId. paymentReceipt (provider.go)
- * writes settledUsdMicros unconditionally but includes txId only when
- * p.TxID != "", so a v2/relay call that settles without returning a tx id is a
- * real, billed payment carrying no id -- testing for txId reported those runs
- * as having cost nothing.
- *
- * platformFeeUsdMicros is added because it is a separate component of the
- * charge, not a duplicate of it: paymentReceipt's own comment states that
- * "settledUsdMicros alone is NOT the total charged for a v2 call ... a consumer
- * that wants the real total must add both fields."
+ * Delegates to settledUsdOf so the activity strip and the usage page's
+ * settlement rows can never disagree about what a run cost again.
  */
 function spendOf(log: LogEvent): number {
-  const out = log.output;
-  if (typeof out !== "object" || out === null) return 0;
-  const rec = out as {
-    settledUsdMicros?: unknown;
-    platformFeeUsdMicros?: unknown;
-  };
-  const settled =
-    typeof rec.settledUsdMicros === "number" ? rec.settledUsdMicros : 0;
-  const fee =
-    typeof rec.platformFeeUsdMicros === "number" ? rec.platformFeeUsdMicros : 0;
-  return (settled + fee) / 1e6;
+  return settledUsdOf(log.output) ?? 0;
 }
 
 export function resolveReply(logs: LogEvent[]): RunSummary {

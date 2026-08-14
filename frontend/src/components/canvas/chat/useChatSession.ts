@@ -73,18 +73,20 @@ interface StoredSession {
 }
 
 /**
- * Index of the most recent turn still waiting on a run, or -1.
+ * Index of the most recent turn that is pending AND not yet bound to a run.
  *
- * Deliberately the LAST pending turn, not the first. A turn stranded by a
- * reload sits earlier in the transcript than any turn sent afterwards, so
+ * Two conditions, both load-bearing. LAST rather than first: a turn stranded by
+ * a reload sits earlier in the transcript than anything sent afterwards, so
  * matching the first pending would hand a fresh turn's answer to the stale
- * bubble and leave the fresh one spinning — one interrupted run would corrupt
- * every turn after it. Recovery on hydration clears strays too; this is the
- * cheap structural guard that holds even if one slips through.
+ * bubble. UNBOUND rather than merely pending: without it a second run could
+ * rebind its id onto a turn already waiting on a different run.
+ *
+ * Exported for tests -- this predicate is what keeps a run attached to the
+ * turn that started it.
  */
-function lastPendingIndex(messages: ChatMessage[]): number {
+export function lastUnboundPendingIndex(messages: ChatMessage[]): number {
   for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].pending) return i;
+    if (messages[i].pending && !messages[i].runId) return i;
   }
   return -1;
 }
@@ -124,16 +126,40 @@ function read(workflowId: string | undefined): StoredSession | null {
   }
 }
 
+/**
+ * Serialise a session, dropping the oldest turns until it fits the budget.
+ *
+ * Returning early when oversized -- which this used to do -- left the previous
+ * snapshot in place, and because the host remounts on key={runId} the next run
+ * hydrated that stale copy and the newest turn (already run, possibly already
+ * billed) vanished from the transcript. Losing the *newest* message is the
+ * worst possible thing to drop, so the oldest go first and the last turn is
+ * always kept even if it alone exceeds the cap.
+ *
+ * Exported for tests: this is a data-loss path, so its behaviour is asserted
+ * directly rather than inferred.
+ */
+export function serialiseForStorage(session: StoredSession): string {
+  let messages = session.messages.slice(-MAX_STORED_MESSAGES);
+  for (;;) {
+    const serialized = JSON.stringify({
+      sessionId: session.sessionId,
+      messages,
+    });
+    if (serialized.length <= MAX_STORED_BYTES || messages.length <= 1) {
+      return serialized;
+    }
+    messages = messages.slice(1);
+  }
+}
+
 function write(workflowId: string | undefined, session: StoredSession): void {
   if (!workflowId || typeof window === "undefined") return;
   try {
-    const trimmed: StoredSession = {
-      sessionId: session.sessionId,
-      messages: session.messages.slice(-MAX_STORED_MESSAGES),
-    };
-    const serialized = JSON.stringify(trimmed);
-    if (serialized.length > MAX_STORED_BYTES) return;
-    window.localStorage.setItem(CHAT_PREFIX + workflowId, serialized);
+    window.localStorage.setItem(
+      CHAT_PREFIX + workflowId,
+      serialiseForStorage(session),
+    );
   } catch {
     /* quota or unavailable storage: persistence is best-effort */
   }
@@ -187,9 +213,14 @@ export function useChatSession(workflowId: string | undefined): ChatSession {
     return assistantId;
   }, []);
 
+  // Binds by predicate rather than by id: the turn's id is returned by
+  // startTurn, but the host remounts on key={runId} before this runs, so that
+  // handle is gone by now. "Last pending turn that has no runId yet" is the
+  // actual invariant -- a turn awaiting its run -- and unlike a bare position
+  // it cannot rebind a run onto a turn already bound to a different one.
   const attachRun = useCallback((runId: string) => {
     setMessages((prev) => {
-      const idx = lastPendingIndex(prev);
+      const idx = lastUnboundPendingIndex(prev);
       if (idx < 0) return prev;
       const next = [...prev];
       next[idx] = { ...next[idx], runId };
