@@ -149,6 +149,45 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   }, [workflowId, router]);
 
   // Auto-save: debounce 1.5s after any change, skip on initial load.
+  // pendingSave holds the graph the debounce timer is still sitting on, and
+  // inFlightSave the request already on the wire, so flushPendingSave can
+  // force both to land before something else reads the graph server-side.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSave = useRef<Workflow | null>(null);
+  const inFlightSave = useRef<Promise<void> | null>(null);
+
+  const saveWorkflow = useCallback((wf: Workflow) => {
+    const p = workflowsApi
+      .update(wf.id, { name: wf.name, nodes: wf.nodes, edges: wf.edges })
+      .then(() => {
+        const now = new Date();
+        setSaveLabel(
+          `saved · ${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`,
+        );
+      })
+      .catch(() => setSaveLabel("save failed"))
+      .finally(() => {
+        if (inFlightSave.current === p) inFlightSave.current = null;
+      });
+    inFlightSave.current = p;
+    return p;
+  }, []);
+
+  // Settles whatever the autosave still owes the server. Anything that makes
+  // the backend re-read the graph from the DB (build mode) must await this
+  // first, or it edits a stale copy and its response overwrites the newer
+  // client state -- silently reverting the edit that was mid-debounce.
+  const flushPendingSave = useCallback(async () => {
+    if (saveTimer.current !== null) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    const pending = pendingSave.current;
+    pendingSave.current = null;
+    await inFlightSave.current;
+    if (pending) await saveWorkflow(pending);
+  }, [saveWorkflow]);
+
   useEffect(() => {
     if (!workflow) return;
     if (justLoaded.current) {
@@ -156,23 +195,15 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       return;
     }
     setSaveLabel("saving…");
+    pendingSave.current = workflow;
     const t = setTimeout(() => {
-      workflowsApi
-        .update(workflow.id, {
-          name: workflow.name,
-          nodes: workflow.nodes,
-          edges: workflow.edges,
-        })
-        .then(() => {
-          const now = new Date();
-          setSaveLabel(
-            `saved · ${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`,
-          );
-        })
-        .catch(() => setSaveLabel("save failed"));
+      saveTimer.current = null;
+      pendingSave.current = null;
+      void saveWorkflow(workflow);
     }, 1500);
+    saveTimer.current = t;
     return () => clearTimeout(t);
-  }, [workflow]);
+  }, [workflow, saveWorkflow]);
 
   const selected = useMemo(
     () => workflow?.nodes.find((n) => n.id === selectedId) ?? null,
@@ -286,6 +317,11 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   const buildMode = !hasProviderNode || manualBuildMode;
 
+  // The rail is the only place chat lives, so it has to be on screen whenever
+  // chat is usable -- including on a brand-new canvas, which has no chat
+  // trigger node yet but is exactly where building one from chat starts.
+  const showChatRail = hasChatTrigger || buildMode;
+
   // Selecting a node on a chat workflow reveals its config in the bottom
   // dock's Inspector tab -- that dock is closed/on Logs by default, so a
   // plain setSelectedId would select the node into a tab nobody's looking
@@ -336,7 +372,18 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const startBuild = useCallback(
     async (text: string): Promise<{ ok: boolean; reply?: string }> => {
       if (!workflow) return { ok: false };
+      // Latch build mode on for the rest of the session. Without this, the
+      // provider node this very call is about to add flips hasProviderNode
+      // true, and the next message would route to a run instead of
+      // continuing the conversation. Latching here (rather than defaulting
+      // manualBuildMode to true) keeps an already-populated workflow that is
+      // merely being reopened in run mode until the user actually builds.
+      setManualBuildMode(true);
       try {
+        // The backend loads the graph fresh from the DB, so a drag still
+        // sitting in the autosave debounce would be invisible to it and lost
+        // when the build response replaces local state.
+        await flushPendingSave();
         const res = await workflowsApi.build(workflow.id, text);
         setWorkflow((wf) =>
           wf
@@ -350,7 +397,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         return { ok: false, reply: `Could not update the workflow: ${message}` };
       }
     },
-    [workflow, showToast],
+    [workflow, showToast, flushPendingSave],
   );
 
   const onRun = useCallback(async () => {
@@ -514,7 +561,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   tab={dockTab}
                   onTabChange={setDockTab}
                   inspectorNode={
-                    hasChatTrigger ? (
+                    showChatRail ? (
                       <Inspector
                         selected={selected}
                         workflowId={workflow.id}
@@ -534,7 +581,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 min={INSPECTOR.min}
                 max={INSPECTOR.max}
                 ariaLabel={
-                  hasChatTrigger ? "Resize chat panel" : "Resize inspector panel"
+                  showChatRail ? "Resize chat panel" : "Resize inspector panel"
                 }
                 onChange={resizeInspector}
                 onCommit={persistWidths}
@@ -543,7 +590,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   persistWidths();
                 }}
               />
-              {hasChatTrigger ? (
+              {showChatRail ? (
                 <ChatRail
                   session={chat.session}
                   onSend={chat.handleSend}

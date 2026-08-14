@@ -270,10 +270,14 @@ export const workflows = {
       return data;
     }
     await delay(300);
+    // Echo the current mock workflow back untouched: the caller replaces its
+    // nodes/edges with whatever comes back, so returning an empty graph here
+    // would wipe the demo canvas on the first chat message.
+    const current = await workflows.get(id);
     return {
       reply:
         "Mock build response — connect a real backend to build workflows from chat.",
-      workflow: { id, name: "Mock Workflow", nodes: [], edges: [] },
+      workflow: current,
     };
   },
 
