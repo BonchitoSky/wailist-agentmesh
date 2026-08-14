@@ -44,8 +44,9 @@ export function useChatConsole({
   const session = useChatSession(workflowId);
 
   // Bind the turn the user just sent to the run the backend actually started.
-  // The caller remounts this hook's host with key={runId}, so the pending
-  // message arrives here by way of localStorage, not props.
+  // This effect has no access to the id startTurn returned to handleSend's
+  // caller, so it binds by predicate via attachRun instead (see
+  // useChatSession's attachRun for why that's still correct).
   const { attachRun, completeTurnForRun, completeTurnById, hydrated } = session;
   useEffect(() => {
     if (!runId || !hydrated) return;

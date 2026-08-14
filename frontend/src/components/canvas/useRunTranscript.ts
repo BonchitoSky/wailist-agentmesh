@@ -35,6 +35,10 @@ export interface X402Payment {
   outboundExplorerURL?: string;
   nodeName?: string;
   nodeId?: string;
+  // Set by the backend's prependRunFundingReceipt on the one synthetic row
+  // that reports a run-level pre-fund's up-front settlement -- bookkeeping,
+  // not a tool invocation. A per-call receipt never carries this.
+  isFundingReceipt?: boolean;
 }
 
 // isX402Payment answers "does this receipt have an id I can link to an explorer".
@@ -173,6 +177,28 @@ export function useRunTranscript({
   const startRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Reset the transcript the moment a new run starts. This host used to be
+  // remounted on key={runId} for exactly this reset, which also tore down
+  // and rebuilt everything nested inside it -- including CanvasGraph, wiping
+  // the user's pan/zoom on every single Run (see CanvasPage). Doing the
+  // reset here, synchronously during render when runId is seen to differ
+  // from what this hook's state currently reflects, is React's documented
+  // pattern for "adjusting state when a prop changes" -- it avoids both the
+  // remount and an extra render (a setState call in the SSE effect below
+  // would still work, but trips react-hooks/set-state-in-effect and costs a
+  // render the SSE effect doesn't need). A runId going back to null (never
+  // happens today -- CanvasPage only ever sets it to a fresh id) is
+  // deliberately left alone, matching the SSE effect's own `if (!runId)
+  // return` below.
+  const [transcriptRunId, setTranscriptRunId] = useState(runId);
+  if (runId && runId !== transcriptRunId) {
+    setTranscriptRunId(runId);
+    setLogs([]);
+    setElapsed(null);
+    setDone(false);
+    setStopped(false);
+  }
+
   // onRunComplete is invoked from inside the SSE effect, which must stay keyed
   // on runId alone -- re-running it because the parent passed a fresh closure
   // would tear down and re-open the stream mid-run. Held in a ref so the
@@ -196,11 +222,12 @@ export function useRunTranscript({
     onRunCompleteRef.current();
   }, []);
 
-  // Connect SSE for the run. No state resets needed: the parent renders the
-  // console with key={runId}, so a new run remounts it with fresh initial
-  // state.
+  // Connect SSE for the run. Transcript state (logs/elapsed/done/stopped) is
+  // reset above, during render; completedRef is a ref, not state, so
+  // resetting it here in the effect is fine.
   useEffect(() => {
     if (!runId) return;
+    completedRef.current = false;
     startRef.current = Date.now();
 
     // Start elapsed timer

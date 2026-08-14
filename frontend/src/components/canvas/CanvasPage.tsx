@@ -431,11 +431,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           }}
         />
 
-        {/* key remounts the host per run, so logs/elapsed/done reset via
-            initial state instead of a setState cascade inside its effect --
-            same reset this used to get from ConsolePanel's own key. */}
         <ChatConsoleHost
-          key={runId ?? "idle"}
           runId={runId}
           running={running}
           workflowId={workflow?.id}
@@ -544,10 +540,12 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
 // ── Chat/console state host ──────────────────────────────────────────────
 // Owns the single useChatConsole call (SSE + chat session) that the chat
-// rail and the bottom dock's log list both read from, so remounting it
-// per run -- via the key on this component, same as ConsolePanel's old
-// key={runId ?? "idle"} -- resets both of their views together instead of
-// racing two independent subscriptions to the same run.
+// rail and the bottom dock's log list both read from, so they share one
+// subscription instead of racing two independent ones. Deliberately never
+// keyed on runId: this used to remount per run, which also tore down and
+// rebuilt everything nested inside it -- including CanvasGraph, wiping the
+// user's pan/zoom on every single Run. useRunTranscript now resets its own
+// per-run state explicitly instead (see its SSE-connect effect).
 function ChatConsoleHost({
   runId,
   running,

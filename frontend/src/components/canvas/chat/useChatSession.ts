@@ -3,10 +3,13 @@ import { useCallback, useEffect, useState } from "react";
 
 // The chat transcript for one workflow.
 //
-// Persisted to localStorage because the console is remounted on every run
-// (CanvasPage renders it with key={runId}), so in-memory state would be wiped
-// the instant a message is sent. Writing the user's message *before* the run
-// starts and hydrating on mount is what carries a turn across that remount.
+// Persisted to localStorage so a page reload doesn't lose the conversation,
+// and so a turn stranded mid-run (see useChatConsole's recovery effect) can
+// still be found and settled after the reload. All binding/settling below
+// targets messages by predicate (last unbound pending turn, matching runId,
+// matching id) rather than by array position or a freshly-returned handle --
+// that's what lets a turn started before a page reload still resolve
+// correctly once the run's outcome comes back.
 //
 // Scoped per workflow so opening a different workflow shows its own
 // conversation rather than whatever was typed last, matching how
@@ -130,11 +133,11 @@ function read(workflowId: string | undefined): StoredSession | null {
  * Serialise a session, dropping the oldest turns until it fits the budget.
  *
  * Returning early when oversized -- which this used to do -- left the previous
- * snapshot in place, and because the host remounts on key={runId} the next run
- * hydrated that stale copy and the newest turn (already run, possibly already
- * billed) vanished from the transcript. Losing the *newest* message is the
- * worst possible thing to drop, so the oldest go first and the last turn is
- * always kept even if it alone exceeds the cap.
+ * snapshot in place, and a reload would then hydrate that stale copy: the
+ * newest turn (already run, possibly already billed) vanished from the
+ * transcript. Losing the *newest* message is the worst possible thing to
+ * drop, so the oldest go first and the last turn is always kept even if it
+ * alone exceeds the cap.
  *
  * Exported for tests: this is a data-loss path, so its behaviour is asserted
  * directly rather than inferred.
@@ -213,9 +216,9 @@ export function useChatSession(workflowId: string | undefined): ChatSession {
     return assistantId;
   }, []);
 
-  // Binds by predicate rather than by id: the turn's id is returned by
-  // startTurn, but the host remounts on key={runId} before this runs, so that
-  // handle is gone by now. "Last pending turn that has no runId yet" is the
+  // Binds by predicate rather than by id: attachRun fires from a separate
+  // effect (keyed on runId) that never sees the id startTurn returned to
+  // handleSend's caller. "Last pending turn that has no runId yet" is the
   // actual invariant -- a turn awaiting its run -- and unlike a bare position
   // it cannot rebind a run onto a turn already bound to a different one.
   const attachRun = useCallback((runId: string) => {
@@ -241,7 +244,8 @@ export function useChatSession(workflowId: string | undefined): ChatSession {
     [],
   );
 
-  /** Settle the turn bound to this run. Survives the key={runId} remount. */
+  /** Settle the turn bound to this run. Predicate-based, so it still finds
+   * the turn after a page reload has replaced this hook instance. */
   const completeTurnForRun = useCallback(
     (runId: string, patch: Omit<ChatMessage, "id" | "sender" | "ts">) =>
       settle((m) => m.runId === runId, patch),
