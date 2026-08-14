@@ -12,6 +12,10 @@ interface UseChatConsoleArgs {
   onRunComplete: () => void;
   workflowId?: string;
   onSendMessage?: (text: string) => Promise<boolean>;
+  // Build mode routes a chat turn to graph editing instead of running the
+  // deployed agent -- see CanvasPage's hasProviderNode/buildMode wiring.
+  buildMode?: boolean;
+  onBuildMessage?: (text: string) => Promise<{ ok: boolean; reply?: string }>;
 }
 
 export interface ChatConsole {
@@ -33,6 +37,8 @@ export function useChatConsole({
   onRunComplete,
   workflowId,
   onSendMessage,
+  buildMode,
+  onBuildMessage,
 }: UseChatConsoleArgs): ChatConsole {
   const { logs, elapsed, done, leaseId } = useRunTranscript({
     runId,
@@ -131,6 +137,21 @@ export function useChatConsole({
     // refusal) has nothing left to settle its turn -- startRun only surfaces
     // a toast -- so the bubble would spin forever. Settle it here instead.
     void (async () => {
+      if (buildMode) {
+        // Build mode has no runId/SSE transcript to settle against -- it
+        // resolves synchronously in one round trip, so settle the turn
+        // directly here instead of via the runId-keyed effects above.
+        const res = (await onBuildMessage?.(text)) ?? { ok: false };
+        completeTurnById(turnId, {
+          text:
+            res.reply ??
+            (res.ok
+              ? "Done."
+              : "Could not update the workflow — see the notification for why, then try again."),
+          isError: !res.ok,
+        });
+        return;
+      }
       const ok = (await onSendMessage?.(text)) ?? false;
       if (!ok) {
         completeTurnById(turnId, {
