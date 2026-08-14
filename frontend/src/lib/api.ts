@@ -253,6 +253,34 @@ export const workflows = {
     return { runId: `r-${Math.floor(1800 + Math.random() * 200)}` };
   },
 
+  // TODO: POST /workflows/:id/build
+  build: async (
+    id: string,
+    message: string,
+  ): Promise<{ reply: string; workflow: Workflow }> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/workflows/${id}/build`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "build failed");
+      return data;
+    }
+    await delay(300);
+    // Echo the current mock workflow back untouched: the caller replaces its
+    // nodes/edges with whatever comes back, so returning an empty graph here
+    // would wipe the demo canvas on the first chat message.
+    const current = await workflows.get(id);
+    return {
+      reply:
+        "Mock build response — connect a real backend to build workflows from chat.",
+      workflow: current,
+    };
+  },
+
   // TODO: POST /workflows/:id/stop
   stop: async (id: string): Promise<void> => {
     if (BASE) {

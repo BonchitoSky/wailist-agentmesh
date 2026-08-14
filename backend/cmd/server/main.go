@@ -185,6 +185,7 @@ func main() {
 		PlatformWalletAddress:          platformWalletAddr,
 		PlatformWalletEncMnemonic:      platformWalletEncMnemonic,
 		PlatformSpendWalletEncMnemonic: platformSpendWalletEncMnemonic,
+		PlatformGeminiAPIKey:           os.Getenv("PLATFORM_GEMINI_API_KEY"),
 		FacilitatorClient:              facilitatorClient,
 		USDCAssetID:                    usdcAssetID,
 		RelayNetwork:                   relayNetwork,

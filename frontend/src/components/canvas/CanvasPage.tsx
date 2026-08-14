@@ -49,6 +49,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [dockTab, setDockTab] = useState<ConsoleTab>("logs");
+  const [manualBuildMode, setManualBuildMode] = useState(false);
   const [deployed, setDeployed] = useState(false);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -148,6 +149,45 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   }, [workflowId, router]);
 
   // Auto-save: debounce 1.5s after any change, skip on initial load.
+  // pendingSave holds the graph the debounce timer is still sitting on, and
+  // inFlightSave the request already on the wire, so flushPendingSave can
+  // force both to land before something else reads the graph server-side.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSave = useRef<Workflow | null>(null);
+  const inFlightSave = useRef<Promise<void> | null>(null);
+
+  const saveWorkflow = useCallback((wf: Workflow) => {
+    const p = workflowsApi
+      .update(wf.id, { name: wf.name, nodes: wf.nodes, edges: wf.edges })
+      .then(() => {
+        const now = new Date();
+        setSaveLabel(
+          `saved · ${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`,
+        );
+      })
+      .catch(() => setSaveLabel("save failed"))
+      .finally(() => {
+        if (inFlightSave.current === p) inFlightSave.current = null;
+      });
+    inFlightSave.current = p;
+    return p;
+  }, []);
+
+  // Settles whatever the autosave still owes the server. Anything that makes
+  // the backend re-read the graph from the DB (build mode) must await this
+  // first, or it edits a stale copy and its response overwrites the newer
+  // client state -- silently reverting the edit that was mid-debounce.
+  const flushPendingSave = useCallback(async () => {
+    if (saveTimer.current !== null) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    const pending = pendingSave.current;
+    pendingSave.current = null;
+    await inFlightSave.current;
+    if (pending) await saveWorkflow(pending);
+  }, [saveWorkflow]);
+
   useEffect(() => {
     if (!workflow) return;
     if (justLoaded.current) {
@@ -155,23 +195,15 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       return;
     }
     setSaveLabel("saving…");
+    pendingSave.current = workflow;
     const t = setTimeout(() => {
-      workflowsApi
-        .update(workflow.id, {
-          name: workflow.name,
-          nodes: workflow.nodes,
-          edges: workflow.edges,
-        })
-        .then(() => {
-          const now = new Date();
-          setSaveLabel(
-            `saved · ${now.getHours()}:${String(now.getMinutes()).padStart(2, "0")}`,
-          );
-        })
-        .catch(() => setSaveLabel("save failed"));
+      saveTimer.current = null;
+      pendingSave.current = null;
+      void saveWorkflow(workflow);
     }, 1500);
+    saveTimer.current = t;
     return () => clearTimeout(t);
-  }, [workflow]);
+  }, [workflow, saveWorkflow]);
 
   const selected = useMemo(
     () => workflow?.nodes.find((n) => n.id === selectedId) ?? null,
@@ -276,21 +308,27 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [workflow],
   );
 
-  // Selecting a node on a chat workflow reveals its config in the bottom
-  // dock's Inspector tab -- that dock is closed/on Logs by default, so a
-  // plain setSelectedId would select the node into a tab nobody's looking
-  // at. Non-chat workflows keep Inspector in the right rail, always visible,
-  // so they don't need this.
-  const selectNode = useCallback(
-    (id: string | null) => {
-      setSelectedId(id);
-      if (id && hasChatTrigger) {
-        setDockTab("inspector");
-        setLogOpen(true);
-      }
-    },
-    [hasChatTrigger],
+  // No provider node yet means there is nothing to run -- chat always
+  // builds in that state. Once one exists, the Build/Run pill decides.
+  const hasProviderNode = useMemo(
+    () => workflow?.nodes.some((n) => n.type === "provider") ?? false,
+    [workflow],
   );
+
+  const buildMode = !hasProviderNode || manualBuildMode;
+
+  // Selecting a node reveals its config in the bottom dock's Inspector tab
+  // -- that dock is closed/on Logs by default, so a plain setSelectedId
+  // would select the node into a tab nobody's looking at. The chat rail is
+  // always on screen now (see below), so the dock is always where Inspector
+  // lives -- this always fires, not just for chat-trigger workflows.
+  const selectNode = useCallback((id: string | null) => {
+    setSelectedId(id);
+    if (id) {
+      setDockTab("inspector");
+      setLogOpen(true);
+    }
+  }, []);
 
   // Returns the new run's id, or null when no run started. Callers that own a
   // chat turn need that signal: a failure here only raises a toast, and
@@ -321,6 +359,37 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       }
     },
     [workflow, deployed, showToast],
+  );
+
+  const startBuild = useCallback(
+    async (text: string): Promise<{ ok: boolean; reply?: string }> => {
+      if (!workflow) return { ok: false };
+      // Latch build mode on for the rest of the session. Without this, the
+      // provider node this very call is about to add flips hasProviderNode
+      // true, and the next message would route to a run instead of
+      // continuing the conversation. Latching here (rather than defaulting
+      // manualBuildMode to true) keeps an already-populated workflow that is
+      // merely being reopened in run mode until the user actually builds.
+      setManualBuildMode(true);
+      try {
+        // The backend loads the graph fresh from the DB, so a drag still
+        // sitting in the autosave debounce would be invisible to it and lost
+        // when the build response replaces local state.
+        await flushPendingSave();
+        const res = await workflowsApi.build(workflow.id, text);
+        setWorkflow((wf) =>
+          wf
+            ? { ...wf, nodes: res.workflow.nodes, edges: res.workflow.edges }
+            : wf,
+        );
+        return { ok: true, reply: res.reply };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "unknown error";
+        showToast(`Build failed · ${message}`);
+        return { ok: false, reply: `Could not update the workflow: ${message}` };
+      }
+    },
+    [workflow, showToast, flushPendingSave],
   );
 
   const onRun = useCallback(async () => {
@@ -435,6 +504,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           runId={runId}
           running={running}
           workflowId={workflow?.id}
+          buildMode={buildMode}
+          onBuildMessage={startBuild}
           onSendMessage={async (msg) =>
             (await startRun({ message: msg })) !== null
           }
@@ -478,16 +549,14 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   tab={dockTab}
                   onTabChange={setDockTab}
                   inspectorNode={
-                    hasChatTrigger ? (
-                      <Inspector
-                        selected={selected}
-                        workflowId={workflow.id}
-                        onUpdate={onUpdate}
-                        onDelete={onDelete}
-                        onClose={() => setSelectedId(null)}
-                        width="100%"
-                      />
-                    ) : undefined
+                    <Inspector
+                      selected={selected}
+                      workflowId={workflow.id}
+                      onUpdate={onUpdate}
+                      onDelete={onDelete}
+                      onClose={() => setSelectedId(null)}
+                      width="100%"
+                    />
                   }
                 />
               </div>
@@ -497,9 +566,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 value={inspectorW}
                 min={INSPECTOR.min}
                 max={INSPECTOR.max}
-                ariaLabel={
-                  hasChatTrigger ? "Resize chat panel" : "Resize inspector panel"
-                }
+                ariaLabel="Resize chat panel"
                 onChange={resizeInspector}
                 onCommit={persistWidths}
                 onReset={() => {
@@ -507,27 +574,19 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   persistWidths();
                 }}
               />
-              {hasChatTrigger ? (
-                <ChatRail
-                  session={chat.session}
-                  onSend={chat.handleSend}
-                  busy={chat.busy}
-                  onShowLogs={() => {
-                    setDockTab("logs");
-                    setLogOpen(true);
-                  }}
-                  width={inspectorW}
-                />
-              ) : (
-                <Inspector
-                  selected={selected}
-                  workflowId={workflow.id}
-                  onUpdate={onUpdate}
-                  onDelete={onDelete}
-                  onClose={() => setSelectedId(null)}
-                  width={inspectorW}
-                />
-              )}
+              <ChatRail
+                session={chat.session}
+                onSend={chat.handleSend}
+                busy={chat.busy}
+                onShowLogs={() => {
+                  setDockTab("logs");
+                  setLogOpen(true);
+                }}
+                width={inspectorW}
+                buildMode={buildMode}
+                canToggleBuildMode={hasProviderNode}
+                onToggleBuildMode={() => setManualBuildMode((v) => !v)}
+              />
             </>
           )}
         </ChatConsoleHost>
@@ -552,6 +611,8 @@ function ChatConsoleHost({
   onRunComplete,
   workflowId,
   onSendMessage,
+  buildMode,
+  onBuildMessage,
   children,
 }: {
   runId: string | null;
@@ -559,6 +620,8 @@ function ChatConsoleHost({
   onRunComplete: () => void;
   workflowId?: string;
   onSendMessage?: (text: string) => Promise<boolean>;
+  buildMode?: boolean;
+  onBuildMessage?: (text: string) => Promise<{ ok: boolean; reply?: string }>;
   children: (chat: ChatConsole) => React.ReactNode;
 }) {
   const chat = useChatConsole({
@@ -567,6 +630,8 @@ function ChatConsoleHost({
     onRunComplete,
     workflowId,
     onSendMessage,
+    buildMode,
+    onBuildMessage,
   });
   return <>{children(chat)}</>;
 }
