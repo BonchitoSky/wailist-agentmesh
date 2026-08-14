@@ -37,8 +37,38 @@ export interface X402Payment {
   nodeId?: string;
 }
 
+// isX402Payment answers "does this receipt have an id I can link to an explorer".
+// That is a *display* question -- paymentReceipt (provider.go) writes txId only
+// when p.TxID != "", so a v2/relay settlement without one is still a real,
+// billed payment. Never use this to decide whether money moved.
 export function isX402Payment(output: unknown): output is X402Payment {
   return typeof output === "object" && output !== null && "txId" in output;
+}
+
+/**
+ * What a step actually cost, in USD -- or null when it paid for nothing.
+ *
+ * The single source of truth for "money moved", deliberately shared between the
+ * chat activity strip and the settlement rows the usage page reads. They were
+ * written separately and drifted: one keyed off settledUsdMicros, the other off
+ * the presence of a txId, so a v2/relay settlement with no id showed a cost in
+ * chat that usage could not account for.
+ *
+ * platformFeeUsdMicros is added because it is a separate component of the
+ * charge: paymentReceipt's comment states that "settledUsdMicros alone is NOT
+ * the total charged for a v2 call ... a consumer that wants the real total must
+ * add both fields."
+ */
+export function settledUsdOf(output: unknown): number | null {
+  if (typeof output !== "object" || output === null) return null;
+  const rec = output as {
+    settledUsdMicros?: unknown;
+    platformFeeUsdMicros?: unknown;
+  };
+  if (typeof rec.settledUsdMicros !== "number") return null;
+  const fee =
+    typeof rec.platformFeeUsdMicros === "number" ? rec.platformFeeUsdMicros : 0;
+  return (rec.settledUsdMicros + fee) / 1e6;
 }
 
 const RUN_CACHE_PREFIX = "agentmesh_lastrun_";
@@ -342,14 +372,20 @@ export function useRunTranscript({
   useEffect(() => {
     if (!done || logs.length === 0) return;
     const rows = logs
-      .filter((l) => isX402Payment(l.output))
-      .map((l) => {
-        const p = l.output as X402Payment & { settledUsdMicros?: number };
+      .map((l) => ({ log: l, usd: settledUsdOf(l.output) }))
+      // Filtering on settledUsdOf rather than isX402Payment: a settlement that
+      // returned no tx id is still a debit, and gating on the id dropped those
+      // rows entirely -- the usage page under-reported real spend.
+      .filter((x): x is { log: LogEvent; usd: number } => x.usd !== null)
+      .map(({ log: l, usd }) => {
+        const p = l.output as Partial<X402Payment>;
         return {
           ts: l.ts,
           endpoint: p.nodeName ?? "x402 endpoint",
-          amountAlgo: (p.settledUsdMicros ?? 0) / 1e6,
-          txId: p.txId,
+          amountAlgo: usd,
+          // Settlement.txId is a plain string; a payment without one records as
+          // empty rather than being dropped.
+          txId: p.txId ?? "",
           explorerURL: p.explorerURL ?? "",
           workflowId: workflowId ?? "",
         };
