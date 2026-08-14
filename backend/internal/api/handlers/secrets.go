@@ -99,6 +99,35 @@ func maskSecretsMap(vals map[string]string) map[string]string {
 	return out
 }
 
+// redactNodesForBuildAgent returns nodes safe to hand to a third-party LLM
+// (the chat workflow builder's Gemini calls): maskNodes's usual sentinel
+// redaction, plus stripping CustomParam file bytes. maskNodes alone only
+// covers APIKey/EmailAPIKey/Secrets -- a CustomParam with Kind "file" carries
+// its content base64-encoded in Value, up to maxParamFileBytes (2 MiB, see
+// tool402.go), which maskNodes leaves untouched. That's a real file the user
+// uploaded to THIS app, not Google -- sending it on every build-mode chat
+// message both risks the request blowing past size limits and ships file
+// content to a third party with no user-visible consent. File metadata
+// (name, MIME type) is kept so the agent can still reason about "there's an
+// uploaded file here" without ever seeing its bytes.
+func redactNodesForBuildAgent(nodes []models.WorkflowNode) []models.WorkflowNode {
+	out := maskNodes(nodes)
+	for i, n := range out {
+		if len(n.CustomParams) == 0 {
+			continue
+		}
+		params := make([]models.CustomParam, len(n.CustomParams))
+		copy(params, n.CustomParams)
+		for j, p := range params {
+			if p.Kind == "file" {
+				params[j].Value = ""
+			}
+		}
+		out[i].CustomParams = params
+	}
+	return out
+}
+
 // decryptNodes returns a copy of nodes with encrypted blobs decrypted in-memory.
 // Call this just before passing nodes to the engine for execution.
 func decryptNodes(nodes []models.WorkflowNode, key string) []models.WorkflowNode {

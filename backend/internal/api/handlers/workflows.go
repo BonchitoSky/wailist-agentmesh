@@ -117,10 +117,11 @@ func (d *Deps) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
 // BuildWorkflow edits the workflow graph via chat: a platform-key Gemini
 // meta-agent calls add_node/update_node/remove_node/add_edge/remove_edge
 // tools against the current graph, then the result is persisted through the
-// same encrypt/mask path UpdateWorkflow uses. The graph handed to the model
-// is masked first (maskNodes) so an untouched node's real API key/secret
-// value is never sent to Gemini -- only the "__enc__" sentinel encryptField
-// already knows how to preserve on save.
+// same encrypt path UpdateWorkflow uses. The graph handed to the model is
+// redacted first (redactNodesForBuildAgent) so neither an untouched node's
+// real API key/secret value nor an uploaded file's raw bytes are ever sent
+// to Gemini -- only the "__enc__" sentinel encryptField already knows how to
+// preserve on save, and file metadata with the content stripped.
 func (d *Deps) BuildWorkflow(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID, _ := r.Context().Value(CtxUserID).(string)
@@ -142,7 +143,7 @@ func (d *Deps) BuildWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	maskedGraph := models.WorkflowGraph{Nodes: maskNodes(existing.Nodes), Edges: existing.Edges}
+	maskedGraph := models.WorkflowGraph{Nodes: redactNodesForBuildAgent(existing.Nodes), Edges: existing.Edges}
 	result, err := nodes.BuildGraph(r.Context(), d.PlatformGeminiAPIKey, body.Message, maskedGraph)
 	if err != nil {
 		// The upstream text (a raw Gemini error body, keys and all) lands
