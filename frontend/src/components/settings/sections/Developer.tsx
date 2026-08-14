@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { BASE, workflows as workflowsApi } from "@/lib/api";
 import type { Workflow } from "@/lib/types";
 import {
@@ -8,6 +8,10 @@ import {
   inputStyle,
 } from "@/components/settings/ui";
 import { ghostBtnSm } from "@/components/ui";
+
+// The origin cannot change for the life of the page, so the subscription is
+// a no-op; module scope keeps the reference stable across renders.
+const subscribeToOrigin = () => () => {};
 
 // The trigger endpoint has been live since the first router (POST /run/{id})
 // and has never been shown anywhere in the UI. This section is purely a
@@ -36,7 +40,18 @@ export function DeveloperSection() {
 
   // BASE is "/api" in the browser when a backend is configured, so resolve it
   // against the origin to show a URL someone can actually paste into curl.
-  const origin = typeof window === "undefined" ? "" : window.location.origin;
+  //
+  // Set after mount rather than read during render: the server has no window
+  // and emits "", so reading it in render hydrates a different URL than the
+  // one the server sent.
+  // useSyncExternalStore rather than state-in-effect: React reads the server
+  // snapshot ("") during hydration, so the first client paint matches the
+  // HTML the server sent, then swaps in the real origin.
+  const origin = useSyncExternalStore(
+    subscribeToOrigin,
+    () => window.location.origin,
+    () => "",
+  );
   const root = BASE.startsWith("http") ? BASE : `${origin}${BASE}`;
   const url = `${root}/run/${selected || "{workflowId}"}`;
 
