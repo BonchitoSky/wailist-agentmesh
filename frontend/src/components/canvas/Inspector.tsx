@@ -29,7 +29,7 @@ interface InspectorProps {
   onUpdate: (n: WorkflowNode) => void;
   onDelete: () => void;
   onClose: () => void;
-  width?: number;
+  width?: number | string;
 }
 
 export function Inspector({
@@ -203,7 +203,7 @@ export function Inspector({
   );
 }
 
-function EmptyInspector({ width = 320 }: { width?: number }) {
+function EmptyInspector({ width = 320 }: { width?: number | string }) {
   return (
     <div
       style={{

@@ -347,7 +347,62 @@ export const runs = {
       return data;
     }
     await delay(150);
-    return { run: { status: "success" }, logs: [] };
+    // Mock mode returns a realistic finished run rather than an empty one, so
+    // the console and the chat panel can be exercised with no backend
+    // attached: an agent answer to render as prose, and a paid tool402 step
+    // so the activity strip has a real tool count and settled amount. Mirrors
+    // SAMPLE_WORKFLOW's node ids and its $0.065/call x402 weather endpoint.
+    const now = Date.now();
+    const iso = (msAgo: number) => new Date(now - msAgo).toISOString();
+    // One id, referenced everywhere it appears. Spelling it out per-field let
+    // the receipt, the explorer link and the payment list drift apart.
+    const mockTxId =
+      "7F2AC9D1E4B8A6350C1D9E2F4A7B8C3D5E6F1A2B3C4D5E6F7A8B9C0D1E2F3A4B";
+    return {
+      run: { status: "success" },
+      logs: [
+        {
+          id: "rl-1",
+          runId,
+          stepIndex: 0,
+          nodeId: "n4",
+          nodeType: "tool402",
+          status: "success",
+          output: {
+            txId: mockTxId,
+            amount: "0.065",
+            settledUsdMicros: 65000,
+            nodeName: "x402 Weather",
+            explorerURL: `https://allo.info/tx/${mockTxId}`,
+            response: {
+              location: "San Francisco, CA",
+              tempC: 14.2,
+              condition: "Partly cloudy",
+              windKph: 18,
+            },
+          },
+          durationMs: 1900,
+          ts: iso(6300),
+        },
+        {
+          id: "rl-2",
+          runId,
+          stepIndex: 1,
+          nodeId: "n2",
+          nodeType: "agent",
+          status: "success",
+          output: {
+            message:
+              "It's 14.2°C in San Francisco right now and partly cloudy, with " +
+              "winds around 18 km/h. Mild, but the wind makes it feel cooler — " +
+              "worth a light jacket if you're heading out.",
+            x402Payments: [{ txId: mockTxId, amount: "0.065" }],
+          },
+          durationMs: 4400,
+          ts: iso(1900),
+        },
+      ],
+    };
   },
 };
 

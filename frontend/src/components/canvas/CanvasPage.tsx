@@ -18,8 +18,10 @@ import {
 import { CanvasGraph } from "./CanvasGraph";
 import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
-import { LogDrawer } from "./LogDrawer";
+import { ConsolePanel, type ConsoleTab } from "./ConsolePanel";
 import { ResizeHandle } from "./ResizeHandle";
+import { ChatRail } from "./chat/ChatRail";
+import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
 import {
   PALETTE,
   INSPECTOR,
@@ -46,12 +48,12 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
+  const [dockTab, setDockTab] = useState<ConsoleTab>("logs");
   const [deployed, setDeployed] = useState(false);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [saveLabel, setSaveLabel] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
-  const [chatPrompt, setChatPrompt] = useState<string | null>(null); // null = closed
   const justLoaded = useRef(true);
 
   // -- Resizable side panels ------------------------------------------------
@@ -274,23 +276,51 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [workflow],
   );
 
+  // Selecting a node on a chat workflow reveals its config in the bottom
+  // dock's Inspector tab -- that dock is closed/on Logs by default, so a
+  // plain setSelectedId would select the node into a tab nobody's looking
+  // at. Non-chat workflows keep Inspector in the right rail, always visible,
+  // so they don't need this.
+  const selectNode = useCallback(
+    (id: string | null) => {
+      setSelectedId(id);
+      if (id && hasChatTrigger) {
+        setDockTab("inspector");
+        setLogOpen(true);
+      }
+    },
+    [hasChatTrigger],
+  );
+
+  // Returns the new run's id, or null when no run started. Callers that own a
+  // chat turn need that signal: a failure here only raises a toast, and
+  // without an answer the turn would sit on "working…" forever.
+  //
+  // The deployed check lives here, not only in onRun: the chat panel calls
+  // startRun directly, so keeping the guard upstream silently dropped
+  // "Deploy first to run" for every message sent from the console.
   const startRun = useCallback(
-    async (input?: Record<string, unknown>) => {
-      if (!workflow) return;
+    async (input?: Record<string, unknown>): Promise<string | null> => {
+      if (!workflow) return null;
+      if (!deployed) {
+        showToast("Deploy first to run");
+        return null;
+      }
       try {
         const res = await workflowsApi.run(workflow.id, input);
         setRunId(res.runId);
         setRunning(true);
         setLogOpen(true);
-        setChatPrompt(null);
         showToast(`Run started · ${res.runId.slice(0, 8)}…`);
+        return res.runId;
       } catch (err: unknown) {
         showToast(
           `Run failed · ${err instanceof Error ? err.message : "unknown error"}`,
         );
+        return null;
       }
     },
-    [workflow, showToast],
+    [workflow, deployed, showToast],
   );
 
   const onRun = useCallback(async () => {
@@ -309,7 +339,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       return;
     }
     if (hasChatTrigger) {
-      setChatPrompt(""); // open dialog
+      // A chat workflow is run by talking to it, not by a Run button: open
+      // the console so the conversation is where the message gets typed.
+      setLogOpen(true);
       return;
     }
     await startRun();
@@ -399,78 +431,144 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           }}
         />
 
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            position: "relative",
-            display: "flex",
-            flexDirection: "column",
+        <ChatConsoleHost
+          runId={runId}
+          running={running}
+          workflowId={workflow?.id}
+          onSendMessage={async (msg) =>
+            (await startRun({ message: msg })) !== null
+          }
+          onRunComplete={() => {
+            setRunning(false);
+            // A run that paid for an x402 call has just debited credits;
+            // re-read the balance so the topbar reflects the spend instead
+            // of the pre-run figure.
+            void refreshCredits();
           }}
         >
-          <CanvasGraph
-            workflow={workflow}
-            setWorkflow={setWorkflowNN}
-            selectedId={selectedId}
-            setSelectedId={setSelectedId}
-            deployed={deployed}
-            running={running}
-            attachedSummaries={attachedSummaries}
-          />
-          {/* key remounts the drawer per run, so logs/elapsed/done reset via
-              initial state instead of a setState cascade inside its effect. */}
-          <LogDrawer
-            key={runId ?? "idle"}
-            workflowId={workflow?.id}
-            open={logOpen}
-            onToggle={() => setLogOpen((o) => !o)}
-            runId={runId}
-            running={running}
-            onRunComplete={() => {
-              setRunning(false);
-              // A run that paid for an x402 call has just debited credits;
-              // re-read the balance so the topbar reflects the spend instead
-              // of the pre-run figure.
-              void refreshCredits();
-            }}
-          />
-        </div>
+          {(chat) => (
+            <>
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  position: "relative",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <CanvasGraph
+                  workflow={workflow}
+                  setWorkflow={setWorkflowNN}
+                  selectedId={selectedId}
+                  setSelectedId={selectNode}
+                  deployed={deployed}
+                  running={running}
+                  attachedSummaries={attachedSummaries}
+                />
+                <ConsolePanel
+                  open={logOpen}
+                  onToggle={() => setLogOpen((o) => !o)}
+                  runId={runId}
+                  running={running}
+                  logs={chat.logs}
+                  elapsed={chat.elapsed}
+                  done={chat.done}
+                  leaseId={chat.leaseId}
+                  tab={dockTab}
+                  onTabChange={setDockTab}
+                  inspectorNode={
+                    hasChatTrigger ? (
+                      <Inspector
+                        selected={selected}
+                        workflowId={workflow.id}
+                        onUpdate={onUpdate}
+                        onDelete={onDelete}
+                        onClose={() => setSelectedId(null)}
+                        width="100%"
+                      />
+                    ) : undefined
+                  }
+                />
+              </div>
 
-        <ResizeHandle
-          side="right"
-          value={inspectorW}
-          min={INSPECTOR.min}
-          max={INSPECTOR.max}
-          ariaLabel="Resize inspector panel"
-          onChange={resizeInspector}
-          onCommit={persistWidths}
-          onReset={() => {
-            setInspectorW(INSPECTOR.default);
-            persistWidths();
-          }}
-        />
-        <Inspector
-          selected={selected}
-          workflowId={workflow.id}
-          onUpdate={onUpdate}
-          onDelete={onDelete}
-          onClose={() => setSelectedId(null)}
-          width={inspectorW}
-        />
+              <ResizeHandle
+                side="right"
+                value={inspectorW}
+                min={INSPECTOR.min}
+                max={INSPECTOR.max}
+                ariaLabel={
+                  hasChatTrigger ? "Resize chat panel" : "Resize inspector panel"
+                }
+                onChange={resizeInspector}
+                onCommit={persistWidths}
+                onReset={() => {
+                  setInspectorW(INSPECTOR.default);
+                  persistWidths();
+                }}
+              />
+              {hasChatTrigger ? (
+                <ChatRail
+                  session={chat.session}
+                  onSend={chat.handleSend}
+                  busy={chat.busy}
+                  onShowLogs={() => {
+                    setDockTab("logs");
+                    setLogOpen(true);
+                  }}
+                  width={inspectorW}
+                />
+              ) : (
+                <Inspector
+                  selected={selected}
+                  workflowId={workflow.id}
+                  onUpdate={onUpdate}
+                  onDelete={onDelete}
+                  onClose={() => setSelectedId(null)}
+                  width={inspectorW}
+                />
+              )}
+            </>
+          )}
+        </ChatConsoleHost>
       </div>
 
       {toast && <Toast message={toast} />}
-
-      {chatPrompt !== null && (
-        <ChatRunModal
-          value={chatPrompt}
-          onChange={setChatPrompt}
-          onSubmit={(msg) => startRun({ message: msg })}
-          onClose={() => setChatPrompt(null)}
-        />
-      )}
     </div>
   );
+}
+
+// ── Chat/console state host ──────────────────────────────────────────────
+// Owns the single useChatConsole call (SSE + chat session) that the chat
+// rail and the bottom dock's log list both read from, so they share one
+// subscription instead of racing two independent ones. Deliberately never
+// keyed on runId: this used to remount per run, which also tore down and
+// rebuilt everything nested inside it -- including CanvasGraph, wiping the
+// user's pan/zoom on every single Run. useRunTranscript now resets its own
+// per-run state explicitly instead (see its SSE-connect effect).
+function ChatConsoleHost({
+  runId,
+  running,
+  onRunComplete,
+  workflowId,
+  onSendMessage,
+  children,
+}: {
+  runId: string | null;
+  running: boolean;
+  onRunComplete: () => void;
+  workflowId?: string;
+  onSendMessage?: (text: string) => Promise<boolean>;
+  children: (chat: ChatConsole) => React.ReactNode;
+}) {
+  const chat = useChatConsole({
+    runId,
+    running,
+    onRunComplete,
+    workflowId,
+    onSendMessage,
+  });
+  return <>{children(chat)}</>;
 }
 
 // ── Topbar ─────────────────────────────────────────────────────────────────
@@ -684,148 +782,6 @@ function Stat({
           </span>
         )}
       </span>
-    </div>
-  );
-}
-
-// ── Chat Run Modal ──────────────────────────────────────────────────────────
-function ChatRunModal({
-  value,
-  onChange,
-  onSubmit,
-  onClose,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: (msg: string) => void;
-  onClose: () => void;
-}) {
-  const submit = () => {
-    if (value.trim()) onSubmit(value.trim());
-  };
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(8,7,12,0.7)",
-        backdropFilter: "blur(4px)",
-        zIndex: 100,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        style={{
-          width: 480,
-          background: "var(--bg-elev-2)",
-          border: "1px solid var(--border-strong)",
-          borderRadius: 12,
-          padding: 24,
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: "var(--fg)" }}>
-              Start run
-            </div>
-            <div
-              style={{
-                fontFamily: "var(--font-mono)",
-                fontSize: 10,
-                color: "var(--fg-dim)",
-                marginTop: 2,
-              }}
-            >
-              chat trigger · type your message below
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--fg-muted)",
-              cursor: "pointer",
-              fontSize: 16,
-              padding: 4,
-            }}
-          >
-            ✕
-          </button>
-        </div>
-        <textarea
-          autoFocus
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
-          }}
-          placeholder="e.g. What's the weather in Tokyo right now?"
-          style={{
-            width: "100%",
-            minHeight: 100,
-            padding: "10px 12px",
-            background: "var(--bg)",
-            border: "1px solid var(--border)",
-            borderRadius: "var(--r-2)",
-            color: "var(--fg)",
-            fontSize: 13,
-            fontFamily: "var(--font-sans)",
-            resize: "vertical",
-            outline: "none",
-            lineHeight: 1.6,
-            boxSizing: "border-box",
-          }}
-        />
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 10,
-              color: "var(--fg-dim)",
-            }}
-          >
-            ⌘ Enter to run
-          </span>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={onClose} style={{ ...ghostBtnSm, height: 32 }}>
-              Cancel
-            </button>
-            <button
-              onClick={submit}
-              disabled={!value.trim()}
-              style={{
-                ...primaryBtnStyle,
-                height: 32,
-                opacity: !value.trim() ? 0.5 : 1,
-              }}
-            >
-              <IconPlay size={10} /> Run workflow
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
