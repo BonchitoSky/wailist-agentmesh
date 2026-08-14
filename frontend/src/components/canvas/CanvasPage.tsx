@@ -49,6 +49,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [dockTab, setDockTab] = useState<ConsoleTab>("logs");
+  const [manualBuildMode, setManualBuildMode] = useState(false);
   const [deployed, setDeployed] = useState(false);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -276,6 +277,15 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [workflow],
   );
 
+  // No provider node yet means there is nothing to run -- chat always
+  // builds in that state. Once one exists, the Build/Run pill decides.
+  const hasProviderNode = useMemo(
+    () => workflow?.nodes.some((n) => n.type === "provider") ?? false,
+    [workflow],
+  );
+
+  const buildMode = !hasProviderNode || manualBuildMode;
+
   // Selecting a node on a chat workflow reveals its config in the bottom
   // dock's Inspector tab -- that dock is closed/on Logs by default, so a
   // plain setSelectedId would select the node into a tab nobody's looking
@@ -321,6 +331,26 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       }
     },
     [workflow, deployed, showToast],
+  );
+
+  const startBuild = useCallback(
+    async (text: string): Promise<{ ok: boolean; reply?: string }> => {
+      if (!workflow) return { ok: false };
+      try {
+        const res = await workflowsApi.build(workflow.id, text);
+        setWorkflow((wf) =>
+          wf
+            ? { ...wf, nodes: res.workflow.nodes, edges: res.workflow.edges }
+            : wf,
+        );
+        return { ok: true, reply: res.reply };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "unknown error";
+        showToast(`Build failed · ${message}`);
+        return { ok: false, reply: `Could not update the workflow: ${message}` };
+      }
+    },
+    [workflow, showToast],
   );
 
   const onRun = useCallback(async () => {
@@ -439,6 +469,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           runId={runId}
           running={running}
           workflowId={workflow?.id}
+          buildMode={buildMode}
+          onBuildMessage={startBuild}
           onSendMessage={async (msg) =>
             (await startRun({ message: msg })) !== null
           }
@@ -521,6 +553,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                     setLogOpen(true);
                   }}
                   width={inspectorW}
+                  buildMode={buildMode}
+                  canToggleBuildMode={hasProviderNode}
+                  onToggleBuildMode={() => setManualBuildMode((v) => !v)}
                 />
               ) : (
                 <Inspector
@@ -554,6 +589,8 @@ function ChatConsoleHost({
   onRunComplete,
   workflowId,
   onSendMessage,
+  buildMode,
+  onBuildMessage,
   children,
 }: {
   runId: string | null;
@@ -561,6 +598,8 @@ function ChatConsoleHost({
   onRunComplete: () => void;
   workflowId?: string;
   onSendMessage?: (text: string) => Promise<boolean>;
+  buildMode?: boolean;
+  onBuildMessage?: (text: string) => Promise<{ ok: boolean; reply?: string }>;
   children: (chat: ChatConsole) => React.ReactNode;
 }) {
   const chat = useChatConsole({
@@ -569,6 +608,8 @@ function ChatConsoleHost({
     onRunComplete,
     workflowId,
     onSendMessage,
+    buildMode,
+    onBuildMessage,
   });
   return <>{children(chat)}</>;
 }

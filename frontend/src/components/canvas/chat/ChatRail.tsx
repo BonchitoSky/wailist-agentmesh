@@ -13,6 +13,12 @@ interface ChatRailProps {
   busy: boolean;
   onShowLogs?: () => void;
   width?: number;
+  // Build mode edits the graph instead of running the deployed agent.
+  // canToggleBuildMode is false until a provider node exists -- before
+  // that, build mode is forced on and there's nothing to toggle.
+  buildMode?: boolean;
+  canToggleBuildMode?: boolean;
+  onToggleBuildMode?: () => void;
 }
 
 export function ChatRail({
@@ -21,6 +27,9 @@ export function ChatRail({
   busy,
   onShowLogs,
   width = 320,
+  buildMode = false,
+  canToggleBuildMode = false,
+  onToggleBuildMode,
 }: ChatRailProps) {
   return (
     <div
@@ -40,6 +49,9 @@ export function ChatRail({
           padding: "14px 16px",
           borderBottom: "1px solid var(--border)",
           flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
         }}
       >
         <span
@@ -53,6 +65,37 @@ export function ChatRail({
         >
           chat
         </span>
+        {canToggleBuildMode ? (
+          <button
+            onClick={onToggleBuildMode}
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 9.5,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              padding: "2px 8px",
+              borderRadius: 999,
+              border: `1px solid ${buildMode ? "var(--accent)" : "var(--border)"}`,
+              color: buildMode ? "var(--accent)" : "var(--fg-dim)",
+              background: "transparent",
+              cursor: "pointer",
+            }}
+          >
+            {buildMode ? "Build" : "Run"}
+          </button>
+        ) : buildMode ? (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 9.5,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              color: "var(--accent)",
+            }}
+          >
+            build
+          </span>
+        ) : null}
       </div>
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
         <ChatPane
