@@ -153,17 +153,25 @@ func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 		// "message". Same {{ result }} / {{ result.field }} syntax either
 		// way (expandTemplate); empty means send rc.Message() verbatim, as
 		// before.
-		body := rc.Message()
-		if tmpl := configVal(node, "httpBodyTemplate", ""); tmpl != "" {
-			body = expandTemplate(tmpl, rc)
+		//
+		// DELETE is the exception: unlike POST/PUT/PATCH it historically
+		// sent no body at all, and plenty of APIs reject or mishandle a
+		// DELETE that carries one. Only attach a body to DELETE when the
+		// node explicitly opts in via httpBodyTemplate -- never default it
+		// to rc.Message() the way the other three methods do.
+		tmpl := configVal(node, "httpBodyTemplate", "")
+		switch {
+		case tmpl != "":
+			bodyReader = bytes.NewReader([]byte(expandTemplate(tmpl, rc)))
+		case method != http.MethodDelete:
+			bodyReader = bytes.NewReader([]byte(rc.Message()))
 		}
-		bodyReader = bytes.NewReader([]byte(body))
 	}
 	req, err := http.NewRequestWithContext(ctx, method, node.URL, bodyReader)
 	if err != nil {
 		return nil, err
 	}
-	if httpMethodsWithBody[method] {
+	if bodyReader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	// Custom headers: a JSON object of header name -> value, e.g.

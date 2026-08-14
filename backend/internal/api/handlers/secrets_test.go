@@ -40,6 +40,14 @@ func TestEncryptField_EmptyPreservesExisting(t *testing.T) {
 	}
 }
 
+func TestEncryptField_ClearSentinelWipesExisting(t *testing.T) {
+	existing := encryptField("original-key", "", testEncKey)
+	cleared := encryptField(ClearSentinel, existing, testEncKey)
+	if cleared != "" {
+		t.Errorf("clear sentinel: want empty got %q", cleared)
+	}
+}
+
 func TestEncryptField_AlreadyEncryptedPassesThrough(t *testing.T) {
 	blob := encryptField("key", "", testEncKey)
 	again := encryptField(blob, "", testEncKey)
@@ -235,6 +243,19 @@ func TestEncryptNodes_NilSecretsMapPreservesExisting(t *testing.T) {
 	result := encryptNodes(incoming, testEncKey, existing)
 	if result[0].Secrets["slackWebhookURL"] != encPrefix+"existingcipher" {
 		t.Errorf("omitted secrets map should preserve existing map: got %v", result[0].Secrets)
+	}
+}
+
+func TestEncryptNodes_SecretsMapClearSentinelWipesExistingKey(t *testing.T) {
+	existing := []models.WorkflowNode{
+		{ID: "n1", Secrets: map[string]string{"httpHeadersJSON": encPrefix + "existingcipher"}},
+	}
+	incoming := []models.WorkflowNode{
+		{ID: "n1", Secrets: map[string]string{"httpHeadersJSON": ClearSentinel}},
+	}
+	result := encryptNodes(incoming, testEncKey, existing)
+	if result[0].Secrets["httpHeadersJSON"] != "" {
+		t.Errorf("clear sentinel should wipe the existing per-key blob: got %q", result[0].Secrets["httpHeadersJSON"])
 	}
 }
 

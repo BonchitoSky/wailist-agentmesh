@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/agentmesh/backend/internal/models"
@@ -287,6 +288,17 @@ func getCalendlyEvents(ctx context.Context, node models.WorkflowNode, rc RunCont
 	return getJSON(req, "Calendly")
 }
 
+// shopifyDomainPattern mirrors jiraDomainPattern's reasoning (connectors_
+// devtools.go): shopifyShopDomain is user-supplied config interpolated
+// directly into the request host (along with the real Shopify access
+// token, via X-Shopify-Access-Token), so it must be validated before use --
+// otherwise a crafted value on a copied/imported workflow could redirect
+// the request, and the token with it, to an attacker-controlled host.
+// Unlike Jira/Zendesk's bare subdomain, shopifyShopDomain is already a full
+// host, so this anchors the whole string to the real "*.myshopify.com"
+// shape rather than just checking character set.
+var shopifyDomainPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$`)
+
 // shopifyAPIBase is overridden in tests via SetShopifyAPIBaseForTest --
 // normally "https://{shop}" is built per-node (shopifyShopDomain is already
 // a full host like "mystore.myshopify.com"), so the test override replaces
@@ -310,6 +322,9 @@ func sendShopify(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 	orderID := configVal(node, "shopifyOrderID", "")
 	if shop == "" || orderID == "" {
 		return "shopify_skipped_missing_config", ErrActionSkipped
+	}
+	if !shopifyDomainPattern.MatchString(shop) {
+		return "shopify_skipped_invalid_domain", ErrActionSkipped
 	}
 	base := shopifyAPIBase
 	if base == "" {

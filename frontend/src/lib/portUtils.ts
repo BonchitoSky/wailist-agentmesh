@@ -92,14 +92,19 @@ export function isValidConnection(
   to: WorkflowNode,
   toPort: PortName,
 ): boolean {
-  // attach: provider/tool/tool402 → agent bottom ports
-  if (
-    (from.type === "provider" ||
-      from.type === "tool" ||
-      from.type === "tool402") &&
-    to.type === "agent"
-  ) {
-    return toPort === "model" || toPort === "tools";
+  // attach: provider/tool/tool402 → agent bottom ports. Gated on toPort
+  // first, not just from/to type -- tool and tool402 are ALSO valid flow
+  // sources into an agent's "in" port (see the flow branch below), so
+  // matching on from/to type alone would swallow that case here and return
+  // false before the flow branch ever runs, even though it's listed as
+  // valid there.
+  if (toPort === "model" || toPort === "tools") {
+    return (
+      (from.type === "provider" ||
+        from.type === "tool" ||
+        from.type === "tool402") &&
+      to.type === "agent"
+    );
   }
   // flow: trigger/agent/action/tool/tool402/tendril → agent/action/end/tool/
   // tool402/tendril (in port). tool402 and tool are included on both sides

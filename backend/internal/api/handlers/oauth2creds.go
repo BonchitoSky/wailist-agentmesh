@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -159,7 +160,8 @@ func (d *Deps) OAuth2CredCallback(w http.ResponseWriter, r *http.Request) {
 
 	cookieName := oauth2CredStateCookie(name)
 	cookie, err := r.Cookie(cookieName)
-	if err != nil || cookie.Value == "" || cookie.Value != r.URL.Query().Get("state") {
+	if err != nil || cookie.Value == "" ||
+		subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(r.URL.Query().Get("state"))) != 1 {
 		d.oauth2CredRedirectFail(w, r, "invalid_state")
 		return
 	}
@@ -256,6 +258,7 @@ func (d *Deps) OAuth2CredDelete(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	oauthcred.ForgetCredential(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 

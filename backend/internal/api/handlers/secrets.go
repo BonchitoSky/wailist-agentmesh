@@ -13,6 +13,14 @@ const encPrefix = "enc:"
 // The frontend sends it back unchanged when the user hasn't touched the field.
 const EncSentinel = "__enc__"
 
+// ClearSentinel is what the frontend sends to explicitly blank out a secret
+// field -- distinct from "", which encryptField (below) treats as "no
+// change, keep whatever's already saved." Without a distinct sentinel,
+// removing every entry from a multi-value secret (e.g. the HTTP tool
+// node's custom-headers editor) serializes to "" and silently fails to
+// revoke the previously-saved value server-side.
+const ClearSentinel = "__clear__"
+
 // encryptNodes returns a copy of nodes with apiKey/emailApiKey encrypted.
 // existing is the prior DB state — used to preserve the encrypted blob when
 // the frontend sends back the sentinel (meaning "don't change this key").
@@ -53,7 +61,11 @@ func encryptSecretsMap(newVals, existingVals map[string]string, key string) map[
 
 // encryptField encrypts a single secret field.
 // If newVal is the sentinel or empty, the existing encrypted blob is preserved.
+// If newVal is ClearSentinel, the field is explicitly wiped instead.
 func encryptField(newVal, existingEnc, key string) string {
+	if newVal == ClearSentinel {
+		return ""
+	}
 	if newVal == EncSentinel || newVal == "" {
 		return existingEnc // keep whatever was already there
 	}

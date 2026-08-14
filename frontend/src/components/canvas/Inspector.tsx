@@ -487,6 +487,28 @@ const monoInputStyle: React.CSSProperties = {
 // AgentMesh's original single JSON-textarea field. Still serializes to the
 // same node.secrets.httpHeadersJSON JSON-object string the backend already
 // reads (tool.go's callHTTP) -- purely a client-side editing upgrade.
+function parseHttpHeaderRows(
+  raw: string | undefined,
+): { key: string; value: string }[] {
+  // Once encrypted, the plaintext never comes back to the client -- same
+  // sentinel semantics as SecretField above -- so editing starts a fresh
+  // row set rather than attempting to decode "__enc__" as JSON.
+  if (!raw || raw === "__enc__") return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.entries(parsed).map(([key, value]) => ({
+        key,
+        value: String(value),
+      }));
+    }
+  } catch {
+    // Not valid JSON -- fall through to an empty row set rather than
+    // crashing the Inspector on unexpected stored content.
+  }
+  return [];
+}
+
 function HttpHeadersField({
   node,
   onUpdate,
@@ -497,37 +519,37 @@ function HttpHeadersField({
   const raw = node.secrets?.httpHeadersJSON;
   const isEncrypted = raw === "__enc__";
 
-  // Once encrypted, the plaintext never comes back to the client -- same
-  // sentinel semantics as SecretField above -- so editing starts a fresh
-  // row set rather than attempting to decode "__enc__" as JSON.
-  let rows: { key: string; value: string }[] = [];
-  if (!isEncrypted && raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        rows = Object.entries(parsed).map(([key, value]) => ({
-          key,
-          value: String(value),
-        }));
-      }
-    } catch {
-      // Not valid JSON -- fall through to an empty row set rather than
-      // crashing the Inspector on unexpected stored content.
-    }
+  // Rows live in local state, not derived fresh from node.secrets on every
+  // render -- a freshly-added blank row has no key yet, so commit() (below)
+  // never serializes it into httpHeadersJSON, and re-deriving from that
+  // stripped-down JSON on the next render would make the blank row vanish
+  // before the user can type into it. Only re-synced when a different node
+  // is selected (node.id changes); the user's own edits flow through
+  // setRows directly instead of round-tripping through node.secrets.
+  const [rows, setRows] = useState(() => parseHttpHeaderRows(raw));
+  const [syncedNodeID, setSyncedNodeID] = useState(node.id);
+  if (syncedNodeID !== node.id) {
+    setSyncedNodeID(node.id);
+    setRows(parseHttpHeaderRows(raw));
   }
 
   const commit = (next: { key: string; value: string }[]) => {
+    setRows(next);
     const obj: Record<string, string> = {};
     for (const r of next) {
       if (r.key.trim()) obj[r.key.trim()] = r.value;
     }
+    // "" is encryptField's (backend/internal/api/handlers/secrets.go)
+    // sentinel for "no change, keep whatever's already saved" -- so an
+    // empty header set can never be sent as "", or removing every header
+    // in the UI would silently leave the old encrypted set intact
+    // server-side instead of actually clearing it. "__clear__" is the
+    // distinct sentinel that means "yes, really clear this."
+    const serialized =
+      Object.keys(obj).length > 0 ? JSON.stringify(obj) : "__clear__";
     onUpdate({
       ...node,
-      secrets: {
-        ...node.secrets,
-        httpHeadersJSON:
-          Object.keys(obj).length > 0 ? JSON.stringify(obj) : "",
-      },
+      secrets: { ...node.secrets, httpHeadersJSON: serialized },
     });
   };
 

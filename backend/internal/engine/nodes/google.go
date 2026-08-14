@@ -105,7 +105,10 @@ func googleAccessToken(ctx context.Context, node models.WorkflowNode, cfg Google
 	if cred.UserID != cfg.UserID {
 		return "", fmt.Errorf("google: connected account does not belong to this user")
 	}
-	return oauthcred.GetValidAccessToken(ctx, cfg.Store, cfg.EncryptKey, credID, oauthcred.ProviderConfig{
+	if cred.Provider != "google" {
+		return "", fmt.Errorf("google: connected account is not a Google credential")
+	}
+	return oauthcred.GetValidAccessToken(ctx, cfg.Store, cfg.EncryptKey, cred, oauthcred.ProviderConfig{
 		TokenURL:     googleTokenEndpoint,
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,

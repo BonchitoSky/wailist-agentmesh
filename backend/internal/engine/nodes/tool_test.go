@@ -169,6 +169,54 @@ func TestHTTPTool_AppliesBodyTemplate(t *testing.T) {
 	}
 }
 
+func TestHTTPTool_DeleteWithoutTemplateSendsNoBody(t *testing.T) {
+	var gotMethod string
+	var gotContentLength int64
+	var gotContentType string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotContentLength = r.ContentLength
+		gotContentType = r.Header.Get("Content-Type")
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	node := models.WorkflowNode{ID: "t11", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "DELETE"}
+	rc := engine.NewRunContext("r1", []byte(`{"name":"x"}`))
+	if _, err := nodes.ExecuteTool(context.Background(), node, rc); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("want DELETE, got %s", gotMethod)
+	}
+	if gotContentLength > 0 {
+		t.Errorf("want no body on a DELETE without an explicit httpBodyTemplate, got Content-Length %d", gotContentLength)
+	}
+	if gotContentType != "" {
+		t.Errorf("want no Content-Type header on a bodyless DELETE, got %q", gotContentType)
+	}
+}
+
+func TestHTTPTool_DeleteWithTemplateSendsBody(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	node := models.WorkflowNode{
+		ID: "t12", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "DELETE",
+		Config: map[string]string{"httpBodyTemplate": `{"reason":"cleanup"}`},
+	}
+	rc := engine.NewRunContext("r1", nil)
+	if _, err := nodes.ExecuteTool(context.Background(), node, rc); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody != `{"reason":"cleanup"}` {
+		t.Errorf("want the explicit template body on an opted-in DELETE, got %q", gotBody)
+	}
+}
+
 func TestHTTPTool_NoBodyTemplateSendsRawMessageAsBefore(t *testing.T) {
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

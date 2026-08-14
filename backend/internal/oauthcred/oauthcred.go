@@ -62,26 +62,47 @@ func lockFor(credentialID string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
-// GetValidAccessToken returns a ready-to-use bearer token for credentialID,
+// ForgetCredential drops credentialID's refresh mutex once its row is gone
+// (disconnected, or replaced by a reconnect's upsert). Without this,
+// refreshLocks grows by one entry per credential ID ever seen and never
+// shrinks -- a slow unbounded leak over a long-running process with repeated
+// connect/disconnect cycles.
+func ForgetCredential(credentialID string) {
+	refreshLocks.Delete(credentialID)
+}
+
+// GetValidAccessToken returns a ready-to-use bearer token for cred,
 // transparently refreshing and persisting it first if it's expired (or
 // close to it). This is the one function a connector node actually calls —
 // it never sees ciphertext or the refresh mechanics.
-func GetValidAccessToken(ctx context.Context, store Store, encKey, credentialID string, cfg ProviderConfig) (string, error) {
-	mu := lockFor(credentialID)
-	mu.Lock()
-	defer mu.Unlock()
-
-	cred, err := store.GetOAuthCredential(ctx, credentialID)
-	if err != nil {
-		return "", fmt.Errorf("oauth credential not found: %w", err)
-	}
+//
+// cred is normally already in hand: a caller that also needs to check
+// credential ownership (e.g. nodes/google.go) has already fetched the row
+// for that check, and passing it in here instead of a bare id avoids a
+// second identical DB round-trip on every node execution. The still-valid
+// case below trusts that pre-fetched row outright; only the expired/refresh
+// path re-fetches, and does so under the lock, since a concurrent refresh
+// may have rotated the tokens since cred was read.
+func GetValidAccessToken(ctx context.Context, store Store, encKey string, cred models.OAuthCredential, cfg ProviderConfig) (string, error) {
 	if time.Now().Add(expiryLeeway).Before(cred.ExpiresAt) {
 		return wallet.Decrypt(cred.AccessTokenEnc, encKey)
 	}
-	if cred.RefreshTokenEnc == "" {
+
+	mu := lockFor(cred.ID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	fresh, err := store.GetOAuthCredential(ctx, cred.ID)
+	if err != nil {
+		return "", fmt.Errorf("oauth credential not found: %w", err)
+	}
+	if time.Now().Add(expiryLeeway).Before(fresh.ExpiresAt) {
+		return wallet.Decrypt(fresh.AccessTokenEnc, encKey)
+	}
+	if fresh.RefreshTokenEnc == "" {
 		return "", fmt.Errorf("oauth connection has expired and has no refresh token -- reconnect the account")
 	}
-	refreshToken, err := wallet.Decrypt(cred.RefreshTokenEnc, encKey)
+	refreshToken, err := wallet.Decrypt(fresh.RefreshTokenEnc, encKey)
 	if err != nil {
 		return "", fmt.Errorf("decrypt refresh token: %w", err)
 	}
@@ -94,7 +115,7 @@ func GetValidAccessToken(ctx context.Context, store Store, encKey, credentialID 
 		return "", err
 	}
 	expiresAt := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
-	if err := store.UpdateOAuthCredentialTokens(ctx, credentialID, accessEnc, refreshEnc, expiresAt); err != nil {
+	if err := store.UpdateOAuthCredentialTokens(ctx, cred.ID, accessEnc, refreshEnc, expiresAt); err != nil {
 		return "", fmt.Errorf("persist refreshed token: %w", err)
 	}
 	return tok.AccessToken, nil

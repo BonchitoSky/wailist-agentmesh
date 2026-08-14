@@ -371,6 +371,34 @@ func TestShopifyAction_AddsOrderNoteWithAccessTokenHeader(t *testing.T) {
 	}
 }
 
+func TestShopifyAction_SkipsWhenDomainInvalid(t *testing.T) {
+	var requestReceived bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestReceived = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	nodes.SetShopifyAPIBaseForTest(srv.URL)
+	defer nodes.SetShopifyAPIBaseForTest("")
+
+	node := models.WorkflowNode{
+		ID: "sh4", Type: models.NodeTypeAction, Template: "shopify",
+		Secrets: map[string]string{"shopifyAccessToken": "shpat_123"},
+		Config:  map[string]string{"shopifyShopDomain": "evil.com", "shopifyOrderID": "9001"},
+	}
+	rc := engine.NewRunContext("r1", nil)
+	result, err := nodes.ExecuteAction(context.Background(), node, rc)
+	if !errors.Is(err, nodes.ErrActionSkipped) {
+		t.Fatalf("want ErrActionSkipped, got %v", err)
+	}
+	if result != "shopify_skipped_invalid_domain" {
+		t.Errorf("want 'shopify_skipped_invalid_domain', got %v", result)
+	}
+	if requestReceived {
+		t.Error("expected no HTTP request to be dispatched for an invalid domain")
+	}
+}
+
 func TestShopifyAction_SkipsWhenMissingConfig(t *testing.T) {
 	node := models.WorkflowNode{
 		ID: "sh1", Type: models.NodeTypeAction, Template: "shopify",

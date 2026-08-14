@@ -1228,16 +1228,27 @@ func scanOAuthCredential(row pgx.Row) (models.OAuthCredential, error) {
 	return c, err
 }
 
-// InsertOAuthCredential persists a newly-connected account. accessTokenEnc/
-// refreshTokenEnc must already be encrypted -- this layer never sees a raw
-// token, mirroring how encryptNodes/decryptNodes keep node secrets out of
-// the store package (here it's the caller's job instead, since the caller
-// is the one holding the encryption key during the OAuth callback).
+// InsertOAuthCredential persists a newly-connected account, or replaces the
+// existing one in place (same id) if this user already has a credential for
+// the same provider+account_label -- reconnecting the same account must not
+// pile up duplicate rows with stale, still-valid refresh tokens, and must
+// not change the row's id, since workflow nodes reference credentials by id.
+// accessTokenEnc/refreshTokenEnc must already be encrypted -- this layer
+// never sees a raw token, mirroring how encryptNodes/decryptNodes keep node
+// secrets out of the store package (here it's the caller's job instead,
+// since the caller is the one holding the encryption key during the OAuth
+// callback).
 func (s *Store) InsertOAuthCredential(ctx context.Context, c models.OAuthCredential) (models.OAuthCredential, error) {
 	return scanOAuthCredential(s.pool.QueryRow(ctx, `
 		INSERT INTO oauth_credentials (user_id, provider, account_label, access_token_enc,
 			refresh_token_enc, scopes, expires_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (user_id, provider, account_label) DO UPDATE
+		   SET access_token_enc = EXCLUDED.access_token_enc,
+		       refresh_token_enc = EXCLUDED.refresh_token_enc,
+		       scopes = EXCLUDED.scopes,
+		       expires_at = EXCLUDED.expires_at,
+		       updated_at = now()
 		RETURNING `+oauthCredentialCols,
 		c.UserID, c.Provider, c.AccountLabel, c.AccessTokenEnc,
 		c.RefreshTokenEnc, c.Scopes, c.ExpiresAt))

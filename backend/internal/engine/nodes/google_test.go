@@ -54,7 +54,7 @@ func googleTestSetup(t *testing.T, userID string) (nodes.GoogleConfig, map[strin
 		t.Fatal(err)
 	}
 	store := &fakeOAuthStore{creds: map[string]models.OAuthCredential{
-		"cred1": {ID: "cred1", UserID: userID, AccessTokenEnc: accessEnc, ExpiresAt: time.Now().Add(time.Hour)},
+		"cred1": {ID: "cred1", UserID: userID, Provider: "google", AccessTokenEnc: accessEnc, ExpiresAt: time.Now().Add(time.Hour)},
 	}}
 	cfg := nodes.GoogleConfig{Store: store, EncryptKey: googleTestKey, UserID: userID}
 	return cfg, map[string]string{"oauthCredentialID": "cred1"}
@@ -76,6 +76,25 @@ func TestGoogleAccessToken_ErrorsWhenNoCredentialSelected(t *testing.T) {
 	_, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
 	if err == nil || !strings.Contains(err.Error(), "no connected account") {
 		t.Fatalf("want 'no connected account' error, got %v", err)
+	}
+}
+
+// Dormant today since only "google" is ever registered in oauth_credentials,
+// but the moment a second provider shares that table, a node's
+// oauthCredentialID must not be pointable at one of the user's own
+// credentials for a DIFFERENT provider just because the user ID matches.
+func TestGoogleAccessToken_DeniesNonGoogleCredential(t *testing.T) {
+	cfg, config := googleTestSetup(t, "u1")
+	store := cfg.Store.(*fakeOAuthStore)
+	cred := store.creds["cred1"]
+	cred.Provider = "slack"
+	store.creds["cred1"] = cred
+
+	node := models.WorkflowNode{ID: "g3b", Type: models.NodeTypeGoogle, Template: "gmail_list", Config: config}
+	rc := engine.NewRunContext("r1", nil)
+	_, err := nodes.ExecuteGoogle(context.Background(), node, rc, cfg)
+	if err == nil || !strings.Contains(err.Error(), "not a Google credential") {
+		t.Fatalf("want 'not a Google credential' error, got %v", err)
 	}
 }
 

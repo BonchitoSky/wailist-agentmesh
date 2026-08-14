@@ -76,7 +76,7 @@ func TestGetValidAccessToken_ReturnsDecryptedTokenWithoutRefreshingWhenStillVali
 	}
 	store := newFakeStore(cred)
 
-	got, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, "c1",
+	got, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, cred,
 		oauthcred.ProviderConfig{TokenURL: srv.URL})
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestGetValidAccessToken_RefreshesExpiredToken(t *testing.T) {
 	}
 	store := newFakeStore(cred)
 
-	got, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, "c2",
+	got, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, cred,
 		oauthcred.ProviderConfig{TokenURL: srv.URL, ClientID: "cid", ClientSecret: "csec"})
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestGetValidAccessToken_PreservesRefreshTokenWhenProviderOmitsANewOne(t *te
 	}
 	store := newFakeStore(cred)
 
-	if _, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, "c3",
+	if _, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, cred,
 		oauthcred.ProviderConfig{TokenURL: srv.URL}); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestGetValidAccessToken_ErrorsWhenExpiredWithNoRefreshToken(t *testing.T) {
 	}
 	store := newFakeStore(cred)
 
-	_, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, "c4",
+	_, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, cred,
 		oauthcred.ProviderConfig{})
 	if err == nil {
 		t.Fatal("want error when expired with no refresh token")
@@ -197,7 +197,7 @@ func TestGetValidAccessToken_SingleFlightsConcurrentRefreshes(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, "c5", cfg); err != nil {
+			if _, err := oauthcred.GetValidAccessToken(context.Background(), store, testKey, cred, cfg); err != nil {
 				t.Error(err)
 			}
 		}()
