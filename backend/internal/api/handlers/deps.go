@@ -76,6 +76,11 @@ type Deps struct {
 	// endpoints can build their own X402RelayConfig without going through a
 	// workflow run.
 	PlatformSpendWalletEncMnemonic string
+	// PlatformGeminiAPIKey powers the chat-driven workflow builder's
+	// meta-agent (nodes.BuildGraph) -- independent of engine.Runner's own
+	// platform-key map (main.go's runner.SetPlatformKeys call) since Deps
+	// has no access to Runner's private fields.
+	PlatformGeminiAPIKey           string
 	FacilitatorClient              *x402.FacilitatorClient
 	USDCAssetID                    uint64
 	RelayNetwork                   string
