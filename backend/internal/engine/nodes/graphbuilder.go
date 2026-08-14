@@ -219,10 +219,18 @@ func graphHasNode(graph *models.WorkflowGraph, id string) bool {
 }
 
 func graphToolDecls() []funcDecl {
+	// The legal keys are enumerated structurally from nodeFieldSetters rather
+	// than listed in prose: an OBJECT schema with no declared properties is
+	// rejected by some Gemini schema validators, and all five declarations go
+	// up in one tools array, so a rejection here would fail every build call.
+	fieldProperties := make(map[string]any, len(nodeFieldSetters))
+	for k := range nodeFieldSetters {
+		fieldProperties[k] = map[string]any{"type": "string"}
+	}
 	fieldsSchema := map[string]any{
 		"type":        "OBJECT",
-		"description": "Extra node fields, all optional strings. Recognized keys: systemPrompt, model, keyMode (byok|platform), apiKey, url, method, endpoint, price, unit, provider, description, emailTo, emailFrom, emailSubject, emailBody, emailProvider.",
-		"properties":  map[string]any{},
+		"description": "Extra node fields, all optional strings. keyMode is either \"byok\" or \"platform\".",
+		"properties":  fieldProperties,
 	}
 	return []funcDecl{
 		{

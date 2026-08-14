@@ -145,7 +145,11 @@ func (d *Deps) BuildWorkflow(w http.ResponseWriter, r *http.Request) {
 	maskedGraph := models.WorkflowGraph{Nodes: maskNodes(existing.Nodes), Edges: existing.Edges}
 	result, err := nodes.BuildGraph(r.Context(), d.PlatformGeminiAPIKey, body.Message, maskedGraph)
 	if err != nil {
-		respond.Error(w, http.StatusBadGateway, err.Error())
+		// The upstream text (a raw Gemini error body, keys and all) lands
+		// straight in the user's chat bubble if forwarded -- same anti-pattern
+		// DeleteWorkflow was already fixed for. Log it, say something plain.
+		log.Printf("build workflow %s: %v", id, err)
+		respond.Error(w, http.StatusBadGateway, "the workflow builder could not complete this request")
 		return
 	}
 
