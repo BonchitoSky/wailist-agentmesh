@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -334,11 +335,25 @@ func fetchGoogleAccountLabel(accessToken, userInfoURL string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// A non-2xx status (expired/invalid access_token, transient 5xx) must be
+	// treated as failure even if the body still happens to unmarshal cleanly
+	// (Google error responses are JSON objects too, just without an "email"
+	// field) -- returning (nil error, "") here instead of an error would
+	// skip the caller's whole label-collision fallback (reusing an existing
+	// single credential's label, or a random label as last resort) and
+	// silently store account_label = "", walking straight back into the
+	// exact upsert-key collision that fallback exists to prevent.
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("userinfo endpoint %d: %s", resp.StatusCode, string(body))
+	}
 	var info struct {
 		Email string `json:"email"`
 	}
 	if err := json.Unmarshal(body, &info); err != nil {
 		return "", err
+	}
+	if info.Email == "" {
+		return "", fmt.Errorf("userinfo response had no email")
 	}
 	return info.Email, nil
 }

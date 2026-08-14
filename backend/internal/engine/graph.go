@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"log"
 
 	"github.com/agentmesh/backend/internal/models"
 )
@@ -89,6 +90,8 @@ func BuildAttachMap(nodes []models.WorkflowNode, edges []models.WorkflowEdge) ma
 			if src.Type == models.NodeTypeProvider {
 				s := src
 				cfg.Provider = &s
+			} else {
+				log.Printf("engine: dropping model-attach edge %s->%s: source node type %q is not a Provider", e.From, e.To, src.Type)
 			}
 		case "tools":
 			// Only tool/tool402 nodes have real dispatch as an
@@ -105,6 +108,8 @@ func BuildAttachMap(nodes []models.WorkflowNode, edges []models.WorkflowEdge) ma
 			// request JSON with no server-side edge-kind/node-type check).
 			if src.Type == models.NodeTypeTool || src.Type == models.NodeTypeTool402 {
 				cfg.Tools = append(cfg.Tools, src)
+			} else {
+				log.Printf("engine: dropping tools-attach edge %s->%s: source node type %q is not a Tool/Tool402", e.From, e.To, src.Type)
 			}
 		}
 		result[e.To] = cfg

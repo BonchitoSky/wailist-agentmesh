@@ -1317,35 +1317,47 @@ func (s *Store) DeleteOAuthCredential(ctx context.Context, id string) error {
 // provider's refresh endpoint, and both write tokens back with no
 // coordination between them.
 //
-// A session-level Postgres advisory lock (not a row lock / FOR UPDATE) is
-// used deliberately: the refresh's actual work is an outbound HTTP call to
-// the OAuth provider, which can take seconds, and holding a real row lock
-// (or a transaction) open across that network round trip would tie up a
-// connection and risk lock-wait timeouts under load. An advisory lock keyed
-// by hashtext(id) only blocks other callers trying to lock that SAME
-// credential ID -- it doesn't touch the oauth_credentials row or table at
-// all, so it can be held for the whole check-refresh-persist sequence
-// without any other query contention. hashtext's 64-bit collision space
-// makes two different credential UUIDs hashing to the same lock key
-// astronomically unlikely; a false-positive collision would only ever cause
-// two unrelated refreshes to serialize behind each other, never a
-// correctness issue.
+// Uses pg_advisory_XACT_lock (transaction-scoped), not the session-scoped
+// pg_advisory_lock/unlock pair a first version of this used -- this project
+// connects through Supabase's transaction-mode pooler in production
+// (CLAUDE.md mandates port 6543; db.go's DefaultQueryExecMode workaround
+// exists for the same PgBouncer transaction-mode reality). Under
+// transaction-mode pooling, a client is only guaranteed the SAME real
+// Postgres backend for the duration of one explicit transaction -- two bare
+// Exec calls with no transaction between them (the session-scoped version's
+// lock and unlock) can silently land on two different backends. The unlock
+// would then no-op against the wrong backend and the lock would never
+// actually release, hanging every future refresh of that credential (or
+// anything hashing to the same key) forever. A transaction-scoped advisory
+// lock sidesteps this entirely: it's automatically released when the
+// transaction ends (commit OR rollback), with no separate unlock statement
+// that could be misrouted.
 //
-// release must be called (via defer) once the caller is done, on the same
-// pooled connection the lock was acquired on -- pg_advisory_lock is
-// session-scoped, so unlocking from a different connection would silently
-// no-op and leak the lock until that connection closes.
+// This does mean the transaction stays open for the whole check-refresh-
+// persist sequence, including the outbound HTTP call to the provider's
+// refresh endpoint -- normally worth avoiding, but oauthcred's httpClient
+// caps that call at a 10s timeout, well inside any reasonable
+// idle-in-transaction timeout, so the tradeoff is acceptable here in
+// exchange for correctness under the pooler this project actually runs
+// behind.
+//
+// hashtext's 64-bit collision space makes two different credential UUIDs
+// hashing to the same lock key astronomically unlikely; a false-positive
+// collision would only ever cause two unrelated refreshes to serialize
+// behind each other, never a correctness issue.
+//
+// release must be called (via defer) once the caller is done -- it commits
+// the underlying transaction, which is what actually releases the lock.
 func (s *Store) LockOAuthCredentialForRefresh(ctx context.Context, id string) (release func(context.Context), err error) {
-	conn, err := s.pool.Acquire(ctx)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtext($1))`, id); err != nil {
-		conn.Release()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, id); err != nil {
+		tx.Rollback(ctx)
 		return nil, err
 	}
 	return func(releaseCtx context.Context) {
-		conn.Exec(releaseCtx, `SELECT pg_advisory_unlock(hashtext($1))`, id)
-		conn.Release()
+		tx.Commit(releaseCtx)
 	}, nil
 }

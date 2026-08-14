@@ -417,15 +417,21 @@ function SecretField({
         placeholder={isSet ? "Key set, enter to replace" : placeholder}
         onChange={(e) => {
           const typed = e.target.value;
-          // Blanking a field that was already set ("__enc__") must send the
-          // backend's "__clear__" sentinel to actually remove the stored
-          // secret -- falling back to "__enc__" here would silently re-send
-          // "keep the existing value" and the old secret would never
-          // actually be deletable through this field. A field that was
-          // never set (or already cleared) has nothing to clear, so an
-          // empty typed value there stays "" rather than sending a no-op
-          // clear.
-          const next = typed || (isSet ? "__clear__" : "");
+          // onChange only ever fires on a real user edit (an untouched
+          // field never calls this, so it's never at risk of clearing a
+          // secret the user didn't touch) -- so ending blank always means
+          // the user just deleted whatever they'd typed, and should always
+          // send the backend's "__clear__" sentinel, never "" ("no change,
+          // keep existing"). This used to branch on isSet (only clear if
+          // the field was already "__enc__"), which broke on a clear ->
+          // retype -> clear-again cycle: after the first clear, val is no
+          // longer "__enc__", so isSet goes false, and blanking a second
+          // time fell through to "" -- silently keeping the old secret
+          // while the UI showed the field as empty. Always-clear-on-blank
+          // has no such gap, and is harmless for a field with nothing to
+          // clear (ClearSentinel on an already-empty existingEnc is a
+          // no-op in encryptField).
+          const next = typed || "__clear__";
           onUpdate({
             ...node,
             secrets: { ...node.secrets, [secretKey]: next },
@@ -575,6 +581,26 @@ function HttpHeadersField({
     });
   };
 
+  // addRow/removeBlankRow touch only local `rows` state, deliberately NOT
+  // calling commit -- a node with existing encrypted headers starts with
+  // `rows = []` (parseHttpHeaderRows can't decrypt "__enc__"), so wiring
+  // "+ Add header" through commit() serialized an empty object the instant
+  // it was clicked, before the user typed anything, sending "__clear__" and
+  // silently deleting the real saved headers. Only an actual key/value
+  // keystroke (the two onChange handlers below, both already wired to
+  // commit) should ever touch node.secrets -- clicking Add, or removing a
+  // row that was never given any content, is purely local bookkeeping.
+  const addRow = () => setRows([...rows, { key: "", value: "" }]);
+  const removeRow = (i: number) => {
+    const row = rows[i];
+    const next = rows.filter((_, ri) => ri !== i);
+    if (row.key.trim() === "" && row.value === "") {
+      setRows(next);
+    } else {
+      commit(next);
+    }
+  };
+
   return (
     <Field label="Custom headers" hint="encrypted at rest">
       {isEncrypted && (
@@ -613,7 +639,7 @@ function HttpHeadersField({
             <button
               type="button"
               style={iconBtnStyle}
-              onClick={() => commit(rows.filter((_, ri) => ri !== i))}
+              onClick={() => removeRow(i)}
               title="Remove header"
             >
               ×
@@ -628,7 +654,7 @@ function HttpHeadersField({
             padding: "0 10px",
             alignSelf: "flex-start",
           }}
-          onClick={() => commit([...rows, { key: "", value: "" }])}
+          onClick={addRow}
         >
           + Add header
         </button>
