@@ -182,6 +182,93 @@ func TestOAuth2CredCallback_FailsWhenNoRefreshTokenReturned(t *testing.T) {
 	}
 }
 
+func TestOAuth2CredCallback_ReconnectWithFailedLabelFetchUpdatesExistingRow(t *testing.T) {
+	d := oauth2Deps(t)
+	ctx := context.Background()
+	user, err := d.Store.CreateUser(ctx, "oauth2-relabel-"+randSuffix(t)+"@example.com", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First connection: userinfo succeeds normally.
+	googleMockServers(t,
+		`{"access_token":"first-access","refresh_token":"first-refresh","expires_in":3600}`,
+		`{"email":"reconnect@gmail.com"}`)
+	rec := httptest.NewRecorder()
+	d.OAuth2CredCallback(rec, callbackReq(user.ID, "google", "s1", "s1", "code1"))
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "connected=google") {
+		t.Fatalf("setup: first connect failed, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	before, err := d.Store.ListOAuthCredentials(ctx, user.ID, "google")
+	if err != nil || len(before) != 1 {
+		t.Fatalf("setup: want exactly 1 credential after first connect, got %d (err %v)", len(before), err)
+	}
+	firstID := before[0].ID
+
+	// Reconnect the same account, but this time the userinfo endpoint
+	// returns invalid JSON -- the label fetch fails. Since this user
+	// already has exactly one Google credential, the callback should reuse
+	// that credential's existing label so the upsert updates it in place,
+	// instead of falling back to a random label that would miss the
+	// existing row's unique-key match and insert a duplicate.
+	googleMockServers(t,
+		`{"access_token":"second-access","refresh_token":"second-refresh","expires_in":3600}`,
+		`not valid json`)
+	rec = httptest.NewRecorder()
+	d.OAuth2CredCallback(rec, callbackReq(user.ID, "google", "s2", "s2", "code2"))
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "connected=google") {
+		t.Fatalf("want reconnect to still succeed despite the label-fetch failure, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	after, err := d.Store.ListOAuthCredentials(ctx, user.ID, "google")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("want the reconnect to update the existing row in place, not insert a duplicate -- got %d credentials", len(after))
+	}
+	if after[0].ID != firstID {
+		t.Errorf("want the same credential id preserved across reconnect, got %q want %q", after[0].ID, firstID)
+	}
+	if after[0].AccountLabel != "reconnect@gmail.com" {
+		t.Errorf("want the original label reused when the reconnect's label fetch fails, got %q", after[0].AccountLabel)
+	}
+}
+
+func TestOAuth2CredCallback_StoresGrantedScopesNotRequestedScopes(t *testing.T) {
+	d := oauth2Deps(t)
+	ctx := context.Background()
+	user, err := d.Store.CreateUser(ctx, "oauth2-scopes-"+randSuffix(t)+"@example.com", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Google's token response includes only a subset of the requested
+	// scopes (the user declined part of the combined consent grant) --
+	// the stored Scopes column must reflect that subset, not silently
+	// claim the full set that was requested.
+	googleMockServers(t,
+		`{"access_token":"x","refresh_token":"y","expires_in":3600,"scope":"https://www.googleapis.com/auth/gmail.readonly"}`,
+		`{"email":"partial@gmail.com"}`)
+
+	rec := httptest.NewRecorder()
+	d.OAuth2CredCallback(rec, callbackReq(user.ID, "google", "s1", "s1", "code"))
+	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "connected=google") {
+		t.Fatalf("want successful connect, got %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	creds, err := d.Store.ListOAuthCredentials(ctx, user.ID, "google")
+	if err != nil || len(creds) != 1 {
+		t.Fatalf("want exactly 1 persisted credential, got %d (err %v)", len(creds), err)
+	}
+	if creds[0].Scopes != "https://www.googleapis.com/auth/gmail.readonly" {
+		t.Errorf("want only the granted scope stored, got %q", creds[0].Scopes)
+	}
+	if strings.Contains(creds[0].Scopes, "spreadsheets") {
+		t.Errorf("want ungranted scopes NOT recorded as if they were granted, got %q", creds[0].Scopes)
+	}
+}
+
 func TestOAuth2CredList_ReturnsOnlyCurrentUsersCredentials(t *testing.T) {
 	d := oauth2Deps(t)
 	ctx := context.Background()

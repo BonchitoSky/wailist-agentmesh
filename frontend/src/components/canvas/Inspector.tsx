@@ -402,15 +402,30 @@ function SecretField({
 }) {
   const val = node.secrets?.[secretKey];
   const isSet = val === "__enc__";
+  // "__clear__" is the backend's ClearSentinel (handlers/secrets.go) queued
+  // locally by this field's own onChange below, between the user blanking a
+  // previously-set field and the next save -- rendered the same as unset
+  // (empty box, normal placeholder) rather than leaking the sentinel string
+  // itself into the input.
+  const isCleared = val === "__clear__";
   return (
     <Field label={label} hint={hint ?? "encrypted at rest"}>
       <input
         style={monoInputStyle}
         type="password"
-        value={isSet ? "" : (val ?? "")}
+        value={isSet || isCleared ? "" : (val ?? "")}
         placeholder={isSet ? "Key set, enter to replace" : placeholder}
         onChange={(e) => {
-          const next = e.target.value || (isSet ? "__enc__" : "");
+          const typed = e.target.value;
+          // Blanking a field that was already set ("__enc__") must send the
+          // backend's "__clear__" sentinel to actually remove the stored
+          // secret -- falling back to "__enc__" here would silently re-send
+          // "keep the existing value" and the old secret would never
+          // actually be deletable through this field. A field that was
+          // never set (or already cleared) has nothing to clear, so an
+          // empty typed value there stays "" rather than sending a no-op
+          // clear.
+          const next = typed || (isSet ? "__clear__" : "");
           onUpdate({
             ...node,
             secrets: { ...node.secrets, [secretKey]: next },

@@ -67,6 +67,21 @@ func (rc *RunContext) ToolOutputs() map[string]any {
 
 // Message returns the most recent string output for use as LLM user message.
 // Kept for backwards compatibility with non-agent nodes.
+//
+// KNOWN ISSUE: "most recent" means last call to Set(), and runner.go runs
+// every node in the same topological level concurrently in its own
+// goroutine (see the wg.Add/go func loop in Run) -- so when two sibling
+// nodes in the same level both call Set(), which one's output Message()/
+// LastOutput() returns is decided by goroutine scheduling, not by the
+// workflow graph. A downstream node fed by two parallel upstream branches
+// can see either branch's output on any given run of the identical
+// workflow. Fixing this properly means Message()/LastOutput() resolving
+// the CALLING node's actual flow-edge predecessor rather than "whatever was
+// set last" -- which needs the predecessor's node ID threaded through
+// RunContexter into every one of the connector call sites that read
+// Message()/LastOutput() (20+ across nodes/connectors_*.go), not a change
+// local to this file. Left undone here; only genuinely single-predecessor
+// chains (the common case in practice) are unaffected.
 func (rc *RunContext) Message() string {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()

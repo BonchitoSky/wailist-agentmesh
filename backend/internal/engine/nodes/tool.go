@@ -141,7 +141,18 @@ func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 	if err := urlValidator(node.URL); err != nil {
 		return nil, err
 	}
-	method := strings.ToUpper(strings.TrimSpace(node.Method))
+	// rawMethod (trimmed, NOT case-normalized) drives the legacy "does this
+	// node default to sending rc.Message() as its body" decision below --
+	// keeping that comparison case-sensitive against the exact "POST"
+	// constant preserves the exact pre-existing behavior for any
+	// already-saved node with a non-canonical-case Method (e.g. "post"),
+	// which previously never matched the old literal method == "POST"
+	// check and so never got a body. method (normalized) is still what's
+	// actually sent on the wire and used for template-gated body support on
+	// PUT/PATCH/DELETE, since that's new behavior with no legacy nodes to
+	// preserve compatibility for.
+	rawMethod := strings.TrimSpace(node.Method)
+	method := strings.ToUpper(rawMethod)
 	if method == "" {
 		method = http.MethodGet
 	}
@@ -165,7 +176,7 @@ func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 		switch {
 		case tmpl != "":
 			bodyReader = bytes.NewReader([]byte(expandTemplate(tmpl, rc)))
-		case method == http.MethodPost:
+		case rawMethod == http.MethodPost:
 			bodyReader = bytes.NewReader([]byte(rc.Message()))
 		}
 	}
@@ -180,7 +191,10 @@ func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 	// {"X-Api-Key": "...", "Authorization": "Bearer ..."}. Kept in Secrets
 	// rather than Config -- headers commonly carry credentials and there's
 	// no way to tell which ones from the shape alone, so the whole blob
-	// gets the encrypted-at-rest treatment.
+	// gets the encrypted-at-rest treatment. Applied AFTER the Content-Type
+	// default above so an explicit Content-Type here (e.g. for an
+	// XML/form-urlencoded httpBodyTemplate) overrides the application/json
+	// default instead of being clobbered by it.
 	if raw := secretVal(node, "httpHeadersJSON"); raw != "" {
 		var headers map[string]string
 		if err := json.Unmarshal([]byte(raw), &headers); err != nil {
@@ -198,6 +212,9 @@ func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("http: %s %d: %s", method, resp.StatusCode, readErrorBody(resp))
+	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
 	if err != nil {
 		return nil, err

@@ -258,3 +258,47 @@ func TestHTTPTool_NoBodyTemplateSendsRawMessageAsBefore(t *testing.T) {
 		t.Errorf("want unchanged raw-message behavior, got %q", gotBody)
 	}
 }
+
+func TestHTTPTool_ErrorStatusReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"not found"}`))
+	}))
+	defer srv.Close()
+	node := models.WorkflowNode{ID: "t13", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "GET"}
+	rc := engine.NewRunContext("r1", nil)
+	_, err := nodes.ExecuteTool(context.Background(), node, rc)
+	if err == nil {
+		t.Fatal("want error on a 404 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "404") {
+		t.Errorf("want error to mention the status code, got %q", err.Error())
+	}
+}
+
+func TestHTTPTool_LowercaseMethodPreservesLegacyNoBodyBehavior(t *testing.T) {
+	// A node persisted with a non-canonical-case Method (only reachable via
+	// direct API use, never via the Inspector's <select>, which always
+	// emits uppercase) must keep behaving exactly as it did before method
+	// values were case-normalized for dispatch -- no silent body attach on
+	// its next run.
+	var gotMethod string
+	var gotContentLength int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotContentLength = r.ContentLength
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	node := models.WorkflowNode{ID: "t14", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "post"}
+	rc := engine.NewRunContext("r1", []byte(`{"name":"x"}`))
+	if _, err := nodes.ExecuteTool(context.Background(), node, rc); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("want method normalized to POST on the wire, got %s", gotMethod)
+	}
+	if gotContentLength > 0 {
+		t.Errorf("want no body for a legacy lowercase-\"post\" node, got Content-Length %d", gotContentLength)
+	}
+}

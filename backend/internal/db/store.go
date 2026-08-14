@@ -1307,3 +1307,45 @@ func (s *Store) DeleteOAuthCredential(ctx context.Context, id string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM oauth_credentials WHERE id = $1`, id)
 	return err
 }
+
+// LockOAuthCredentialForRefresh serializes concurrent token refreshes of the
+// same credential ACROSS PROCESSES, not just within one -- oauthcred's
+// refreshLocks (an in-memory sync.Mutex keyed by credential ID) only
+// protects against a race between goroutines in a single backend replica.
+// On a multi-replica deployment (Railway runs several), two replicas can
+// each independently observe the same expired credential, both hit the
+// provider's refresh endpoint, and both write tokens back with no
+// coordination between them.
+//
+// A session-level Postgres advisory lock (not a row lock / FOR UPDATE) is
+// used deliberately: the refresh's actual work is an outbound HTTP call to
+// the OAuth provider, which can take seconds, and holding a real row lock
+// (or a transaction) open across that network round trip would tie up a
+// connection and risk lock-wait timeouts under load. An advisory lock keyed
+// by hashtext(id) only blocks other callers trying to lock that SAME
+// credential ID -- it doesn't touch the oauth_credentials row or table at
+// all, so it can be held for the whole check-refresh-persist sequence
+// without any other query contention. hashtext's 64-bit collision space
+// makes two different credential UUIDs hashing to the same lock key
+// astronomically unlikely; a false-positive collision would only ever cause
+// two unrelated refreshes to serialize behind each other, never a
+// correctness issue.
+//
+// release must be called (via defer) once the caller is done, on the same
+// pooled connection the lock was acquired on -- pg_advisory_lock is
+// session-scoped, so unlocking from a different connection would silently
+// no-op and leak the lock until that connection closes.
+func (s *Store) LockOAuthCredentialForRefresh(ctx context.Context, id string) (release func(context.Context), err error) {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtext($1))`, id); err != nil {
+		conn.Release()
+		return nil, err
+	}
+	return func(releaseCtx context.Context) {
+		conn.Exec(releaseCtx, `SELECT pg_advisory_unlock(hashtext($1))`, id)
+		conn.Release()
+	}, nil
+}

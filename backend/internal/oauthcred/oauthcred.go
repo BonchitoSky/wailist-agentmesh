@@ -34,6 +34,21 @@ type Store interface {
 	UpdateOAuthCredentialTokens(ctx context.Context, id, accessTokenEnc, refreshTokenEnc string, expiresAt time.Time) error
 }
 
+// crossProcessLocker is implemented by *db.Store (see
+// LockOAuthCredentialForRefresh's doc comment there) but deliberately kept
+// OUT of the required Store interface above and checked via a type
+// assertion in GetValidAccessToken instead of being a hard dependency --
+// the in-memory fakeStore test doubles in this package's and nodes'
+// *_test.go files only implement the two methods on Store, and requiring
+// this one too would be a test-only concern leaking into production code's
+// interface. A store that doesn't implement it (any test double) just
+// doesn't get the cross-process lock, keeping refreshLocks' in-process
+// mutex as its only protection -- correct for a single-process test, and
+// the real *db.Store used in production always implements it.
+type crossProcessLocker interface {
+	LockOAuthCredentialForRefresh(ctx context.Context, id string) (release func(context.Context), err error)
+}
+
 // ProviderConfig is the token-endpoint identity needed to exchange a code or
 // refresh a token. Deliberately not stored per-credential-row: rotating a
 // client secret must not require touching every already-connected user's
@@ -117,6 +132,18 @@ func GetValidAccessToken(ctx context.Context, store Store, encKey string, cred m
 	mu := lockFor(cred.ID)
 	mu.Lock()
 	defer mu.Unlock()
+
+	// crossProcessLocker (see its doc comment) additionally serializes this
+	// section across backend replicas, not just goroutines in this process --
+	// held for the full check-refresh-persist sequence below, released
+	// before returning either branch.
+	if locker, ok := store.(crossProcessLocker); ok {
+		release, err := locker.LockOAuthCredentialForRefresh(ctx, cred.ID)
+		if err != nil {
+			return "", fmt.Errorf("lock oauth credential for refresh: %w", err)
+		}
+		defer release(context.WithoutCancel(ctx))
+	}
 
 	fresh, err := store.GetOAuthCredential(ctx, cred.ID)
 	if err != nil {

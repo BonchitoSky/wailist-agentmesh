@@ -195,23 +195,47 @@ func (d *Deps) OAuth2CredCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// account_label is part of the (user_id, provider, account_label)
 		// upsert key (migration 000021_oauth_credentials_unique) -- falling
-		// back to "" here would make every failed-label connection for this
-		// user+provider collide on that key, silently overwriting one
-		// connected account's tokens with another's on the next failed
-		// lookup. A random suffix keeps the connection working (still
-		// non-fatal) without risking that cross-account clobber; worst case
-		// is a harmless duplicate row instead of a data leak.
-		suffix, rerr := randHex(4)
-		if rerr != nil {
-			suffix = strconv.FormatInt(time.Now().UnixNano(), 36)
+		// back to a fixed value like "" here would make every failed-label
+		// connection for this user+provider collide on that key, silently
+		// overwriting one connected account's tokens with another's on the
+		// next failed lookup.
+		//
+		// But a random-every-time label is its own bug: on a RECONNECT (the
+		// common case -- refreshing a stale grant, fixing scopes) it would
+		// never match the existing row's label either, so InsertOAuthCredential
+		// inserts a brand-new row instead of updating in place, orphaning the
+		// old row's still-valid refresh token and leaving two entries for the
+		// same account. So first check whether this user already has exactly
+		// one credential for this provider; if so, this is almost certainly a
+		// reconnect of that same account, and reusing its label lets the
+		// upsert update it in place. Only fall back to a random label when
+		// that's ambiguous (zero, i.e. genuinely first connection with a
+		// transient label-fetch failure, or more than one, where guessing
+		// which existing account this is would risk the same clobber this
+		// whole label scheme exists to prevent).
+		label = "unlabeled-" + randomLabelSuffix()
+		if existing, lerr := d.Store.ListOAuthCredentials(r.Context(), userID, name); lerr == nil && len(existing) == 1 {
+			label = existing[0].AccountLabel
 		}
-		label = "unlabeled-" + suffix
 	}
 
 	accessEnc, refreshEnc, err := oauthcred.EncryptTokens(tok, d.EncryptionKey)
 	if err != nil {
 		d.oauth2CredRedirectFail(w, r, "encrypt_failed")
 		return
+	}
+
+	// tok.Scope carries what Google's consent screen actually granted, which
+	// can be a subset of p.scopes if the user declines part of the combined
+	// grant -- storing p.scopes unconditionally would record full access
+	// even when only some of it was actually approved, silently misleading
+	// anything that trusts this column until a call 403s at runtime. Only a
+	// provider that omits the scope field at all (not Google, but keep this
+	// defensive since ExchangeCode is shared code) falls back to what was
+	// requested.
+	scopes := tok.Scope
+	if scopes == "" {
+		scopes = strings.Join(p.scopes, " ")
 	}
 
 	expiresAt := oauthcred.TokenExpiry(tok)
@@ -221,7 +245,7 @@ func (d *Deps) OAuth2CredCallback(w http.ResponseWriter, r *http.Request) {
 		AccountLabel:    label,
 		AccessTokenEnc:  accessEnc,
 		RefreshTokenEnc: refreshEnc,
-		Scopes:          strings.Join(p.scopes, " "),
+		Scopes:          scopes,
 		ExpiresAt:       expiresAt,
 	}); err != nil {
 		d.oauth2CredRedirectFail(w, r, "save_failed")
@@ -233,6 +257,17 @@ func (d *Deps) OAuth2CredCallback(w http.ResponseWriter, r *http.Request) {
 
 func (d *Deps) oauth2CredRedirectFail(w http.ResponseWriter, r *http.Request, reason string) {
 	http.Redirect(w, r, strings.TrimRight(d.FrontendURL, "/")+"/workflows?connect_error="+url.QueryEscape(reason), http.StatusFound)
+}
+
+// randomLabelSuffix backs the ambiguous-fallback case in OAuth2CredCallback's
+// label-fetch failure handling. randHex's error case (crypto/rand exhausted)
+// is unreachable in practice, but a suffix collision there is still better
+// than crashing the callback -- fall back to a timestamp instead.
+func randomLabelSuffix() string {
+	if suffix, err := randHex(4); err == nil {
+		return suffix
+	}
+	return strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
 // OAuth2CredList returns the current user's connected accounts for a

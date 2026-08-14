@@ -981,8 +981,18 @@ func (r *Runner) executeNode(
 		if r.googleClientID == "" || r.googleClientSecret == "" {
 			return nil, fmt.Errorf("google: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET are not configured on this server")
 		}
-		if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
-			return nil, err
+		// Routed through BillableFlatFee, same as NodeTypeAction above,
+		// instead of hardcoding "always billable" here -- BillableFlatFee is
+		// the single source of truth for which template/nodeType pairs are
+		// billable (NodeTypeTool already varies by template: template ==
+		// "http"), so calling it here means a future template-conditional
+		// change there (e.g. a free Google read-only op) takes effect
+		// automatically instead of silently being ignored by this branch.
+		billable := nodes.BillableFlatFee(node.Type, node.Template)
+		if billable {
+			if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
+				return nil, err
+			}
 		}
 		result, err := nodes.ExecuteGoogle(ctx, node, rc, nodes.GoogleConfig{
 			Store:        r.store,
@@ -997,7 +1007,9 @@ func (r *Runner) executeNode(
 			}
 			return nil, err
 		}
-		r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
+		if billable {
+			r.debitOrLog(ctx, wf, run, node.ID, models.ByokFlatFeeUSDMicros, models.DebitKindByokFlatFee)
+		}
 		return result, nil
 	default:
 		return nil, nil
