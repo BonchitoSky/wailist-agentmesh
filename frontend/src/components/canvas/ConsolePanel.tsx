@@ -1,8 +1,12 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pill } from "@/components/ui";
 import { TerminalTab } from "./TerminalTab";
-import { isX402Payment, type LogEvent, type X402Payment } from "./useRunTranscript";
+import {
+  isX402Payment,
+  type LogEvent,
+  type X402Payment,
+} from "./useRunTranscript";
 
 export type ConsoleTab = "logs" | "terminal" | "inspector";
 
@@ -26,6 +30,8 @@ interface ConsolePanelProps {
 const HEIGHT_KEY = "agentmesh_console_height";
 const DEFAULT_HEIGHT = 240;
 const MIN_HEIGHT = 120;
+// Width at or under which a log row stacks instead of using fixed columns.
+const COMPACT_ROW_MAX_WIDTH = 520;
 // Leave room for the topbar and some canvas: a console dragged to fill the
 // window would hide the graph it is reporting on.
 const maxHeight = () =>
@@ -49,6 +55,25 @@ export function ConsolePanel({
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [resizing, setResizing] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Below this the four fixed columns (52 + 34 + 110 + gaps) leave the output
+  // cell so little room that JSON wraps a few characters per line -- a single
+  // step measured 431px tall in a 293px-wide console. Rows switch to a stacked
+  // layout instead of squeezing.
+  const [compactRows, setCompactRows] = useState(false);
+  const logListRef = useRef<HTMLDivElement | null>(null);
+  // Observed on the list, not the window: the console's width is whatever is
+  // left after the palette and the right rail, so a viewport-width breakpoint
+  // would fire at the wrong times.
+  const attachLogList = useCallback((el: HTMLDivElement | null) => {
+    logListRef.current = el;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      setCompactRows(el.getBoundingClientRect().width < COMPACT_ROW_MAX_WIDTH);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Restore the last chosen console height. Read in an effect rather than in
   // useState's initializer so the server render and first client render agree.
@@ -254,7 +279,8 @@ export function ConsolePanel({
                     padding: "2px 8px",
                     borderRadius: 999,
                     border: `1px solid ${effectiveTab === tb ? "var(--accent)" : "var(--border)"}`,
-                    color: effectiveTab === tb ? "var(--accent)" : "var(--fg-dim)",
+                    color:
+                      effectiveTab === tb ? "var(--accent)" : "var(--fg-dim)",
                     background: "transparent",
                     cursor: "pointer",
                   }}
@@ -327,6 +353,7 @@ export function ConsolePanel({
           {/* Log lines. Stays mounted (hidden via CSS) when another tab is
               active, so switching back does not lose the transcript. */}
           <div
+            ref={attachLogList}
             style={{
               display: effectiveTab === "logs" ? "block" : "none",
               flex: 1,
@@ -352,48 +379,66 @@ export function ConsolePanel({
                 key={i}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "52px 34px 110px 1fr",
-                  gap: 10,
-                  alignItems: "baseline",
+                  gridTemplateColumns: compactRows
+                    ? "1fr"
+                    : "52px 34px 110px 1fr",
+                  gap: compactRows ? 2 : 10,
+                  alignItems: compactRows ? "stretch" : "baseline",
                   borderBottom: "1px solid var(--border-soft)",
                   padding: "3px 0",
                 }}
               >
-                <span style={{ color: "var(--fg-dim)", fontSize: 9.5 }}>
-                  {new Date(l.ts).toLocaleTimeString("en", {
-                    hour12: false,
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  })}
-                </span>
-                <span
-                  style={{
-                    color: statusColor(l.status),
-                    fontWeight: 600,
-                    fontSize: 9.5,
-                  }}
+                {/* display:contents keeps these three as real grid cells in the
+                    wide layout; in compact mode they collapse onto one meta
+                    line above the output instead of each taking a row. */}
+                <div
+                  style={
+                    compactRows
+                      ? {
+                          display: "flex",
+                          gap: 8,
+                          alignItems: "baseline",
+                          minWidth: 0,
+                        }
+                      : { display: "contents" }
+                  }
                 >
-                  {statusLabel(l.status)}
-                </span>
-                <span
-                  style={{
-                    color: "var(--fg-muted)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  <span style={{ color: nodeTypeColor(l.nodeType) }}>
-                    {l.nodeType}
+                  <span style={{ color: "var(--fg-dim)", fontSize: 9.5 }}>
+                    {new Date(l.ts).toLocaleTimeString("en", {
+                      hour12: false,
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
                   </span>
-                  {l.durationMs > 0 && (
-                    <span style={{ color: "var(--fg-dim)" }}>
-                      {" "}
-                      · {l.durationMs}ms
+                  <span
+                    style={{
+                      color: statusColor(l.status),
+                      fontWeight: 600,
+                      fontSize: 9.5,
+                    }}
+                  >
+                    {statusLabel(l.status)}
+                  </span>
+                  <span
+                    style={{
+                      color: "var(--fg-muted)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <span style={{ color: nodeTypeColor(l.nodeType) }}>
+                      {l.nodeType}
                     </span>
-                  )}
-                </span>
+                    {l.durationMs > 0 && (
+                      <span style={{ color: "var(--fg-dim)" }}>
+                        {" "}
+                        · {l.durationMs}ms
+                      </span>
+                    )}
+                  </span>
+                </div>
                 <OutputCell output={l.output} />
               </div>
             ))}
