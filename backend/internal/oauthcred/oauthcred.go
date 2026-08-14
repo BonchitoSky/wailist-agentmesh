@@ -48,7 +48,33 @@ type ProviderConfig struct {
 // a node mid-execution never races the exact expiry instant.
 const expiryLeeway = 60 * time.Second
 
-var httpClient = &http.Client{Timeout: 15 * time.Second}
+// defaultExpiresIn is used when a token response omits expires_in (or sends
+// 0). Treating that as "expires right now" would force a refresh round trip
+// on every single call for that token -- most OAuth2 providers default an
+// access token to a 1 hour lifetime when the field is left off, so assume
+// the same rather than the worst case.
+const defaultExpiresIn = time.Hour
+
+// TokenExpiry computes the wall-clock expiry for tok, floored at
+// defaultExpiresIn so a missing/zero expires_in doesn't make the token look
+// pre-expired.
+func TokenExpiry(tok TokenResponse) time.Time {
+	ttl := time.Duration(tok.ExpiresIn) * time.Second
+	if ttl <= 0 {
+		ttl = defaultExpiresIn
+	}
+	return time.Now().Add(ttl)
+}
+
+// Timeout matches handlers/connector_oauth.go's exchangeConnectorCode client
+// -- that package has its own separate OAuth2 token-exchange implementation
+// for the other 12 connector providers (Slack, GitHub, Notion, ...), and
+// letting the two drift on something as basic as timeout is exactly the
+// kind of divergence duplicated logic invites. A full merge of the two
+// isn't safe to do blind (connector_oauth.go's version also carries PKCE
+// and per-provider auth/body-style quirks this package doesn't need for
+// Google), but the timeout has no reason to differ.
+var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // refreshLocks single-flights concurrent refreshes of the SAME credential.
 // An agent's tool-calling loop, or two parallel flow branches attached to
@@ -114,7 +140,7 @@ func GetValidAccessToken(ctx context.Context, store Store, encKey string, cred m
 	if err != nil {
 		return "", err
 	}
-	expiresAt := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
+	expiresAt := TokenExpiry(tok)
 	if err := store.UpdateOAuthCredentialTokens(ctx, cred.ID, accessEnc, refreshEnc, expiresAt); err != nil {
 		return "", fmt.Errorf("persist refreshed token: %w", err)
 	}

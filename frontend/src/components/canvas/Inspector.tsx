@@ -3022,14 +3022,10 @@ function GoogleInspector({
 
   const selectedCredID = node.config?.oauthCredentialID ?? "";
   const template = node.template ?? "";
-  // Only the operations that actually send/write something benefit from a
-  // template -- see resolveMessage/expandTemplate in connector_helpers.go.
-  const usesMessageTemplate = [
-    "gmail_send",
-    "gmail_reply",
-    "sheets_append",
-    "calendar_create",
-  ].includes(template);
+  // usesMessage lives on the GOOGLE_TEMPLATES row itself (data.ts) so this
+  // can't drift out of sync with the write-op cases in google.go the way a
+  // separately maintained id list could.
+  const usesMessageTemplate = tpl?.usesMessage ?? false;
 
   return (
     <>

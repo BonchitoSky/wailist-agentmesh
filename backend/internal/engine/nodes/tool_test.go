@@ -55,7 +55,11 @@ func TestHTTPTool(t *testing.T) {
 	}
 }
 
-func TestHTTPTool_PutSendsBody(t *testing.T) {
+func TestHTTPTool_PutWithTemplateSendsBody(t *testing.T) {
+	// PUT (like PATCH/DELETE) only attaches a body when the node explicitly
+	// opts in via httpBodyTemplate -- a node saved before this file added
+	// method-aware bodies never sent one for PUT, and defaulting it now
+	// would silently change behavior for every such already-saved node.
 	var gotMethod, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
@@ -64,7 +68,10 @@ func TestHTTPTool_PutSendsBody(t *testing.T) {
 		w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
-	node := models.WorkflowNode{ID: "t4", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "PUT"}
+	node := models.WorkflowNode{
+		ID: "t4", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "PUT",
+		Config: map[string]string{"httpBodyTemplate": "{{ result }}"},
+	}
 	rc := engine.NewRunContext("r1", []byte(`{"name":"x"}`))
 	if _, err := nodes.ExecuteTool(context.Background(), node, rc); err != nil {
 		t.Fatal(err)
@@ -74,6 +81,23 @@ func TestHTTPTool_PutSendsBody(t *testing.T) {
 	}
 	if !strings.Contains(gotBody, "name") {
 		t.Errorf("want body to carry the message, got %q", gotBody)
+	}
+}
+
+func TestHTTPTool_PutWithoutTemplateSendsNoBody(t *testing.T) {
+	var gotContentLength int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentLength = r.ContentLength
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	node := models.WorkflowNode{ID: "t4b", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "PUT"}
+	rc := engine.NewRunContext("r1", []byte(`{"name":"x"}`))
+	if _, err := nodes.ExecuteTool(context.Background(), node, rc); err != nil {
+		t.Fatal(err)
+	}
+	if gotContentLength > 0 {
+		t.Errorf("want no body on a PUT without an explicit httpBodyTemplate, got Content-Length %d", gotContentLength)
 	}
 }
 

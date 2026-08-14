@@ -25,18 +25,60 @@ func postForm(ctx context.Context, target string, headers map[string]string, for
 	return doAndCheck(req, sentinel, serviceName)
 }
 
-// twilioAPIBase is overridden in tests via SetTwilioAPIBaseForTest.
-var twilioAPIBase = "https://api.twilio.com"
+// apiBaseDefaults holds each connector's real API base URL, keyed by
+// service name -- "" for Zendesk/Shopify, whose base is built per-node from
+// user-supplied subdomain/shop config rather than a fixed host. apiBases
+// holds the current (possibly test-overridden) value, seeded from the
+// defaults. Together with apiBase/setAPIBaseForTest below, this replaces
+// what would otherwise be nine hand-written var + SetXAPIBaseForTest pairs,
+// one per connector.
+var apiBaseDefaults = map[string]string{
+	"twilio":      "https://api.twilio.com",
+	"stripe":      "https://api.stripe.com",
+	"pagerduty":   "https://events.pagerduty.com",
+	"zendesk":     "",
+	"intercom":    "https://api.intercom.io",
+	"openweather": "https://api.openweathermap.org",
+	"calendly":    "https://api.calendly.com",
+	"shopify":     "",
+	"baserow":     "https://api.baserow.io",
+}
+
+var apiBases = cloneAPIBaseDefaults()
+
+func cloneAPIBaseDefaults() map[string]string {
+	m := make(map[string]string, len(apiBaseDefaults))
+	for k, v := range apiBaseDefaults {
+		m[k] = v
+	}
+	return m
+}
+
+// apiBase returns service's current API base URL (real, or test-overridden).
+func apiBase(service string) string {
+	return apiBases[service]
+}
+
+// setAPIBaseForTest overrides service's API base URL, resetting to its real
+// default when base is "". Backs every SetXAPIBaseForTest export below.
+func setAPIBaseForTest(service, base string) {
+	if base == "" {
+		base = apiBaseDefaults[service]
+	}
+	apiBases[service] = base
+}
 
 // SetTwilioAPIBaseForTest overrides the Twilio API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetTwilioAPIBaseForTest(base string) {
-	if base == "" {
-		twilioAPIBase = "https://api.twilio.com"
-	} else {
-		twilioAPIBase = base
-	}
-}
+func SetTwilioAPIBaseForTest(base string) { setAPIBaseForTest("twilio", base) }
+
+// SetStripeAPIBaseForTest overrides the Stripe API base URL. Call only
+// from tests. Pass "" to reset to the real API.
+func SetStripeAPIBaseForTest(base string) { setAPIBaseForTest("stripe", base) }
+
+// SetPagerDutyAPIBaseForTest overrides the PagerDuty Events API base URL.
+// Call only from tests. Pass "" to reset to the real API.
+func SetPagerDutyAPIBaseForTest(base string) { setAPIBaseForTest("pagerduty", base) }
 
 func sendTwilio(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	accountSID := secretVal(node, "twilioAccountSID")
@@ -49,25 +91,12 @@ func sendTwilio(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 	if to == "" || from == "" {
 		return "twilio_skipped_missing_config", ErrActionSkipped
 	}
-	target := twilioAPIBase + "/2010-04-01/Accounts/" + url.PathEscape(accountSID) + "/Messages.json"
+	target := apiBase("twilio") + "/2010-04-01/Accounts/" + url.PathEscape(accountSID) + "/Messages.json"
 	form := url.Values{}
 	form.Set("To", to)
 	form.Set("From", from)
 	form.Set("Body", resolveMessage(node, rc))
 	return postForm(ctx, target, basicAuthHeader(accountSID, authToken), form, "twilio_sms_sent", "Twilio")
-}
-
-// stripeAPIBase is overridden in tests via SetStripeAPIBaseForTest.
-var stripeAPIBase = "https://api.stripe.com"
-
-// SetStripeAPIBaseForTest overrides the Stripe API base URL. Call only
-// from tests. Pass "" to reset to the real API.
-func SetStripeAPIBaseForTest(base string) {
-	if base == "" {
-		stripeAPIBase = "https://api.stripe.com"
-	} else {
-		stripeAPIBase = base
-	}
 }
 
 // sendStripe creates a Customer -- Stripe's simplest, most broadly useful
@@ -92,20 +121,7 @@ func sendStripe(ctx context.Context, node models.WorkflowNode, rc RunContexter) 
 		form.Set("name", name)
 	}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
-	return postForm(ctx, stripeAPIBase+"/v1/customers", headers, form, "stripe_customer_created", "Stripe")
-}
-
-// pagerDutyAPIBase is overridden in tests via SetPagerDutyAPIBaseForTest.
-var pagerDutyAPIBase = "https://events.pagerduty.com"
-
-// SetPagerDutyAPIBaseForTest overrides the PagerDuty Events API base URL.
-// Call only from tests. Pass "" to reset to the real API.
-func SetPagerDutyAPIBaseForTest(base string) {
-	if base == "" {
-		pagerDutyAPIBase = "https://events.pagerduty.com"
-	} else {
-		pagerDutyAPIBase = base
-	}
+	return postForm(ctx, apiBase("stripe")+"/v1/customers", headers, form, "stripe_customer_created", "Stripe")
 }
 
 // sendPagerDuty triggers an incident via the Events API v2 -- auth here is
@@ -126,7 +142,7 @@ func sendPagerDuty(ctx context.Context, node models.WorkflowNode, rc RunContexte
 			"severity": configVal(node, "pagerdutySeverity", "info"),
 		},
 	}
-	return postJSON(ctx, pagerDutyAPIBase+"/v2/enqueue", nil, payload, "pagerduty_incident_triggered", "PagerDuty")
+	return postJSON(ctx, apiBase("pagerduty")+"/v2/enqueue", nil, payload, "pagerduty_incident_triggered", "PagerDuty")
 }
 
 // zendeskDomainPattern mirrors jiraDomainPattern (connectors_devtools.go) --
@@ -134,18 +150,12 @@ func sendPagerDuty(ctx context.Context, node models.WorkflowNode, rc RunContexte
 // request host, so it must be validated before use for the same reason.
 var zendeskDomainPattern = jiraDomainPattern
 
-// zendeskAPIBase is overridden in tests via SetZendeskAPIBaseForTest --
-// normally "https://{subdomain}.zendesk.com" is built per-node, so the
-// test override replaces the whole scheme+host and sendZendesk skips that
-// construction when set. Mirrors sendJira's jiraAPIBase exactly.
-var zendeskAPIBase = ""
-
 // SetZendeskAPIBaseForTest overrides the Zendesk API base URL entirely
-// (including scheme+host). Call only from tests. Pass "" to reset to the
-// real https://{subdomain}.zendesk.com construction.
-func SetZendeskAPIBaseForTest(base string) {
-	zendeskAPIBase = base
-}
+// (including scheme+host) -- normally "https://{subdomain}.zendesk.com" is
+// built per-node, so the override replaces that whole construction and
+// sendZendesk skips it when set. Call only from tests. Pass "" to reset to
+// the real per-node construction.
+func SetZendeskAPIBaseForTest(base string) { setAPIBaseForTest("zendesk", base) }
 
 func sendZendesk(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	email := configVal(node, "zendeskEmail", "")
@@ -164,7 +174,7 @@ func sendZendesk(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 			"comment": map[string]any{"body": msg},
 		},
 	}
-	base := zendeskAPIBase
+	base := apiBase("zendesk")
 	if base == "" {
 		base = "https://" + subdomain + ".zendesk.com"
 	}
@@ -176,18 +186,9 @@ func sendZendesk(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 	return postJSON(ctx, target, headers, payload, "zendesk_ticket_created", "Zendesk")
 }
 
-// intercomAPIBase is overridden in tests via SetIntercomAPIBaseForTest.
-var intercomAPIBase = "https://api.intercom.io"
-
 // SetIntercomAPIBaseForTest overrides the Intercom API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetIntercomAPIBaseForTest(base string) {
-	if base == "" {
-		intercomAPIBase = "https://api.intercom.io"
-	} else {
-		intercomAPIBase = base
-	}
-}
+func SetIntercomAPIBaseForTest(base string) { setAPIBaseForTest("intercom", base) }
 
 // sendIntercom creates a lead Contact -- same "message as email" fallback
 // as sendStripe/sendMailchimp, and the simplest Intercom operation that
@@ -210,21 +211,12 @@ func sendIntercom(ctx context.Context, node models.WorkflowNode, rc RunContexter
 		"Authorization": "Bearer " + apiKey,
 		"Accept":        "application/json",
 	}
-	return postJSON(ctx, intercomAPIBase+"/contacts", headers, payload, "intercom_lead_created", "Intercom")
+	return postJSON(ctx, apiBase("intercom")+"/contacts", headers, payload, "intercom_lead_created", "Intercom")
 }
-
-// openWeatherAPIBase is overridden in tests via SetOpenWeatherAPIBaseForTest.
-var openWeatherAPIBase = "https://api.openweathermap.org"
 
 // SetOpenWeatherAPIBaseForTest overrides the OpenWeatherMap API base URL.
 // Call only from tests. Pass "" to reset to the real API.
-func SetOpenWeatherAPIBaseForTest(base string) {
-	if base == "" {
-		openWeatherAPIBase = "https://api.openweathermap.org"
-	} else {
-		openWeatherAPIBase = base
-	}
-}
+func SetOpenWeatherAPIBaseForTest(base string) { setAPIBaseForTest("openweather", base) }
 
 // getOpenWeather is a read op (like getTelegramUpdates) -- the first of
 // this batch that returns data rather than just confirming a side effect.
@@ -245,7 +237,7 @@ func getOpenWeather(ctx context.Context, node models.WorkflowNode, rc RunContext
 	q.Set("q", city)
 	q.Set("appid", apiKey)
 	q.Set("units", configVal(node, "weatherUnits", "metric"))
-	target := openWeatherAPIBase + "/data/2.5/weather?" + q.Encode()
+	target := apiBase("openweather") + "/data/2.5/weather?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("OpenWeatherMap: build request: %w", err)
@@ -253,18 +245,9 @@ func getOpenWeather(ctx context.Context, node models.WorkflowNode, rc RunContext
 	return getJSON(req, "OpenWeatherMap")
 }
 
-// calendlyAPIBase is overridden in tests via SetCalendlyAPIBaseForTest.
-var calendlyAPIBase = "https://api.calendly.com"
-
 // SetCalendlyAPIBaseForTest overrides the Calendly API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetCalendlyAPIBaseForTest(base string) {
-	if base == "" {
-		calendlyAPIBase = "https://api.calendly.com"
-	} else {
-		calendlyAPIBase = base
-	}
-}
+func SetCalendlyAPIBaseForTest(base string) { setAPIBaseForTest("calendly", base) }
 
 // getCalendlyEvents is a read op: lists this account's scheduled events.
 func getCalendlyEvents(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
@@ -279,7 +262,7 @@ func getCalendlyEvents(ctx context.Context, node models.WorkflowNode, rc RunCont
 	q := url.Values{}
 	q.Set("user", userURI)
 	q.Set("count", configVal(node, "calendlyCount", "10"))
-	target := calendlyAPIBase + "/scheduled_events?" + q.Encode()
+	target := apiBase("calendly") + "/scheduled_events?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, fmt.Errorf("Calendly: build request: %w", err)
@@ -299,19 +282,13 @@ func getCalendlyEvents(ctx context.Context, node models.WorkflowNode, rc RunCont
 // shape rather than just checking character set.
 var shopifyDomainPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$`)
 
-// shopifyAPIBase is overridden in tests via SetShopifyAPIBaseForTest --
-// normally "https://{shop}" is built per-node (shopifyShopDomain is already
-// a full host like "mystore.myshopify.com"), so the test override replaces
-// the "https://" + shop prefix entirely, letting a test point at a plain
-// http:// httptest server. Mirrors sendJira/sendZendesk's same-shaped fix.
-var shopifyAPIBase = ""
-
 // SetShopifyAPIBaseForTest overrides the Shopify API base URL entirely
-// (including scheme+host). Call only from tests. Pass "" to reset to the
-// real "https://" + shopifyShopDomain construction.
-func SetShopifyAPIBaseForTest(base string) {
-	shopifyAPIBase = base
-}
+// (including scheme+host) -- normally "https://{shop}" is built per-node
+// (shopifyShopDomain is already a full host like "mystore.myshopify.com"),
+// so the override replaces that "https://" + shop prefix entirely, letting
+// a test point at a plain http:// httptest server. Call only from tests.
+// Pass "" to reset to the real per-node construction.
+func SetShopifyAPIBaseForTest(base string) { setAPIBaseForTest("shopify", base) }
 
 func sendShopify(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	accessToken := secretVal(node, "shopifyAccessToken")
@@ -326,7 +303,7 @@ func sendShopify(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 	if !shopifyDomainPattern.MatchString(shop) {
 		return "shopify_skipped_invalid_domain", ErrActionSkipped
 	}
-	base := shopifyAPIBase
+	base := apiBase("shopify")
 	if base == "" {
 		base = "https://" + shop
 	}
@@ -341,18 +318,9 @@ func sendShopify(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 	return doAndCheck(req, "shopify_order_note_added", "Shopify")
 }
 
-// baserowAPIBase is overridden in tests via SetBaserowAPIBaseForTest.
-var baserowAPIBase = "https://api.baserow.io"
-
 // SetBaserowAPIBaseForTest overrides the Baserow API base URL. Call only
 // from tests. Pass "" to reset to the real API.
-func SetBaserowAPIBaseForTest(base string) {
-	if base == "" {
-		baserowAPIBase = "https://api.baserow.io"
-	} else {
-		baserowAPIBase = base
-	}
-}
+func SetBaserowAPIBaseForTest(base string) { setAPIBaseForTest("baserow", base) }
 
 func sendBaserow(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	token := secretVal(node, "baserowAPIToken")
@@ -364,7 +332,7 @@ func sendBaserow(ctx context.Context, node models.WorkflowNode, rc RunContexter)
 		return "baserow_skipped_no_table_id", ErrActionSkipped
 	}
 	fieldName := configVal(node, "baserowFieldName", "Notes")
-	target := baserowAPIBase + "/api/database/rows/table/" + url.PathEscape(tableID) + "/?user_field_names=true"
+	target := apiBase("baserow") + "/api/database/rows/table/" + url.PathEscape(tableID) + "/?user_field_names=true"
 	payload := map[string]any{fieldName: resolveMessage(node, rc)}
 	// Baserow's own auth scheme: "Authorization: Token <api_token>", not
 	// the Bearer prefix most of the rest of these connectors use.

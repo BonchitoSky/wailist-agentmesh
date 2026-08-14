@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -192,7 +193,19 @@ func (d *Deps) OAuth2CredCallback(w http.ResponseWriter, r *http.Request) {
 
 	label, err := fetchGoogleAccountLabel(tok.AccessToken, p.userInfoURL)
 	if err != nil {
-		label = "" // Non-fatal -- the connection still works without a label.
+		// account_label is part of the (user_id, provider, account_label)
+		// upsert key (migration 000021_oauth_credentials_unique) -- falling
+		// back to "" here would make every failed-label connection for this
+		// user+provider collide on that key, silently overwriting one
+		// connected account's tokens with another's on the next failed
+		// lookup. A random suffix keeps the connection working (still
+		// non-fatal) without risking that cross-account clobber; worst case
+		// is a harmless duplicate row instead of a data leak.
+		suffix, rerr := randHex(4)
+		if rerr != nil {
+			suffix = strconv.FormatInt(time.Now().UnixNano(), 36)
+		}
+		label = "unlabeled-" + suffix
 	}
 
 	accessEnc, refreshEnc, err := oauthcred.EncryptTokens(tok, d.EncryptionKey)
@@ -201,7 +214,7 @@ func (d *Deps) OAuth2CredCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiresAt := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
+	expiresAt := oauthcred.TokenExpiry(tok)
 	if _, err := d.Store.InsertOAuthCredential(r.Context(), models.OAuthCredential{
 		UserID:          userID,
 		Provider:        name,

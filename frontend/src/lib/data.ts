@@ -63,15 +63,21 @@ export const PROVIDER_TEMPLATES = [
 // ACTION_CATEGORIES groups the Actions tab.
 export const GOOGLE_PRODUCTS = ["Gmail", "Sheets", "Calendar", "Drive"] as const;
 
+// usesMessage marks the operations that actually send/write something and
+// so benefit from a {{ }} message template (see resolveMessage/
+// expandTemplate in connector_helpers.go) -- mirrors the write-op cases in
+// backend/internal/engine/nodes/google.go (gmail_send/gmail_reply/
+// sheets_append/calendar_create) so the Inspector's Message section can
+// derive from this table instead of keeping its own separate id list.
 export const GOOGLE_TEMPLATES = [
   { id: "gmail_list", name: "Gmail: List Messages", desc: "Search/list inbox messages", icon: "✉", product: "Gmail" },
   { id: "gmail_get", name: "Gmail: Get Message", desc: "Read one message's content", icon: "✉", product: "Gmail" },
-  { id: "gmail_send", name: "Gmail: Send Message", desc: "Send a new email", icon: "✉", product: "Gmail" },
-  { id: "gmail_reply", name: "Gmail: Reply", desc: "Reply within a thread", icon: "✉", product: "Gmail" },
+  { id: "gmail_send", name: "Gmail: Send Message", desc: "Send a new email", icon: "✉", product: "Gmail", usesMessage: true },
+  { id: "gmail_reply", name: "Gmail: Reply", desc: "Reply within a thread", icon: "✉", product: "Gmail", usesMessage: true },
   { id: "sheets_read", name: "Sheets: Read Range", desc: "Read cell values", icon: "▦", product: "Sheets" },
-  { id: "sheets_append", name: "Sheets: Append Row", desc: "Add a row of data", icon: "▦", product: "Sheets" },
+  { id: "sheets_append", name: "Sheets: Append Row", desc: "Add a row of data", icon: "▦", product: "Sheets", usesMessage: true },
   { id: "calendar_list", name: "Calendar: List Events", desc: "List upcoming events", icon: "◔", product: "Calendar" },
-  { id: "calendar_create", name: "Calendar: Create Event", desc: "Schedule a new event", icon: "◔", product: "Calendar" },
+  { id: "calendar_create", name: "Calendar: Create Event", desc: "Schedule a new event", icon: "◔", product: "Calendar", usesMessage: true },
   { id: "drive_list", name: "Drive: List Files", desc: "Search/list files", icon: "▤", product: "Drive" },
   { id: "drive_get", name: "Drive: Get File Info", desc: "Read file metadata", icon: "▤", product: "Drive" },
   { id: "drive_download", name: "Drive: Download File", desc: "Fetch file contents", icon: "▤", product: "Drive" },

@@ -151,19 +151,21 @@ func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 		// messageTemplate -- a different node type/Inspector, and "body" is
 		// the accurate term for what a request carries, vs. a connector's
 		// "message". Same {{ result }} / {{ result.field }} syntax either
-		// way (expandTemplate); empty means send rc.Message() verbatim, as
-		// before.
+		// way (expandTemplate).
 		//
-		// DELETE is the exception: unlike POST/PUT/PATCH it historically
-		// sent no body at all, and plenty of APIs reject or mishandle a
-		// DELETE that carries one. Only attach a body to DELETE when the
-		// node explicitly opts in via httpBodyTemplate -- never default it
-		// to rc.Message() the way the other three methods do.
+		// Only POST defaults to rc.Message() verbatim with no template set --
+		// that's the pre-existing behavior and changing it would silently
+		// alter every already-saved POST node. PUT/PATCH/DELETE are new
+		// body-carrying methods as far as already-saved nodes are concerned
+		// (previously they never got a body at all), so they only attach one
+		// when the node explicitly opts in via httpBodyTemplate -- never
+		// defaulted, to avoid silently changing behavior for nodes saved
+		// before this method-aware body logic existed.
 		tmpl := configVal(node, "httpBodyTemplate", "")
 		switch {
 		case tmpl != "":
 			bodyReader = bytes.NewReader([]byte(expandTemplate(tmpl, rc)))
-		case method != http.MethodDelete:
+		case method == http.MethodPost:
 			bodyReader = bytes.NewReader([]byte(rc.Message()))
 		}
 	}

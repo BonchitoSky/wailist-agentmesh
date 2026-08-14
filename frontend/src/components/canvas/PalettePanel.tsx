@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useLayoutEffect } from "react";
+import { useState, useRef, useLayoutEffect, useMemo } from "react";
 import { WorkflowNode } from "@/lib/types";
 import { BrandLogo } from "./nodes/brandLogos";
 import { PALETTE_TWO_COL_MIN } from "./panelSizing";
@@ -289,17 +289,25 @@ export function PalettePanel({
 
   const tabDef = PALETTE_TABS.find((t) => t.id === tab)!;
   const items = tabDef.items() as unknown[];
-  const mapped = (items as Parameters<typeof tabDef.map>[0][]).map(
-    tabDef.map as (
-      it: Parameters<typeof tabDef.map>[0],
-    ) => Partial<WorkflowNode>,
+  const mapped = useMemo(
+    () =>
+      (items as Parameters<typeof tabDef.map>[0][]).map(
+        tabDef.map as (
+          it: Parameters<typeof tabDef.map>[0],
+        ) => Partial<WorkflowNode>,
+      ),
+    [items, tabDef],
   );
-  const filtered = mapped.filter(
-    (i) =>
-      ((i.name ?? i.label ?? "") as string)
-        .toLowerCase()
-        .includes(q.toLowerCase()) ||
-      (i.sub ?? "").toLowerCase().includes(q.toLowerCase()),
+  const filtered = useMemo(
+    () =>
+      mapped.filter(
+        (i) =>
+          ((i.name ?? i.label ?? "") as string)
+            .toLowerCase()
+            .includes(q.toLowerCase()) ||
+          (i.sub ?? "").toLowerCase().includes(q.toLowerCase()),
+      ),
+    [mapped, q],
   );
 
   // The Actions tab is the one palette tab that's actually a connector
@@ -307,21 +315,42 @@ export function PalettePanel({
   // `isActions` so every other tab keeps using `filtered` above, untouched.
   const isActions = tab === "actions";
   const q_ = q.trim().toLowerCase();
-  const actionEntries: ActionEntry[] = isActions
-    ? (items as { category?: string }[]).map((raw, i) => ({
-        meta: mapped[i],
-        category: raw.category,
-      }))
-    : [];
-  const actionSearched = q_
-    ? actionEntries
-        .filter((e) => scoreEntry(e, q_) > 0)
-        .sort((a, b) => {
-          const s = scoreEntry(b, q_) - scoreEntry(a, q_);
-          if (s !== 0) return s;
-          return (a.meta.name ?? "").localeCompare(b.meta.name ?? "");
-        })
-    : actionEntries;
+  const actionEntries: ActionEntry[] = useMemo(
+    () =>
+      isActions
+        ? (items as { category?: string }[]).map((raw, i) => ({
+            meta: mapped[i],
+            category: raw.category,
+          }))
+        : [],
+    [isActions, items, mapped],
+  );
+  const actionSearched = useMemo(
+    () =>
+      q_
+        ? actionEntries
+            .filter((e) => scoreEntry(e, q_) > 0)
+            .sort((a, b) => {
+              const s = scoreEntry(b, q_) - scoreEntry(a, q_);
+              if (s !== 0) return s;
+              return (a.meta.name ?? "").localeCompare(b.meta.name ?? "");
+            })
+        : actionEntries,
+    [actionEntries, q_],
+  );
+  // One pass over actionEntries grouped by category, instead of one filter
+  // pass per ACTION_CATEGORIES entry -- avoids re-scanning the whole list
+  // once per category on every render of the (non-searching) browsing view.
+  const actionsByCategory = useMemo(() => {
+    const groups = new Map<string, ActionEntry[]>();
+    for (const e of actionEntries) {
+      const cat = e.category ?? "";
+      const group = groups.get(cat);
+      if (group) group.push(e);
+      else groups.set(cat, [e]);
+    }
+    return groups;
+  }, [actionEntries]);
 
   // Reflow the item list into two columns once the panel is dragged wide.
   const cols = width >= PALETTE_TWO_COL_MIN ? 2 : 1;
@@ -521,7 +550,7 @@ export function PalettePanel({
             // than per-row while this view is showing (every other tab, and
             // the searching view above, keep the original per-row glide).
             ACTION_CATEGORIES.map((cat) => {
-              const group = actionEntries.filter((e) => e.category === cat);
+              const group = actionsByCategory.get(cat) ?? [];
               if (group.length === 0) return null;
               return (
                 <div key={cat} style={{ gridColumn: "1 / -1" }}>
