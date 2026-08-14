@@ -104,6 +104,14 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Get("/oauth2/{provider}/callback", d.OAuth2CredCallback)
 		r.Get("/oauth2/credentials", d.OAuth2CredList)
 		r.Delete("/oauth2/credentials/{id}", d.OAuth2CredDelete)
+
+		// Connector account-linking (Slack/GitHub/Notion/etc, #42) -- a
+		// separate OAuth surface from oauth2/* above: that one is Google's
+		// four products sharing one consent screen, this one is one
+		// provider per connector node, each with its own authorize/token
+		// endpoint registered in connector_oauth.go's provider registry.
+		r.Get("/connectors/oauth/{provider}/start", d.ConnectorOAuthStart)
+		r.Get("/connectors/oauth/{provider}/callback", d.ConnectorOAuthCallback)
 	})
 
 	return r
