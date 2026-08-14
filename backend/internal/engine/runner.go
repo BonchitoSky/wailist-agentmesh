@@ -477,6 +477,12 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 // (their only inbound leg) with just their own slice of that amount — so a
 // consumer de-duplicating by tx id keeps the accurate one by keeping the
 // first.
+//
+// isFundingReceipt marks this row as bookkeeping, not a tool invocation: a
+// single funding transaction can cover many real per-call receipts that
+// follow, so a consumer counting "how many tools ran" must skip this row
+// specifically rather than deduplicating by tx id (that would collapse the
+// real, distinct calls that share its tx id down to one).
 func prependRunFundingReceipt(result map[string]any, rf runFundResult, node models.WorkflowNode, usdcAssetID uint64) {
 	if rf.FundingTxID == "" {
 		return
@@ -489,6 +495,7 @@ func prependRunFundingReceipt(result map[string]any, rf runFundResult, node mode
 		"txId":             rf.FundingTxID,
 		"amount":           fmt.Sprintf("%.6f", float64(rf.FundedUSDMicros)/1e6),
 		"explorerURL":      nodes.ExplorerURLForAsset(usdcAssetID, rf.FundingTxID),
+		"isFundingReceipt": true,
 	}
 	// []map[string]any is the concrete type Run()'s publish loop asserts on;
 	// anything else there would silently drop every payment row.
