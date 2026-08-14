@@ -21,6 +21,11 @@ const memberSince = (iso?: string): string => {
         year: "numeric",
         month: "long",
         day: "numeric",
+        // Pinned, or the server (UTC) and a browser west of it disagree:
+        // 2026-01-01T00:00:00Z is "January 1, 2026" in UTC and
+        // "December 31, 2025" everywhere in the Americas, which hydrates
+        // as a mismatch. A signup date is the same day for everyone.
+        timeZone: "UTC",
       }).format(d);
 };
 
