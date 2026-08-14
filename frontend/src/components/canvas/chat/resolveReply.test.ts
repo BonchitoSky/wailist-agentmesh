@@ -153,4 +153,83 @@ describe("resolveReply", () => {
     ]);
     expect(r.spendUSD).toBeCloseTo(0.07, 6);
   });
+
+  it("counts a run-funded agent's per-call receipts as real tool calls, but not the funding row", () => {
+    // A run-level pre-fund publishes one funding row plus one receipt per
+    // real tool call, all sharing the funding tx id (runner.go's
+    // prependRunFundingReceipt). Two real calls should read as 2, not 3.
+    const r = resolveReply([
+      log({
+        stepIndex: 0,
+        nodeId: "a1",
+        nodeType: "tool402",
+        output: {
+          txId: "FUNDTX",
+          settledUsdMicros: 50000,
+          isFundingReceipt: true,
+        },
+      }),
+      log({
+        stepIndex: 1,
+        nodeId: "t1",
+        nodeType: "tool402",
+        output: { txId: "FUNDTX", settledUsdMicros: 20000 },
+      }),
+      log({
+        stepIndex: 2,
+        nodeId: "t2",
+        nodeType: "tool402",
+        output: { txId: "FUNDTX", settledUsdMicros: 15000 },
+      }),
+    ]);
+    expect(r.toolCount).toBe(2);
+  });
+
+  it("dedupes a run-funded agent's spend by tx id, keeping the full funded total", () => {
+    const r = resolveReply([
+      log({
+        stepIndex: 0,
+        nodeId: "a1",
+        nodeType: "tool402",
+        output: {
+          txId: "FUNDTX",
+          settledUsdMicros: 50000,
+          isFundingReceipt: true,
+        },
+      }),
+      log({
+        stepIndex: 1,
+        nodeId: "t1",
+        nodeType: "tool402",
+        output: { txId: "FUNDTX", settledUsdMicros: 20000 },
+      }),
+      log({
+        stepIndex: 2,
+        nodeId: "t2",
+        nodeType: "tool402",
+        output: { txId: "FUNDTX", settledUsdMicros: 15000 },
+      }),
+    ]);
+    // Not 50000+20000+15000 -- the per-call rows are slices of the same
+    // funding total, already counted once via the first (funding) row.
+    expect(r.spendUSD).toBeCloseTo(0.05, 6);
+  });
+
+  it("sums two settlements with no tx id independently, not as duplicates of each other", () => {
+    const r = resolveReply([
+      log({
+        stepIndex: 0,
+        nodeId: "t1",
+        nodeType: "tool402",
+        output: { settledUsdMicros: 20000 },
+      }),
+      log({
+        stepIndex: 1,
+        nodeId: "t2",
+        nodeType: "tool402",
+        output: { settledUsdMicros: 15000 },
+      }),
+    ]);
+    expect(r.spendUSD).toBeCloseTo(0.035, 6);
+  });
 });

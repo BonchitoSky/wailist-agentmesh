@@ -1,4 +1,4 @@
-import { settledUsdOf, type LogEvent } from "../useRunTranscript";
+import { settledUsdOf, type LogEvent, type X402Payment } from "../useRunTranscript";
 
 // Turns a run's raw log events into the one thing a non-technical reader
 // actually wants: the agent's answer, plus a one-line summary of what it cost.
@@ -72,13 +72,43 @@ function spendOf(log: LogEvent): number {
   return settledUsdOf(log.output) ?? 0;
 }
 
+/**
+ * Sum settled spend across a run's logs, deduplicated by tx id.
+ *
+ * A run-level pre-fund publishes one funding row carrying the FULL amount
+ * that actually settled on-chain, then every tool call it covers repeats
+ * that same tx id with just its own slice (see runner.go's
+ * prependRunFundingReceipt) -- summing every row naively double- or
+ * triple-counts the same money. First occurrence wins, matching
+ * lib/settlements.ts, since the funding row is always published first and
+ * carries the accurate total. Rows with no tx id (a v2/relay settlement that
+ * returned none) are never deduplicated against each other -- each is still
+ * a real, distinct charge.
+ */
+function totalSpend(logs: LogEvent[]): number {
+  const seenTxIds = new Set<string>();
+  let total = 0;
+  for (const l of logs) {
+    const usd = spendOf(l);
+    if (usd === 0) continue;
+    const txId = (l.output as Partial<X402Payment> | null)?.txId;
+    if (txId) {
+      if (seenTxIds.has(txId)) continue;
+      seenTxIds.add(txId);
+    }
+    total += usd;
+  }
+  return total;
+}
+
 export function resolveReply(logs: LogEvent[]): RunSummary {
   const toolCount = logs.filter(
     (l) =>
       (l.nodeType === "tool" || l.nodeType === "tool402") &&
-      l.status === "success",
+      l.status === "success" &&
+      !(l.output as Partial<X402Payment> | null)?.isFundingReceipt,
   ).length;
-  const spendUSD = logs.reduce((sum, l) => sum + spendOf(l), 0);
+  const spendUSD = totalSpend(logs);
 
   // A failure is the headline: showing an earlier node's partial output as if
   // it were the answer would be a lie about what happened.
