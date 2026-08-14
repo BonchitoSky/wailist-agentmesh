@@ -23,6 +23,7 @@ type Snapshot = {
   rates: Rates | null;
   status: Status;
   override: string | null;
+  cached: string | null;
 };
 
 let rates: Rates | null = null;
@@ -31,21 +32,31 @@ let status: Status = "idle";
 // fetched at mount and has no refresh, so without this the new currency would
 // not appear until a full page reload.
 let override: string | null = null;
+// Last-known currency, read from localStorage on the first *client* snapshot
+// and never during render. React uses getServerSnapshot for the hydration
+// render, so the first client paint matches the server and only then
+// re-renders with this. Reading storage in render instead makes the server
+// emit "$12.50" where the client hydrates "€10.82" — a mismatch on every
+// screen that shows money.
+let cached: string | null = null;
+let cacheLoaded = false;
 const listeners = new Set<() => void>();
 
 // One stable object per state change: useSyncExternalStore compares snapshots by
 // identity, so returning a fresh literal each call would loop forever.
-let snapshot: Snapshot = { rates, status, override };
+let snapshot: Snapshot = { rates, status, override, cached };
 const SERVER_SNAPSHOT: Snapshot = {
   rates: null,
   status: "idle",
   override: null,
+  cached: null,
 };
 
 function commit(next: Snapshot): void {
   rates = next.rates;
   status = next.status;
   override = next.override;
+  cached = next.cached;
   snapshot = next;
   listeners.forEach((l) => l());
 }
@@ -57,7 +68,24 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-const getSnapshot = () => snapshot;
+// Mirrors ensureLoaded in lib/credits/store.ts: hydrate once, on the client,
+// outside render. Deliberately does not notify listeners — this runs during
+// React's own read, and the new snapshot identity is what triggers the
+// post-hydration re-render.
+function ensureCachedCurrency(): void {
+  if (cacheLoaded || typeof window === "undefined") return;
+  cacheLoaded = true;
+  const stored = readCachedCurrency();
+  if (stored !== null) {
+    cached = stored;
+    snapshot = { ...snapshot, cached: stored };
+  }
+}
+
+const getSnapshot = () => {
+  ensureCachedCurrency();
+  return snapshot;
+};
 const getServerSnapshot = () => SERVER_SNAPSHOT;
 
 // `allowRetry` re-attempts after a previous failure. Callers pass it only from
@@ -67,13 +95,15 @@ const getServerSnapshot = () => SERVER_SNAPSHOT;
 function ensureRates(allowRetry = false): void {
   if (status === "loading" || status === "ready") return;
   if (status === "failed" && !allowRetry) return;
-  commit({ rates, status: "loading", override });
+  commit({ ...snapshot, status: "loading" });
   fx.rates()
-    .then((table) => commit({ rates: table.rates, status: "ready", override }))
+    .then((table) =>
+      commit({ ...snapshot, rates: table.rates, status: "ready" }),
+    )
     // Leaves rates null, which makes formatMoney fall back to USD. Showing a
     // figure derived from a rate we could not fetch would be worse than showing
     // the underlying one.
-    .catch(() => commit({ rates: null, status: "failed", override }));
+    .catch(() => commit({ ...snapshot, rates: null, status: "failed" }));
 }
 
 /**
@@ -85,7 +115,7 @@ function ensureRates(allowRetry = false): void {
 export function applyDisplayCurrency(code: string): void {
   if (!isSupportedCurrency(code)) return;
   cacheCurrency(code);
-  commit({ rates, status, override: code });
+  commit({ ...snapshot, override: code });
   // Retries a previous failure: picking a currency is a deliberate act, and is
   // the natural moment to try the rate table again.
   if (!isDefaultCurrency(code)) ensureRates(true);
@@ -146,10 +176,7 @@ export function useCurrency(): CurrencyView {
   // lands. Both fall back to USD, so an unauthenticated or still-loading render
   // is the default experience rather than a guess.
   const currency =
-    snap.override ??
-    user?.displayCurrency ??
-    readCachedCurrency() ??
-    DEFAULT_CURRENCY;
+    snap.override ?? user?.displayCurrency ?? snap.cached ?? DEFAULT_CURRENCY;
 
   useEffect(() => {
     // Cached unconditionally, including USD: switching back to the default has
@@ -189,5 +216,6 @@ export function useCurrency(): CurrencyView {
 
 /** Test-only: drop the module-level rate cache between cases. */
 export function __resetCurrencyStoreForTest(): void {
-  commit({ rates: null, status: "idle", override: null });
+  cacheLoaded = false;
+  commit({ rates: null, status: "idle", override: null, cached: null });
 }
