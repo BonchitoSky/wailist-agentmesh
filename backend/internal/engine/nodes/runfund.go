@@ -138,7 +138,7 @@ func selfSettleWallet1ToWallet2(ctx context.Context, cfg RunPreFundConfig, publi
 							"type": "object",
 							"properties": map[string]any{
 								"type":   map[string]any{"type": "string", "const": "http"},
-								"method": map[string]any{"type": "string", "enum": []string{"GET", "HEAD", "DELETE"}},
+								"method": map[string]any{"type": "string", "enum": []string{"GET"}},
 							},
 							"required":             []string{"type", "method"},
 							"additionalProperties": false,

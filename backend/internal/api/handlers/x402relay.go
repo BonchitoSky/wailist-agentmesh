@@ -561,7 +561,7 @@ func bazaarDiscoveryExtension(target string) map[string]any {
 	input := map[string]any{"type": "http", "method": "GET"}
 	inputSchemaProps := map[string]any{
 		"type":   map[string]any{"type": "string", "const": "http"},
-		"method": map[string]any{"type": "string", "enum": []string{"GET", "HEAD", "DELETE"}},
+		"method": map[string]any{"type": "string", "enum": []string{"GET"}},
 	}
 	required := []string{"type", "method"}
 	// outputExample is optional per the real spec (only `input` is in the
