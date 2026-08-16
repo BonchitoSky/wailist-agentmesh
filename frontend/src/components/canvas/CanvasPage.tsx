@@ -365,10 +365,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "unknown error";
         showToast(`Build failed · ${message}`);
-        return {
-          ok: false,
-          reply: `Could not update the workflow: ${message}`,
-        };
+        return { ok: false, reply: `Could not update the workflow: ${message}` };
       }
     },
     [workflow, showToast, flushPendingSave],

@@ -622,7 +622,9 @@ function HttpHeadersField({
   return (
     <Field label="Custom headers" hint="encrypted at rest">
       {isEncrypted && (
-        <div style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 6 }}>
+        <div
+          style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 6 }}
+        >
           Headers set. Add a row below to replace them.
         </div>
       )}
@@ -1090,8 +1092,7 @@ function validateBodyTemplate(
   const missing = new Set<string>();
   for (const m of template.matchAll(BODY_PLACEHOLDER)) {
     const name = m[2].trim();
-    const isDiscoveredValue =
-      m[1] === "param" && paramDefaults?.[name] !== undefined;
+    const isDiscoveredValue = m[1] === "param" && paramDefaults?.[name] !== undefined;
     if (!known.has(name) && !isDiscoveredValue) missing.add(m[0]);
   }
   if (missing.size > 0) {
@@ -1122,6 +1123,7 @@ function bodySkeleton(fields: CustomParam[]): string {
   );
   return `{\n${lines.join(",\n")}\n}`;
 }
+
 
 function formatFileSize(base64: string): string {
   const bytes = Math.floor((base64.length * 3) / 4);
@@ -1198,11 +1200,7 @@ function Tool402Inspector({
   const bodyMode = node.bodyMode === "json" ? "json" : "params";
   const bodyTemplate = node.bodyTemplate ?? "";
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
-  const bodyError = validateBodyTemplate(
-    bodyTemplate,
-    custom,
-    node.paramDefaults,
-  );
+  const bodyError = validateBodyTemplate(bodyTemplate, custom, node.paramDefaults);
   // How the configured values will actually reach the endpoint — worth
   // stating outright, since it changes with the mode, the method, and
   // whether a file is attached (a file forces multipart, a body forces POST).
@@ -1794,9 +1792,7 @@ function Tool402Inspector({
                   <>
                     <span style={{ color: "var(--accent)" }}>✓ valid JSON</span>
                     {" — keys must match what the endpoint documents; field"}
-                    {
-                      " names are yours, they only appear inside {{…}}. A file's"
-                    }
+                    {" names are yours, they only appear inside {{…}}. A file's"}
                     {" bytes are filled in at call time, never pasted here."}
                   </>
                 ) : (
@@ -2725,8 +2721,7 @@ const CONNECTOR_AUTH: Record<
   },
   shopify: {
     needsLogin: true,
-    docUrl:
-      "https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens",
+    docUrl: "https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens",
     linkLabel: "Get access token",
   },
   baserow: {
@@ -3103,13 +3098,19 @@ function GoogleInspector({
           />
         </Field>
         <Field label="Operation">
-          <input style={inputStyle} value={tpl?.name ?? template} readOnly />
+          <input
+            style={inputStyle}
+            value={tpl?.name ?? template}
+            readOnly
+          />
         </Field>
       </Section>
 
       <Section label="Connected account">
         {loadingCreds ? (
-          <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>Loading…</div>
+          <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
+            Loading…
+          </div>
         ) : (
           <>
             {credentials.length === 0 ? (
@@ -3131,10 +3132,7 @@ function GoogleInspector({
                   onChange={(e) =>
                     onUpdate({
                       ...node,
-                      config: {
-                        ...node.config,
-                        oauthCredentialID: e.target.value,
-                      },
+                      config: { ...node.config, oauthCredentialID: e.target.value },
                     })
                   }
                 >
@@ -3175,7 +3173,8 @@ function GoogleInspector({
                 lineHeight: 1.5,
               }}
             >
-              One connection covers Gmail, Sheets, Calendar, and Drive together.
+              One connection covers Gmail, Sheets, Calendar, and Drive
+              together.
             </div>
           </>
         )}
@@ -3396,18 +3395,12 @@ function TendrilInspector({
   const action = node.tendrilAction ?? "rent";
 
   useEffect(() => {
-    tendrilApi
-      .credit()
-      .then(setCredit)
-      .catch(() => setCredit(null));
+    tendrilApi.credit().then(setCredit).catch(() => setCredit(null));
   }, []);
 
   useEffect(() => {
     if (action !== "rent") return;
-    tendrilApi
-      .machines()
-      .then(setMachines)
-      .catch(() => setMachines([]));
+    tendrilApi.machines().then(setMachines).catch(() => setMachines([]));
   }, [action]);
 
   const selectedMachine =
@@ -3438,8 +3431,8 @@ function TendrilInspector({
         {selectedMachine && (
           <>
             {" "}
-            — about {(creditVal / selectedMachine.pricePerHourUsd).toFixed(1)} h
-            on {selectedMachine.label || selectedMachine.id}
+            — about {(creditVal / selectedMachine.pricePerHourUsd).toFixed(1)}{" "}
+            h on {selectedMachine.label || selectedMachine.id}
           </>
         )}
         <div style={{ opacity: 0.6, marginTop: 2 }}>
@@ -3455,7 +3448,8 @@ function TendrilInspector({
             onChange={(e) =>
               onUpdate({
                 ...node,
-                tendrilAction: e.target.value as WorkflowNode["tendrilAction"],
+                tendrilAction: e.target
+                  .value as WorkflowNode["tendrilAction"],
               })
             }
           >
