@@ -275,6 +275,31 @@ export const IconClose = ({ size = 14 }: { size?: number }) => (
   </svg>
 );
 
+export const IconBackspace = ({ size = 12 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+    style={{ display: "block" }}
+  >
+    <path
+      d="M6 3.5h6.5a1.5 1.5 0 0 1 1.5 1.5v6a1.5 1.5 0 0 1-1.5 1.5H6L1.5 8z"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M7.5 6.5l3 3M10.5 6.5l-3 3"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
 export const IconGrid = ({ size = 14 }: { size?: number }) => (
   <svg
     width={size}
