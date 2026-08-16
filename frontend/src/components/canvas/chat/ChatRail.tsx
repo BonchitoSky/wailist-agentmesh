@@ -258,12 +258,10 @@ function RailSwitch({
 function TabPill({
   label,
   active,
-  badge = false,
   onClick,
 }: {
   label: string;
   active: boolean;
-  badge?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -286,17 +284,6 @@ function TabPill({
       }}
     >
       {label}
-      {badge && (
-        <span
-          style={{
-            width: 5,
-            height: 5,
-            borderRadius: 999,
-            background: "var(--accent)",
-            flexShrink: 0,
-          }}
-        />
-      )}
     </button>
   );
 }
