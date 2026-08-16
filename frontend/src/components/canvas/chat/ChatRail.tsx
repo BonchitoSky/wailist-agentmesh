@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { ChatPane } from "./ChatPane";
 import { TerminalTab } from "../TerminalTab";
+import { IconChat, IconInspect } from "@/components/ui";
 import type { ChatSession } from "./useChatSession";
 
 // The studio's right-hand column: one tall panel that toggles between the
@@ -82,18 +83,15 @@ export function ChatRail({
           columnGap: 4,
         }}
       >
-        <div style={{ display: "flex", gap: 4 }}>
-          <TabPill
-            label="Chat"
-            active={effectiveTab === "chat"}
-            onClick={() => setTab("chat")}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <RailSwitch
+            tab={effectiveTab}
+            onSelect={setTab}
+            hasSelection={hasSelection}
           />
-          <TabPill
-            label="Inspect"
-            active={effectiveTab === "inspector"}
-            badge={hasSelection && effectiveTab !== "inspector"}
-            onClick={() => setTab("inspector")}
-          />
+          {/* Terminal stays its own pill rather than becoming a third
+              segment: it is a transient machine session that only exists
+              while a lease does, not a peer of the two permanent panes. */}
           {leaseId && (
             <TabPill
               label="Term"
@@ -189,6 +187,70 @@ export function ChatRail({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** The rail's chat/inspector toggle: one segmented control with a sliding
+ *  thumb. Both labels stay visible so the control says what it switches
+ *  between before it is ever clicked, and each half is its own hit target so
+ *  clicking the pane you are already on is a no-op instead of flipping you
+ *  away from it. */
+function RailSwitch({
+  tab,
+  onSelect,
+  hasSelection,
+}: {
+  tab: RailTab;
+  onSelect: (tab: RailTab) => void;
+  hasSelection: boolean;
+}) {
+  return (
+    <div className="rail-switch" role="tablist" aria-label="Rail panel">
+      <span
+        className="rail-switch__thumb"
+        aria-hidden="true"
+        style={{
+          // The thumb is exactly one segment wide, so a 100% translate lands
+          // it precisely on the second segment.
+          transform: tab === "inspector" ? "translateX(100%)" : "translateX(0)",
+          // Terminal is live, so neither of these two panes is: fade the
+          // thumb rather than parking it on a segment that is not showing.
+          opacity: tab === "terminal" ? 0.35 : 1,
+        }}
+      />
+      <button
+        type="button"
+        role="tab"
+        aria-selected={tab === "chat"}
+        className="rail-switch__seg"
+        onClick={() => onSelect("chat")}
+      >
+        <IconChat size={11} />
+        Chat
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={tab === "inspector"}
+        className="rail-switch__seg"
+        onClick={() => onSelect("inspector")}
+      >
+        <IconInspect size={11} />
+        Inspect
+        {hasSelection && tab !== "inspector" && (
+          <span
+            aria-label="a node is selected"
+            style={{
+              width: 5,
+              height: 5,
+              borderRadius: 999,
+              background: "var(--accent)",
+              flexShrink: 0,
+            }}
+          />
+        )}
+      </button>
     </div>
   );
 }
