@@ -30,13 +30,6 @@ import {
   saveWidths,
 } from "./panelSizing";
 
-// Which chain a deployed workflow's payments actually settle on. Mainnet is
-// the default because that is what the platform runs: real USDC, the mainnet
-// asset id, real settlements on the merchants leaderboard. The badge claimed
-// "testnet" long after that stopped being true. Overridable so a testnet
-// deployment does not have to lie in the other direction.
-const ALGORAND_NETWORK = process.env.NEXT_PUBLIC_ALGORAND_NETWORK ?? "mainnet";
-
 interface CanvasPageProps {
   workflowId: string;
 }
@@ -704,9 +697,6 @@ function CanvasTopbar({
           borderRadius: 4,
         }}
       />
-      <Pill mono dot tone={deployed ? "ok" : "default"}>
-        {deployed ? `deployed · ${ALGORAND_NETWORK}` : "draft"}
-      </Pill>
       {saveLabel && <Pill mono>{saveLabel}</Pill>}
 
       <div style={{ flex: 1 }} />
