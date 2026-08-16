@@ -18,7 +18,7 @@ import {
 import { CanvasGraph } from "./CanvasGraph";
 import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
-import { ConsolePanel, type ConsoleTab } from "./ConsolePanel";
+import { ConsolePanel } from "./ConsolePanel";
 import { ResizeHandle } from "./ResizeHandle";
 import { ChatRail } from "./chat/ChatRail";
 import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
@@ -48,7 +48,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
-  const [dockTab, setDockTab] = useState<ConsoleTab>("logs");
   const [manualBuildMode, setManualBuildMode] = useState(false);
   const [deployed, setDeployed] = useState(false);
   const [running, setRunning] = useState(false);
@@ -317,19 +316,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   const buildMode = !hasProviderNode || manualBuildMode;
 
-  // Selecting a node reveals its config in the bottom dock's Inspector tab
-  // -- that dock is closed/on Logs by default, so a plain setSelectedId
-  // would select the node into a tab nobody's looking at. The chat rail is
-  // always on screen now (see below), so the dock is always where Inspector
-  // lives -- this always fires, not just for chat-trigger workflows.
-  const selectNode = useCallback((id: string | null) => {
-    setSelectedId(id);
-    if (id) {
-      setDockTab("inspector");
-      setLogOpen(true);
-    }
-  }, []);
-
   // Returns the new run's id, or null when no run started. Callers that own a
   // chat turn need that signal: a failure here only raises a toast, and
   // without an answer the turn would sit on "working…" forever.
@@ -535,7 +521,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   workflow={workflow}
                   setWorkflow={setWorkflowNN}
                   selectedId={selectedId}
-                  setSelectedId={selectNode}
+                  setSelectedId={setSelectedId}
                   deployed={deployed}
                   running={running}
                   attachedSummaries={attachedSummaries}
@@ -548,19 +534,6 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   logs={chat.logs}
                   elapsed={chat.elapsed}
                   done={chat.done}
-                  leaseId={chat.leaseId}
-                  tab={dockTab}
-                  onTabChange={setDockTab}
-                  inspectorNode={
-                    <Inspector
-                      selected={selected}
-                      workflowId={workflow.id}
-                      onUpdate={onUpdate}
-                      onDelete={onDelete}
-                      onClose={() => setSelectedId(null)}
-                      width="100%"
-                    />
-                  }
                 />
               </div>
 
@@ -581,10 +554,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 session={chat.session}
                 onSend={chat.handleSend}
                 busy={chat.busy}
-                onShowLogs={() => {
-                  setDockTab("logs");
-                  setLogOpen(true);
-                }}
+                onShowLogs={() => setLogOpen(true)}
                 width={inspectorW}
                 buildMode={buildMode}
                 canToggleBuildMode={hasProviderNode}

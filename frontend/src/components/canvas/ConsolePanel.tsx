@@ -1,14 +1,11 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pill } from "@/components/ui";
-import { TerminalTab } from "./TerminalTab";
 import {
   isX402Payment,
   type LogEvent,
   type X402Payment,
 } from "./useRunTranscript";
-
-export type ConsoleTab = "logs" | "terminal" | "inspector";
 
 interface ConsolePanelProps {
   open: boolean;
@@ -18,13 +15,6 @@ interface ConsolePanelProps {
   logs: LogEvent[];
   elapsed: number | null;
   done: boolean;
-  leaseId: string | null;
-  tab: ConsoleTab;
-  onTabChange: (tab: ConsoleTab) => void;
-  /** Rendered under the "Inspector" tab when provided; the tab itself is
-   * hidden otherwise -- a workflow with no chat trigger keeps its node
-   * config in the right rail instead, and has nothing to show here. */
-  inspectorNode?: React.ReactNode;
 }
 
 const HEIGHT_KEY = "agentmesh_console_height";
@@ -47,10 +37,6 @@ export function ConsolePanel({
   logs,
   elapsed,
   done,
-  leaseId,
-  tab,
-  onTabChange,
-  inspectorNode,
 }: ConsolePanelProps) {
   const [height, setHeight] = useState(DEFAULT_HEIGHT);
   const [resizing, setResizing] = useState(false);
@@ -143,18 +129,6 @@ export function ConsolePanel({
     return "RUN";
   };
 
-  // A run that stops offering a lease (a fresh run with no Tendril step)
-  // must not leave the console stuck on a dead Terminal tab, and a tab left
-  // on "inspector" from a chat workflow must not survive into one with
-  // nothing to inspect — both derived at render time rather than synced back
-  // via an effect.
-  const effectiveTab: ConsoleTab =
-    tab === "terminal" && !leaseId
-      ? "logs"
-      : tab === "inspector" && !inspectorNode
-        ? "logs"
-        : tab;
-
   const elapsedStr = (elapsed ?? 0).toFixed(1);
   const headerPill = runId
     ? done
@@ -162,7 +136,7 @@ export function ConsolePanel({
       : running
         ? `running · ${elapsedStr}s`
         : `run · ${runId.slice(0, 8)}`
-    : "console";
+    : null;
 
   const pillTone = done ? "ok" : running ? "warm" : "default";
 
@@ -238,11 +212,13 @@ export function ConsolePanel({
               letterSpacing: "0.08em",
             }}
           >
-            console
+            logs
           </span>
-          <Pill mono tone={pillTone} dot={running}>
-            {headerPill}
-          </Pill>
+          {headerPill && (
+            <Pill mono tone={pillTone} dot={running}>
+              {headerPill}
+            </Pill>
+          )}
           {logs.length > 0 && (
             <span
               style={{
@@ -253,42 +229,6 @@ export function ConsolePanel({
             >
               {logs.length} step{logs.length !== 1 ? "s" : ""}
             </span>
-          )}
-          {open && (
-            <div
-              onClick={(e) => e.stopPropagation()}
-              style={{ display: "flex", gap: 4 }}
-            >
-              {(
-                [
-                  ["logs", "Logs"],
-                  ...(leaseId ? [["terminal", "Terminal"] as const] : []),
-                  ...(inspectorNode
-                    ? [["inspector", "Inspector"] as const]
-                    : []),
-                ] as [ConsoleTab, string][]
-              ).map(([tb, label]) => (
-                <button
-                  key={tb}
-                  onClick={() => onTabChange(tb)}
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 9.5,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    padding: "2px 8px",
-                    borderRadius: 999,
-                    border: `1px solid ${effectiveTab === tb ? "var(--accent)" : "var(--border)"}`,
-                    color:
-                      effectiveTab === tb ? "var(--accent)" : "var(--fg-dim)",
-                    background: "transparent",
-                    cursor: "pointer",
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
           )}
         </div>
         <span
@@ -308,162 +248,120 @@ export function ConsolePanel({
         </span>
       </div>
 
-      {/* Body: whichever of Logs / Terminal / Inspector is active. Chat now
-          lives in its own rail (see CanvasPage) instead of splitting this
-          dock -- a chat-enabled workflow's node config comes here instead,
-          under the Inspector tab. */}
+      {/* Body: the run's log lines, and nothing else. Node config and the
+          Tendril terminal live in the right rail (see CanvasPage) so opening
+          either no longer pushes the transcript off screen. */}
       {open && (
         <div
+          ref={attachLogList}
           style={{
             flex: 1,
-            minWidth: 0,
-            minHeight: 0,
-            display: "flex",
-            flexDirection: "column",
+            overflow: "auto",
+            padding: "6px 14px 10px",
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            lineHeight: 1.7,
           }}
         >
-          {/* Inspector — kept mounted (hidden via CSS) like the log list, so
-              switching tabs doesn't lose in-progress edits. */}
-          {inspectorNode && (
+          {logs.length === 0 && !running && !runId && (
+            <div style={{ color: "var(--fg-dim)", paddingTop: 8 }}>
+              run a workflow to see execution logs here.
+            </div>
+          )}
+          {logs.length === 0 && running && (
+            <div style={{ color: "var(--fg-dim)", paddingTop: 8 }}>
+              waiting for first node…
+            </div>
+          )}
+          {logs.map((l, i) => (
             <div
+              key={i}
               style={{
-                display: effectiveTab === "inspector" ? "flex" : "none",
-                flex: 1,
-                minHeight: 0,
-                flexDirection: "column",
+                display: "grid",
+                gridTemplateColumns: compactRows
+                  ? "1fr"
+                  : "52px 34px 110px 1fr",
+                gap: compactRows ? 2 : 10,
+                alignItems: compactRows ? "stretch" : "baseline",
+                borderBottom: "1px solid var(--border-soft)",
+                padding: "3px 0",
               }}
             >
-              {inspectorNode}
-            </div>
-          )}
-
-          {/* Terminal — mounted only while selected; unmounting on tab
-              switch away is intentional (it owns a live WebSocket + SSH
-              session, unlike the log list which is cheap to keep mounted
-              underneath). */}
-          {effectiveTab === "terminal" && leaseId && (
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <TerminalTab
-                leaseId={leaseId}
-                onClose={() => onTabChange("logs")}
-              />
-            </div>
-          )}
-
-          {/* Log lines. Stays mounted (hidden via CSS) when another tab is
-              active, so switching back does not lose the transcript. */}
-          <div
-            ref={attachLogList}
-            style={{
-              display: effectiveTab === "logs" ? "block" : "none",
-              flex: 1,
-              overflow: "auto",
-              padding: "6px 14px 10px",
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              lineHeight: 1.7,
-            }}
-          >
-            {logs.length === 0 && !running && !runId && (
-              <div style={{ color: "var(--fg-dim)", paddingTop: 8 }}>
-                run a workflow to see execution logs here.
-              </div>
-            )}
-            {logs.length === 0 && running && (
-              <div style={{ color: "var(--fg-dim)", paddingTop: 8 }}>
-                waiting for first node…
-              </div>
-            )}
-            {logs.map((l, i) => (
-              <div
-                key={i}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: compactRows
-                    ? "1fr"
-                    : "52px 34px 110px 1fr",
-                  gap: compactRows ? 2 : 10,
-                  alignItems: compactRows ? "stretch" : "baseline",
-                  borderBottom: "1px solid var(--border-soft)",
-                  padding: "3px 0",
-                }}
-              >
-                {/* display:contents keeps these three as real grid cells in the
+              {/* display:contents keeps these three as real grid cells in the
                     wide layout; in compact mode they collapse onto one meta
                     line above the output instead of each taking a row. */}
-                <div
-                  style={
-                    compactRows
-                      ? {
-                          display: "flex",
-                          gap: 8,
-                          alignItems: "baseline",
-                          minWidth: 0,
-                        }
-                      : { display: "contents" }
-                  }
+              <div
+                style={
+                  compactRows
+                    ? {
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "baseline",
+                        minWidth: 0,
+                      }
+                    : { display: "contents" }
+                }
+              >
+                <span style={{ color: "var(--fg-dim)", fontSize: 9.5 }}>
+                  {new Date(l.ts).toLocaleTimeString("en", {
+                    hour12: false,
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </span>
+                <span
+                  style={{
+                    color: statusColor(l.status),
+                    fontWeight: 600,
+                    fontSize: 9.5,
+                  }}
                 >
-                  <span style={{ color: "var(--fg-dim)", fontSize: 9.5 }}>
-                    {new Date(l.ts).toLocaleTimeString("en", {
-                      hour12: false,
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      second: "2-digit",
-                    })}
+                  {statusLabel(l.status)}
+                </span>
+                <span
+                  style={{
+                    color: "var(--fg-muted)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  <span style={{ color: nodeTypeColor(l.nodeType) }}>
+                    {l.nodeType}
                   </span>
-                  <span
-                    style={{
-                      color: statusColor(l.status),
-                      fontWeight: 600,
-                      fontSize: 9.5,
-                    }}
-                  >
-                    {statusLabel(l.status)}
-                  </span>
-                  <span
-                    style={{
-                      color: "var(--fg-muted)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    <span style={{ color: nodeTypeColor(l.nodeType) }}>
-                      {l.nodeType}
+                  {l.durationMs > 0 && (
+                    <span style={{ color: "var(--fg-dim)" }}>
+                      {" "}
+                      · {l.durationMs}ms
                     </span>
-                    {l.durationMs > 0 && (
-                      <span style={{ color: "var(--fg-dim)" }}>
-                        {" "}
-                        · {l.durationMs}ms
-                      </span>
-                    )}
-                  </span>
-                </div>
-                <OutputCell output={l.output} />
+                  )}
+                </span>
               </div>
-            ))}
-            {done &&
-              (() => {
-                const succeeded = logs.filter(
-                  (l) => l.status === "success",
-                ).length;
-                const hasFailure = logs.some((l) => l.status === "failed");
-                return (
-                  <div
-                    style={{
-                      color: hasFailure ? "#F87171" : "var(--accent)",
-                      paddingTop: 6,
-                      fontSize: 10,
-                    }}
-                  >
-                    {hasFailure ? "✕ run failed" : "✓ run complete"} ·{" "}
-                    {(elapsed ?? 0).toFixed(1)}s · {succeeded}/{logs.length}{" "}
-                    nodes succeeded
-                  </div>
-                );
-              })()}
-            <div ref={bottomRef} />
-          </div>
+              <OutputCell output={l.output} />
+            </div>
+          ))}
+          {done &&
+            (() => {
+              const succeeded = logs.filter(
+                (l) => l.status === "success",
+              ).length;
+              const hasFailure = logs.some((l) => l.status === "failed");
+              return (
+                <div
+                  style={{
+                    color: hasFailure ? "#F87171" : "var(--accent)",
+                    paddingTop: 6,
+                    fontSize: 10,
+                  }}
+                >
+                  {hasFailure ? "✕ run failed" : "✓ run complete"} ·{" "}
+                  {(elapsed ?? 0).toFixed(1)}s · {succeeded}/{logs.length} nodes
+                  succeeded
+                </div>
+              );
+            })()}
+          <div ref={bottomRef} />
         </div>
       )}
     </div>
