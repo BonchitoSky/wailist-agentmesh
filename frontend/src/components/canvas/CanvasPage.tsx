@@ -386,7 +386,10 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "unknown error";
         showToast(`Build failed · ${message}`);
-        return { ok: false, reply: `Could not update the workflow: ${message}` };
+        return {
+          ok: false,
+          reply: `Could not update the workflow: ${message}`,
+        };
       }
     },
     [workflow, showToast, flushPendingSave],
@@ -586,6 +589,19 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 buildMode={buildMode}
                 canToggleBuildMode={hasProviderNode}
                 onToggleBuildMode={() => setManualBuildMode((v) => !v)}
+                inspectorNode={
+                  <Inspector
+                    selected={selected}
+                    workflowId={workflow.id}
+                    onUpdate={onUpdate}
+                    onDelete={onDelete}
+                    onClose={() => setSelectedId(null)}
+                    width="100%"
+                    embedded
+                  />
+                }
+                hasSelection={selected !== null}
+                leaseId={chat.leaseId}
               />
             </>
           )}

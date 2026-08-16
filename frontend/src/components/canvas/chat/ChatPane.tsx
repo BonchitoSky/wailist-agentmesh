@@ -43,7 +43,6 @@ export function ChatPane({ session, onSend, busy, onShowLogs }: ChatPaneProps) {
         // percentage height against an indefinite parent.
         flex: 1,
         minHeight: 0,
-        borderRight: "1px solid var(--border)",
       }}
     >
       {/* Transcript */}
