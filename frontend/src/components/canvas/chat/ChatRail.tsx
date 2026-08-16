@@ -139,6 +139,11 @@ export function ChatRail({
         style={{
           flex: 1,
           minHeight: 0,
+          // Every level from here down needs minWidth:0: a flex item's default
+          // min-width:auto floors it at its content's min-content width, which
+          // pushed the chat composer past the rail's right edge near the 260px
+          // minimum.
+          minWidth: 0,
           display: "flex",
           flexDirection: "column",
         }}
@@ -150,6 +155,7 @@ export function ChatRail({
             display: effectiveTab === "chat" ? "flex" : "none",
             flex: 1,
             minHeight: 0,
+            minWidth: 0,
           }}
         >
           <ChatPane
@@ -167,6 +173,7 @@ export function ChatRail({
             display: effectiveTab === "inspector" ? "flex" : "none",
             flex: 1,
             minHeight: 0,
+            minWidth: 0,
             flexDirection: "column",
           }}
         >
@@ -177,7 +184,7 @@ export function ChatRail({
             + SSH session, unlike the two above which are cheap to keep
             alive. */}
         {effectiveTab === "terminal" && leaseId && (
-          <div style={{ flex: 1, minHeight: 0 }}>
+          <div style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
             <TerminalTab leaseId={leaseId} onClose={() => setTab("chat")} />
           </div>
         )}

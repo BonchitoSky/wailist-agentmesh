@@ -43,6 +43,12 @@ export function ChatPane({ session, onSend, busy, onShowLogs }: ChatPaneProps) {
         // percentage height against an indefinite parent.
         flex: 1,
         minHeight: 0,
+        // A flex item defaults to min-width:auto, i.e. it refuses to shrink
+        // below its own min-content width. The composer's textarea carries an
+        // intrinsic ~20-column width, which floored this pane at ~289px and
+        // pushed the bubbles and the Send button past the rail's right edge
+        // once the rail was dragged near its 260px minimum.
+        minWidth: 0,
       }}
     >
       {/* Transcript */}
@@ -54,6 +60,7 @@ export function ChatPane({ session, onSend, busy, onShowLogs }: ChatPaneProps) {
         style={{
           flex: 1,
           minHeight: 0,
+          minWidth: 0,
           overflow: "auto",
           padding: "10px 14px",
           display: "flex",
@@ -102,6 +109,7 @@ export function ChatPane({ session, onSend, busy, onShowLogs }: ChatPaneProps) {
       <div
         style={{
           flexShrink: 0,
+          minWidth: 0,
           borderTop: "1px solid var(--border)",
           padding: 10,
           display: "flex",
@@ -125,6 +133,9 @@ export function ChatPane({ session, onSend, busy, onShowLogs }: ChatPaneProps) {
           disabled={busy}
           style={{
             flex: 1,
+            // Without this the textarea's intrinsic column width becomes a
+            // hard floor and the Send button gets pushed out of the rail.
+            minWidth: 0,
             resize: "none",
             minHeight: 38,
             maxHeight: 120,
