@@ -446,6 +446,10 @@ export function CanvasGraph({
               gap: 5,
               whiteSpace: "nowrap",
               flexShrink: 0,
+              // The row disables pointer events so it doesn't steal the
+              // first node's mousedown; re-enable them just here so the
+              // title tooltip is actually reachable by hover.
+              pointerEvents: "auto",
             }}
           >
             <span
