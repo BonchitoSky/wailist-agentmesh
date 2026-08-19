@@ -15,6 +15,7 @@ import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
 import { useCredits } from "@/lib/credits/store";
 import { tendril } from "@/lib/tendril";
+import { DEMO_WORKFLOW } from "@/lib/data";
 
 export function WorkflowsPage() {
   const router = useRouter();
@@ -25,6 +26,7 @@ export function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [creatingTendril, setCreatingTendril] = useState(false);
+  const [creatingDemo, setCreatingDemo] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
 
@@ -80,6 +82,28 @@ export function WorkflowsPage() {
       setCreatingTendril(false);
     }
   }, [creatingTendril, router]);
+
+  // Loads DEMO_WORKFLOW (lib/data.ts) into a brand-new workflow row every
+  // click -- unlike handleLoadTendrilWorkflow's find-or-create console, a
+  // demo is just a starting point the user immediately edits, so there's no
+  // "the one shared demo" identity to preserve and a fresh copy each time is
+  // correct. create() makes the empty row, then update() writes the full
+  // node/edge graph in one shot (same two-call pattern the canvas editor's
+  // own save path already uses).
+  const handleLoadDemoWorkflow = useCallback(async () => {
+    if (creatingDemo) return;
+    setCreatingDemo(true);
+    try {
+      const wf = await workflowsApi.create(DEMO_WORKFLOW.name);
+      await workflowsApi.update(wf.id, {
+        nodes: DEMO_WORKFLOW.nodes,
+        edges: DEMO_WORKFLOW.edges,
+      });
+      router.push(`/workflows/${wf.id}`);
+    } catch {
+      setCreatingDemo(false);
+    }
+  }, [creatingDemo, router]);
 
   // Deletion is permanent, so the row only calls this after its own in-menu
   // confirm step. The backend refuses (409) for workflows with Tendril lease
@@ -144,6 +168,32 @@ export function WorkflowsPage() {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button style={ghostBtn}>Import</button>
+              <button
+                onClick={handleLoadDemoWorkflow}
+                disabled={creatingDemo}
+                style={{
+                  ...ghostBtn,
+                  opacity: creatingDemo ? 0.6 : 1,
+                  position: "relative",
+                }}
+                title="Two Gemini 2.5 Flash agents + 3 real CANIX402 x402 calls (Algorand mainnet) + an HTTP tool + a Slack post -- $5.59 of real node cost on a successful run."
+              >
+                {creatingDemo ? "Loading…" : "Load demo workflow"}
+                <span
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 9,
+                    fontFamily: "var(--font-mono)",
+                    color: "var(--accent)",
+                    border: "1px solid var(--accent)",
+                    borderRadius: 999,
+                    padding: "1px 5px",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  ~$5.59/run
+                </span>
+              </button>
               <button
                 onClick={handleLoadTendrilWorkflow}
                 disabled={creatingTendril}
