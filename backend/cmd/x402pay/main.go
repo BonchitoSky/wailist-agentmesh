@@ -77,6 +77,14 @@ func main() {
 	if *network != "mainnet" && *network != "testnet" {
 		log.Fatalf("-network must be mainnet or testnet, got %q", *network)
 	}
+	if *maxMicros <= 0 {
+		// PayTargetFromWallet2 treats MaxRelayOutboundUSDMicros <= 0 as "no
+		// cap" (that's the correct default for server-side relay config,
+		// where 0 means unconfigured). Here it would silently invert the
+		// documented guarantee that this command refuses any quote above
+		// -max-micros, so reject it outright instead of passing it through.
+		log.Fatalf("-max-micros must be a positive number of micro-USDC, got %d (0 or negative disables the spend cap entirely)", *maxMicros)
+	}
 	relayNetwork := testnetRelayNet
 	defaultAsset := uint64(testnetUSDCAssetID)
 	defaultAlgod := "https://testnet-api.algonode.cloud"
