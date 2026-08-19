@@ -11,6 +11,10 @@ import "@xterm/xterm/css/xterm.css";
 // exactly the same reason.
 const WS_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
+// xterm's theme takes literal colors, not CSS custom properties, so this has
+// to mirror --bg-elev-1 in globals.css by hand -- keep the two in step.
+const BG_ELEV_1 = "#0f0e18";
+
 export function TerminalTab({
   leaseId,
   onClose,
@@ -29,7 +33,9 @@ export function TerminalTab({
       fontSize: 12,
       fontFamily:
         "var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace",
-      theme: { background: "#0b0b0d" },
+      // Matches the rail it is embedded in; a hardcoded near-black left a
+      // visible seam against --bg-elev-1.
+      theme: { background: BG_ELEV_1 },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -47,6 +53,18 @@ export function TerminalTab({
           JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
         );
       }
+    };
+
+    // Dragging the rail's resize handle delivers a ResizeObserver callback per
+    // frame; refitting and sending a PTY resize frame on each one costs ~60 of
+    // both for a one-second drag. Coalesce to the trailing edge instead.
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const queueResize = () => {
+      if (resizeTimer !== null) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resizeTimer = null;
+        sendResize();
+      }, 80);
     };
 
     ws.onopen = () => {
@@ -79,10 +97,11 @@ export function TerminalTab({
       if (ws.readyState === WebSocket.OPEN) ws.send(data);
     });
 
-    const observer = new ResizeObserver(sendResize);
+    const observer = new ResizeObserver(queueResize);
     observer.observe(host);
 
     return () => {
+      if (resizeTimer !== null) clearTimeout(resizeTimer);
       observer.disconnect();
       keys.dispose();
       ws.close();
@@ -99,7 +118,21 @@ export function TerminalTab({
           padding: "4px 8px",
         }}
       >
-        <button onClick={onClose} style={{ fontSize: 11 }}>
+        <button
+          onClick={onClose}
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 9.5,
+            textTransform: "uppercase",
+            letterSpacing: "0.06em",
+            padding: "2px 8px",
+            borderRadius: 999,
+            border: "1px solid var(--border)",
+            color: "var(--fg-dim)",
+            background: "transparent",
+            cursor: "pointer",
+          }}
+        >
           close terminal
         </button>
       </div>

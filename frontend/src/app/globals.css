@@ -475,3 +475,94 @@ body {
     transform: none;
   }
 }
+
+/* ── Workflow rail chat/inspect switch ──────────────────────────────────── */
+/* One control, two hit targets. A single button whose whole surface toggled
+   would flip you away from the label you just clicked; segmenting keeps the
+   selection idempotent while both labels stay readable, so the control
+   explains what it switches between without being used first. */
+.rail-switch {
+  position: relative;
+  /* Grid, not flex: the track is content-sized, so flex:1 leaves each segment
+     at its own label width ("CHAT" 59px vs "INSPECT" 78px) and the 50% thumb
+     lands 9px off. Equal minmax(0,1fr) columns size to the wider label, which
+     is what the thumb's 50% assumes. */
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  /* Recessed against the rail's --bg-elev-1, so the track reads as a groove
+     the thumb rides in rather than another raised pill. */
+  background: var(--bg);
+}
+
+/* Static chrome only; the moving values (transform + opacity) are set inline
+   by ChatRail, matching how the rest of this codebase styles stateful bits. */
+.rail-switch__thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  pointer-events: none;
+  transition:
+    transform 0.18s var(--ease),
+    opacity 0.18s var(--ease);
+}
+
+.rail-switch__seg {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  /* 26px matches this toolbar's existing dense pills and ghostBtnSm's 28px.
+     The 44px touch minimum is deliberately not met: the studio rail header is
+     desktop-only chrome and a 44px control would double its height. */
+  min-height: 26px;
+  padding: 0 9px;
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  transition:
+    color 0.12s var(--ease),
+    transform 0.12s var(--ease);
+}
+
+.rail-switch__seg:hover {
+  color: var(--fg-muted);
+}
+
+.rail-switch__seg[aria-selected="true"] {
+  color: var(--accent);
+}
+
+.rail-switch__seg:active {
+  transform: scale(0.97);
+}
+
+.rail-switch__seg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-switch__thumb,
+  .rail-switch__seg {
+    transition: none;
+  }
+}
