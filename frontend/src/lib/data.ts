@@ -571,24 +571,55 @@ export const SAMPLE_WORKFLOW: Workflow = {
 //   2 economy-tier Gemini 2.5 Flash calls  0.03 + 0.03      = 0.06
 //   3 real CANIX402 x402 calls             (0.01 + 1.50) x3 = 4.53
 //   1 standalone http tool ("Fetch Data")                   = 0.50
-//   1 standalone Slack action ("Post Summary")              = 0.50
+//   1 Slack action ("Post Summary") -- unbilled, see below  = 0.00
 //   -------------------------------------------------------------
-//   total                                                     $5.59 per successful run
+//   total                                                     $5.09 per successful run
 // address (both the tool402 paramDefaults and the address text the workflow
 // owner pasted into each system prompt) is the real Wallet 2 /
 // PLATFORM_WALLET address, same as before.
+// d10 ("Post Summary") ships with no slackWebhookURL/slackOAuthAccessToken --
+// a shared public template can't embed one user's real credential without
+// leaking it to everyone who clicks this button. ExecuteAction
+// (connectors_messaging.go) returns ErrActionSkipped when unconfigured,
+// which runner.go's NodeTypeAction case treats as a non-failure and never
+// bills (see debitOrLog only firing after a non-skip result) -- so this step
+// is a real, visible no-op until the user adds their own webhook, not a
+// silent failure and not part of the guaranteed cost above.
+// d8 (the third canixNode call) is deliberately NOT attached to either
+// agent's tools port, unlike d4/d7 -- it's a guaranteed flow step that runs
+// on every execution, not something the agent's LLM opts into. This is
+// intentional, not an oversight: attaching it to d5 alongside d7 would give
+// that agent two tool402 nodes with the identical name "CANIX402
+// Opportunities", and toolFuncName() (provider.go) derives the LLM function
+// name from Node.Name -- two identical declarations sent to the same model
+// would collide. So d4/d7 are the "agent decides" calls (billed only if the
+// agent's LLM actually invokes them), and d8 is the one guaranteed real
+// CANIX402 call baked into the total above.
 const CANIX_ADDRESS =
   "M6JQNJVX32HEN2LS5W2WX2PMSXPDHHKADVUATIQ5KQIVVVHSVILQNOS62A";
 
-function canixNode(id: string, x: number, y: number): WorkflowNode {
+function canixNode(
+  id: string,
+  x: number,
+  y: number,
+  finalPull = false,
+): WorkflowNode {
   return {
     id,
     type: "tool402",
     x,
     y,
-    name: "CANIX402 Opportunities",
-    description:
-      "Real, live x402-paid DeFi opportunities feed on Algorand mainnet (canix402-api.compx.io). Accepts: address (Algorand address, required), limit (optional).",
+    // finalPull (d8) isn't attached to either agent's tools port -- it's a
+    // guaranteed flow step, not an agent-invoked one like d4/d7 -- so its
+    // name/description say so, both to keep it visually distinct from d4/d7
+    // on the canvas and because it can't reuse their exact name without
+    // risking a toolFuncName() collision if it's ever attached later.
+    name: finalPull
+      ? "CANIX402 Opportunities (final pull)"
+      : "CANIX402 Opportunities",
+    description: finalPull
+      ? "Real, live x402-paid DeFi opportunities feed on Algorand mainnet (canix402-api.compx.io). Runs unconditionally as a flow step after the Synthesis Agent finishes -- unlike the two tool402 nodes above, this one is not agent-invoked, so it's billed on every run. Accepts: address (Algorand address, required), limit (optional)."
+      : "Real, live x402-paid DeFi opportunities feed on Algorand mainnet (canix402-api.compx.io). Accepts: address (Algorand address, required), limit (optional).",
     endpoint: "https://canix402-api.compx.io/opportunities",
     provider: "canix402.compx.io",
     price: "0.01",
@@ -640,7 +671,7 @@ export const DEMO_WORKFLOW: Workflow = {
       template: "gemini",
       x: 240,
       y: 460,
-      name: "Gemini 2.5 Pro",
+      name: "Gemini 2.5 Flash",
       model: "gemini-2.5-flash",
       keyMode: "platform",
     },
@@ -653,7 +684,7 @@ export const DEMO_WORKFLOW: Workflow = {
       y: 220,
       name: "Synthesis Agent",
       systemPrompt:
-        "You receive a research brief from the prior agent. Use the CANIX402 Opportunities tool for a second, independent data pull, then write a final report summarizing both.\naddrs M6JQNJVX32HEN2LS5W2WX2PMSXPDHHKADVUATIQ5KQIVVVHSVILQNOS62A",
+        "You receive a research brief from the prior agent. Use the CANIX402 Opportunities tool for a second, independent data pull, then write a final report summarizing both.\naddress M6JQNJVX32HEN2LS5W2WX2PMSXPDHHKADVUATIQ5KQIVVVHSVILQNOS62A",
     },
     {
       id: "d6",
@@ -661,12 +692,12 @@ export const DEMO_WORKFLOW: Workflow = {
       template: "gemini",
       x: 618.9473684210526,
       y: 461.05263157894734,
-      name: "Gemini 2.5 Pro",
+      name: "Gemini 2.5 Flash",
       model: "gemini-2.5-flash",
       keyMode: "platform",
     },
     canixNode("d7", 820, 460),
-    canixNode("d8", 980, 220),
+    canixNode("d8", 980, 220, true),
     {
       id: "d9",
       type: "tool",
@@ -684,6 +715,8 @@ export const DEMO_WORKFLOW: Workflow = {
       x: 1460,
       y: 220,
       name: "Post Summary",
+      description:
+        "Posts the pipeline's report to Slack -- add your own Incoming Webhook URL in this node's config to enable it. Unconfigured, this step no-ops (green, unbilled) rather than failing.",
     },
     { id: "d11", type: "end", template: "done", x: 1700, y: 220 },
   ],
