@@ -135,78 +135,73 @@ export function AppNav({
   };
 
   return (
-    <>
-      <div
-        ref={rootRef}
-        className={`appnav appnav--${variant}${open ? " appnav--open" : ""}`}
-        data-open={open || undefined}
-      >
-        <div className="appnav__shell">
-          <div className="appnav__bar">
-            {brand}
-            <div className="appnav__spacer" />
-            <nav className="appnav__inline" aria-label="Primary">
-              {/* Keyed here rather than in renderInlineLink: `href` is optional
+    <div
+      ref={rootRef}
+      className={`appnav appnav--${variant}${open ? " appnav--open" : ""}`}
+      data-open={open || undefined}
+    >
+      <div className="appnav__shell">
+        <div className="appnav__bar">
+          {brand}
+          <div className="appnav__spacer" />
+          <nav className="appnav__inline" aria-label="Primary">
+            {/* Keyed here rather than in renderInlineLink: `href` is optional
                   on a NavItem, so a consumer keying by it silently produces
                   undefined keys for the landing page's section links. */}
-              {items.map((item) => (
-                <Fragment key={item.label}>
-                  {renderInlineLink({
-                    item,
-                    active: isNavItemActive(item, pathname),
-                    onClick: () => select(item),
-                  })}
-                </Fragment>
-              ))}
-            </nav>
-            {actions ? <div className="appnav__actions">{actions}</div> : null}
-            <button
-              ref={triggerRef}
-              type="button"
-              className="appnav__trigger"
-              aria-expanded={open}
-              aria-controls={sheetId}
-              aria-label={open ? "Close menu" : "Menu"}
-              onClick={() => setOpen((o) => !o)}
-            >
-              <BurgerIcon open={open} />
-            </button>
-          </div>
+            {items.map((item) => (
+              <Fragment key={item.label}>
+                {renderInlineLink({
+                  item,
+                  active: isNavItemActive(item, pathname),
+                  onClick: () => select(item),
+                })}
+              </Fragment>
+            ))}
+          </nav>
+          {actions ? <div className="appnav__actions">{actions}</div> : null}
+          <button
+            ref={triggerRef}
+            type="button"
+            className="appnav__trigger"
+            aria-expanded={open}
+            aria-controls={sheetId}
+            aria-label={open ? "Close menu" : "Menu"}
+            onClick={() => setOpen((o) => !o)}
+          >
+            <BurgerIcon open={open} />
+          </button>
+        </div>
 
-          <div id={sheetId} className="appnav__sheet">
-            <nav aria-label="Primary">
-              {groupNavItems(items).map(({ group, items: groupItems }) => (
-                <div key={group || "_"}>
-                  {group ? <div className="appnav__group">{group}</div> : null}
-                  <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-                    {groupItems.map((item) => (
-                      <li key={item.label}>
-                        <button
-                          type="button"
-                          className="appnav__link"
-                          aria-current={
-                            isNavItemActive(item, pathname) ? "page" : undefined
-                          }
-                          onClick={() => select(item)}
-                        >
-                          {item.label}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </nav>
-            {sheetFooter ? (
-              <div className="appnav__sheet-foot">{sheetFooter}</div>
-            ) : null}
-          </div>
+        <div id={sheetId} className="appnav__sheet">
+          <nav aria-label="Primary">
+            {groupNavItems(items).map(({ group, items: groupItems }) => (
+              <div key={group || "_"}>
+                {group ? <div className="appnav__group">{group}</div> : null}
+                <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                  {groupItems.map((item) => (
+                    <li key={item.label}>
+                      <button
+                        type="button"
+                        className="appnav__link"
+                        aria-current={
+                          isNavItemActive(item, pathname) ? "page" : undefined
+                        }
+                        onClick={() => select(item)}
+                      >
+                        {item.label}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </nav>
+          {sheetFooter ? (
+            <div className="appnav__sheet-foot">{sheetFooter}</div>
+          ) : null}
         </div>
       </div>
-      {/* Sibling, so the open-state class on .appnav drives it through `~` with
-          no second piece of state to keep in sync. */}
-      <div className="appnav__scrim" onClick={() => setOpen(false)} />
-    </>
+    </div>
   );
 }
 

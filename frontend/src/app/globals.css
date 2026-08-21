@@ -688,7 +688,7 @@ body {
 
    Timing vocabulary (one easing, layered by delay):
      0.24s  sheet cross-fade
-     0.32s  scrim
+     0.32s  trigger colour
      80ms   stagger between layers
    Opening runs at 0ms delay and closing inherits the stagger, so opening feels
    immediate and closing feels unhurried at the same duration.
@@ -709,7 +709,7 @@ body {
 :root {
   --ease-nav: cubic-bezier(0.4, 0, 0.6, 1);
   --nav-rate-fade: 0.24s;
-  --nav-rate-scrim: 0.32s;
+  --nav-rate-slow: 0.32s;
   --nav-stagger: 80ms;
   --nav-h: 56px;
 }
@@ -766,7 +766,7 @@ body {
   cursor: pointer;
   outline-offset: -6px;
   flex-shrink: 0;
-  transition: color var(--nav-rate-scrim) var(--ease-nav);
+  transition: color var(--nav-rate-slow) var(--ease-nav);
 }
 .appnav__trigger:hover {
   color: var(--fg);
@@ -839,26 +839,12 @@ body {
   border-top: 1px solid var(--border);
 }
 
-/* Sibling of .appnav, driven purely by the open state class — no JS toggle. */
-.appnav__scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 55;
-  background: rgba(4, 3, 12, 0.5);
-  backdrop-filter: saturate(1.4) blur(8px);
-  opacity: 0;
-  visibility: hidden;
-  transition:
-    opacity var(--nav-rate-scrim) var(--ease-nav),
-    visibility var(--nav-rate-scrim) step-end;
-}
-.appnav--open ~ .appnav__scrim {
-  opacity: 1;
-  visibility: visible;
-  transition:
-    opacity var(--nav-rate-scrim) var(--ease-nav) var(--nav-stagger),
-    visibility var(--nav-rate-scrim) step-start var(--nav-stagger);
-}
+/* There is no scrim. The sheet is fixed and opaque from the bar to the bottom
+   of the viewport, and .appnav__shell covers the bar, so a dimming layer behind
+   them would never be seen and would never receive the click-outside it exists
+   to catch — .appnav is z-index:60 and position:relative, so the sheet paints
+   inside that stacking context and above any lower-z sibling. Escape, focus
+   leaving the region, and the trigger are what close the sheet. */
 
 @media (max-width: 768px) {
   .appnav__trigger {
@@ -869,8 +855,7 @@ body {
   }
 }
 @media (min-width: 769px) {
-  .appnav__sheet,
-  .appnav__scrim {
+  .appnav__sheet {
     display: none;
   }
 }
@@ -936,13 +921,11 @@ body {
 
 /* Applied while the viewport is being resized so crossing the breakpoint never
    plays the open animation. */
-.appnav-block-transitions .appnav__sheet,
-.appnav-block-transitions .appnav__scrim {
+.appnav-block-transitions .appnav__sheet {
   transition: none !important;
 }
 @media (prefers-reduced-motion: reduce) {
   .appnav__sheet,
-  .appnav__scrim,
   .appnav__trigger,
   .appnav__link {
     transition: none !important;
