@@ -306,7 +306,9 @@ function OnboardingModal({
             Tell us who you are so your teammates recognize you.
           </div>
         </div>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <label
+          style={{ display: "flex", flexDirection: "column", gap: 6 }}
+        >
           <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
             Full name
           </span>
@@ -319,7 +321,9 @@ function OnboardingModal({
             style={onboardingInputStyle}
           />
         </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <label
+          style={{ display: "flex", flexDirection: "column", gap: 6 }}
+        >
           <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
             Organization (optional)
           </span>
