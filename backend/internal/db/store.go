@@ -1330,10 +1330,14 @@ func (s *Store) GetOAuthCredential(ctx context.Context, id string) (models.OAuth
 // already omit them, but this is also the query boundary: no caller of this
 // method needs the ciphertext, only GetOAuthCredential's node-execution path
 // does).
+// ListOAuthCredentials returns a user's connected accounts. An empty
+// provider means every provider -- the canvas asks for one provider at a
+// time, while the settings page lists them all. Kept as a single statement
+// so there is no second query path to drift out of step.
 func (s *Store) ListOAuthCredentials(ctx context.Context, userID, provider string) ([]models.OAuthCredential, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT `+oauthCredentialCols+` FROM oauth_credentials
-		 WHERE user_id = $1 AND provider = $2 ORDER BY created_at DESC`, userID, provider)
+		 WHERE user_id = $1 AND ($2 = '' OR provider = $2) ORDER BY created_at DESC`, userID, provider)
 	if err != nil {
 		return nil, err
 	}
