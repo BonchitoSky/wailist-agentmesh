@@ -98,18 +98,32 @@ export function AppNav({
   // Crossing the breakpoint must not play the open animation. The class is
   // added for one frame around each resize, matching the escape hatch the
   // reference implementation ships.
+  //
+  // The same crossing must also not leave the sheet open: above the breakpoint
+  // the sheet and the trigger are both display:none, so an `open` that survives
+  // is an invisible scroll lock with no control left to release it. The media
+  // query mirrors the 768px in the AppNav block of globals.css, and its own
+  // `change` event is what closes the sheet — `resize` alone is not enough,
+  // since a viewport can cross the breakpoint without emitting one.
   useEffect(() => {
     let raf = 0;
+    const mq = window.matchMedia("(max-width: 768px)");
+    const closeAboveBreakpoint = () => {
+      if (!mq.matches) setOpen(false);
+    };
     const onResize = () => {
       document.documentElement.classList.add("appnav-block-transitions");
+      closeAboveBreakpoint();
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
         document.documentElement.classList.remove("appnav-block-transitions");
       });
     };
     window.addEventListener("resize", onResize);
+    mq.addEventListener("change", closeAboveBreakpoint);
     return () => {
       window.removeEventListener("resize", onResize);
+      mq.removeEventListener("change", closeAboveBreakpoint);
       cancelAnimationFrame(raf);
       document.documentElement.classList.remove("appnav-block-transitions");
     };
