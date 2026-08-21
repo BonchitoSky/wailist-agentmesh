@@ -556,6 +556,12 @@ body {
   flex: 1;
   max-width: 360px;
 }
+/* Trailing cell of a workflow row. Only the alignment lives here — the cell is
+   still laid out by its inline style, but this one property has to flip at the
+   breakpoint, and an inline value would beat the media query outright. */
+.wf-row-actions {
+  justify-content: flex-end;
+}
 
 @media (max-width: 1024px) {
   :root {
@@ -599,7 +605,7 @@ body {
   .wf-row > *:last-child {
     grid-column: 1 / -1;
   }
-  .wf-row > *:last-child {
+  .wf-row-actions {
     justify-content: flex-start;
   }
   .wf-row > [data-label]::before {

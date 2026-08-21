@@ -761,7 +761,7 @@ function WorkflowRows({
           >
             {fmtDate(wf.updatedAt ?? wf.updated)}
           </span>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 4 }}>
+          <div className="wf-row-actions" style={{ display: "flex", gap: 4 }}>
             <button
               style={ghostBtnSm}
               onClick={(e) => {
