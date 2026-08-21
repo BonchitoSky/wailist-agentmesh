@@ -76,11 +76,16 @@ type Deps struct {
 	// endpoints can build their own X402RelayConfig without going through a
 	// workflow run.
 	PlatformSpendWalletEncMnemonic string
-	FacilitatorClient              *x402.FacilitatorClient
-	USDCAssetID                    uint64
-	RelayNetwork                   string
-	RelayFeePayer                  string
-	USDCSigner                     USDCSigner
+	// PlatformGeminiAPIKey powers the chat-driven workflow builder's
+	// meta-agent (nodes.BuildGraph) -- independent of engine.Runner's own
+	// platform-key map (main.go's runner.SetPlatformKeys call) since Deps
+	// has no access to Runner's private fields.
+	PlatformGeminiAPIKey string
+	FacilitatorClient    *x402.FacilitatorClient
+	USDCAssetID          uint64
+	RelayNetwork         string
+	RelayFeePayer        string
+	USDCSigner           USDCSigner
 	// MaxRelayOutboundUSDMicros caps a single outbound relay payment
 	// (Wallet 2 -> target). The relay fetches a target's price quote twice
 	// per cycle (once for the public challenge preview, once again at
@@ -101,4 +106,29 @@ type Deps struct {
 	// here so the Tendril console's direct-action endpoints (topup/rent/run)
 	// can call nodes.ExecuteTendril without going through a workflow run.
 	TendrilSession *tendril.Session
+
+	SlackOAuthClientID          string
+	SlackOAuthClientSecret      string
+	GitHubConnectorClientID     string
+	GitHubConnectorClientSecret string
+	NotionClientID              string
+	NotionClientSecret          string
+	AirtableClientID            string
+	AirtableClientSecret        string
+	HubSpotClientID             string
+	HubSpotClientSecret         string
+	AsanaClientID               string
+	AsanaClientSecret           string
+	ClickUpClientID             string
+	ClickUpClientSecret         string
+	JiraClientID                string
+	JiraClientSecret            string
+	LinearClientID              string
+	LinearClientSecret          string
+	MailchimpClientID           string
+	MailchimpClientSecret       string
+	GitLabClientID              string
+	GitLabClientSecret          string
+	TodoistClientID             string
+	TodoistClientSecret         string
 }

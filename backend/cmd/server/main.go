@@ -141,6 +141,10 @@ func main() {
 		"groq":      os.Getenv("PLATFORM_GROQ_API_KEY"),
 		"mistral":   os.Getenv("PLATFORM_MISTRAL_API_KEY"),
 	})
+	// Reuses the same Google app already configured for sign-in-with-Google
+	// (below) -- Gmail/Sheets/Calendar/Drive nodes fail closed with a clear
+	// error if unset, same pattern as SetTendril.
+	runner.SetGoogleOAuth(os.Getenv("GOOGLE_CLIENT_ID"), os.Getenv("GOOGLE_CLIENT_SECRET"))
 
 	var tendrilClient *tendril.Client
 	var tendrilSession *tendril.Session
@@ -185,6 +189,7 @@ func main() {
 		PlatformWalletAddress:          platformWalletAddr,
 		PlatformWalletEncMnemonic:      platformWalletEncMnemonic,
 		PlatformSpendWalletEncMnemonic: platformSpendWalletEncMnemonic,
+		PlatformGeminiAPIKey:           os.Getenv("PLATFORM_GEMINI_API_KEY"),
 		FacilitatorClient:              facilitatorClient,
 		USDCAssetID:                    usdcAssetID,
 		RelayNetwork:                   relayNetwork,
@@ -193,6 +198,31 @@ func main() {
 		MaxRelayOutboundUSDMicros:      maxRelayOutboundUSDMicros,
 		TendrilClient:                  tendrilClient,
 		TendrilSession:                 tendrilSession,
+
+		SlackOAuthClientID:          os.Getenv("SLACK_OAUTH_CLIENT_ID"),
+		SlackOAuthClientSecret:      os.Getenv("SLACK_OAUTH_CLIENT_SECRET"),
+		GitHubConnectorClientID:     os.Getenv("GITHUB_CONNECTOR_CLIENT_ID"),
+		GitHubConnectorClientSecret: os.Getenv("GITHUB_CONNECTOR_CLIENT_SECRET"),
+		NotionClientID:              os.Getenv("NOTION_CLIENT_ID"),
+		NotionClientSecret:          os.Getenv("NOTION_CLIENT_SECRET"),
+		AirtableClientID:            os.Getenv("AIRTABLE_CLIENT_ID"),
+		AirtableClientSecret:        os.Getenv("AIRTABLE_CLIENT_SECRET"),
+		HubSpotClientID:             os.Getenv("HUBSPOT_CLIENT_ID"),
+		HubSpotClientSecret:         os.Getenv("HUBSPOT_CLIENT_SECRET"),
+		AsanaClientID:               os.Getenv("ASANA_CLIENT_ID"),
+		AsanaClientSecret:           os.Getenv("ASANA_CLIENT_SECRET"),
+		ClickUpClientID:             os.Getenv("CLICKUP_CLIENT_ID"),
+		ClickUpClientSecret:         os.Getenv("CLICKUP_CLIENT_SECRET"),
+		JiraClientID:                os.Getenv("JIRA_CLIENT_ID"),
+		JiraClientSecret:            os.Getenv("JIRA_CLIENT_SECRET"),
+		LinearClientID:              os.Getenv("LINEAR_CLIENT_ID"),
+		LinearClientSecret:          os.Getenv("LINEAR_CLIENT_SECRET"),
+		MailchimpClientID:           os.Getenv("MAILCHIMP_CLIENT_ID"),
+		MailchimpClientSecret:       os.Getenv("MAILCHIMP_CLIENT_SECRET"),
+		GitLabClientID:              os.Getenv("GITLAB_CLIENT_ID"),
+		GitLabClientSecret:          os.Getenv("GITLAB_CLIENT_SECRET"),
+		TodoistClientID:             os.Getenv("TODOIST_CLIENT_ID"),
+		TodoistClientSecret:         os.Getenv("TODOIST_CLIENT_SECRET"),
 	}
 
 	r := api.NewRouter(deps)
