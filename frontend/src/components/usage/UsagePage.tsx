@@ -1108,7 +1108,7 @@ function EndpointTable({
                   {r.provider}
                 </span>
                 <TypeTag type={r.type} />
-                <span style={numCell}>{r.calls.toLocaleString()}</span>
+                <span style={numCell}>{r.calls.toLocaleString("en")}</span>
                 {/* Both money columns are USD like every other figure on the page --
                   a bare "6.110" reads as dollars but is ALGO (~6× off). The exact
                   on-chain ALGO amount stays available on hover for anyone

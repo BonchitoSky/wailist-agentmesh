@@ -750,7 +750,7 @@ function WorkflowRows({
               color: "var(--fg-muted)",
             }}
           >
-            {wf.runs?.toLocaleString() ?? "-"}
+            {wf.runs?.toLocaleString("en") ?? "-"}
           </span>
           <span
             style={{
@@ -881,7 +881,7 @@ function WorkflowGrid({
                     0,
                 ),
               },
-              { label: "Runs", val: wf.runs?.toLocaleString() ?? "-" },
+              { label: "Runs", val: wf.runs?.toLocaleString("en") ?? "-" },
               { label: "Spend", val: wf.spend ?? "-", accent: true },
             ].map((s) => (
               <div key={s.label}>

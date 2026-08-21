@@ -232,7 +232,7 @@ function ChartTip({
       <TipRow
         c="var(--warm)"
         label="Usage"
-        val={`${data.calls.toLocaleString()} calls`}
+        val={`${data.calls.toLocaleString("en")} calls`}
       />
     </div>
   );
