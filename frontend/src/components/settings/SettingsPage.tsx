@@ -12,6 +12,7 @@ import { AccountSection } from "@/components/settings/sections/Account";
 import { BillingSection } from "@/components/settings/sections/Billing";
 import { ExecutionSection } from "@/components/settings/sections/Execution";
 import { DeveloperSection } from "@/components/settings/sections/Developer";
+import { ConnectionsSection } from "@/components/settings/sections/Connections";
 import { panelStyle } from "@/components/settings/ui";
 
 const SETTINGS_CSS = `
@@ -61,6 +62,7 @@ const RAIL = [
   { id: "password", label: "Password" },
   { id: "billing", label: "Billing" },
   { id: "execution", label: "Execution" },
+  { id: "connections", label: "Connections" },
   { id: "developer", label: "Developer" },
 ];
 
@@ -210,6 +212,7 @@ export function SettingsPage() {
                 </>
               )}
 
+              <ConnectionsSection />
               <DeveloperSection />
             </div>
           </div>

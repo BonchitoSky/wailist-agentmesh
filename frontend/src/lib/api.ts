@@ -687,22 +687,30 @@ export const oauth2 = {
   // async request.
   connectURL: (provider: string): string => `${BASE}/oauth2/${provider}/start`,
 
-  listCredentials: async (provider: string): Promise<OAuthCredentialSummary[]> => {
+  // Omitting the provider lists every connected account, which is what the
+  // settings page shows; the canvas passes one to narrow to its own node.
+  listCredentials: async (
+    provider?: string,
+  ): Promise<OAuthCredentialSummary[]> => {
     if (!BASE) return []; // No connected-account concept in mock mode.
-    const res = await fetch(
-      `${BASE}/oauth2/credentials?provider=${encodeURIComponent(provider)}`,
-      { credentials: "include" },
-    );
-    if (!res.ok) return [];
+    const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+    const res = await fetch(`${BASE}/oauth2/credentials${qs}`, {
+      credentials: "include",
+    });
+    if (!res.ok) throw new Error("could not load connected accounts");
     return res.json().catch(() => []);
   },
 
   deleteCredential: async (id: string): Promise<void> => {
     if (!BASE) return;
-    await fetch(`${BASE}/oauth2/credentials/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      credentials: "include",
-    });
+    const res = await fetch(
+      `${BASE}/oauth2/credentials/${encodeURIComponent(id)}`,
+      { method: "DELETE", credentials: "include" },
+    );
+    // Revoking is destructive and irreversible, so a failure has to reach
+    // the caller. Swallowing it would report "disconnected" while the
+    // credential is still live and still usable.
+    if (!res.ok) throw new Error("could not disconnect this account");
   },
 };
 
