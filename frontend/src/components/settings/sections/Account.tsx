@@ -1,5 +1,7 @@
 "use client";
 import { useState } from "react";
+import { PasswordField } from "@/components/ui/PasswordField";
+import { MIN_LENGTH, scorePassword } from "@/lib/password/strength";
 import { auth, type AuthUser } from "@/lib/api";
 import {
   FormStatus,
@@ -119,6 +121,77 @@ export function AccountSection({
 // Split out so a failed password change never clears the profile form's state,
 // and so the password rules get their own explanation rather than being
 // crammed into the account panel.
+function StrengthMeter({ pw }: { pw: string }) {
+  const { score, label, classes } = scorePassword(pw);
+  // No --ok token exists, so the ramp runs danger -> warm -> accent.
+  const colour =
+    score >= 4 ? "var(--accent)" : score >= 2 ? "var(--warm)" : "var(--danger)";
+
+  return (
+    <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 4 }} aria-hidden>
+        {[0, 1, 2, 3].map((i) => (
+          <span
+            key={i}
+            className="pw-seg"
+            style={{ background: i < score ? colour : "var(--border)" }}
+          />
+        ))}
+      </div>
+      {/* Says what it actually measures. This cannot know whether a password is
+          common or breached, so it must not imply it does -- and it never uses
+          the word "secure". */}
+      <span
+        aria-live="polite"
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 11,
+          letterSpacing: "0.04em",
+          color: "var(--fg-muted)",
+        }}
+      >
+        {pw
+          ? `${label} · ${pw.length} characters, ${classes}/4 character types`
+          : "Rated on length and variety only"}
+      </span>
+    </div>
+  );
+}
+
+function Requirement({ met, children }: { met: boolean; children: string }) {
+  return (
+    <li
+      className="pw-req"
+      data-met={met}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        color: met ? "var(--accent)" : "var(--fg-dim)",
+        fontSize: 12,
+      }}
+    >
+      <span aria-hidden style={{ fontFamily: "var(--font-mono)" }}>
+        {met ? "✓" : "○"}
+      </span>
+      {children}
+      {/* The glyph is decorative, so the state is carried as text for screen
+          readers rather than left to colour alone. */}
+      <span
+        style={{
+          position: "absolute",
+          width: 1,
+          height: 1,
+          overflow: "hidden",
+          clipPath: "inset(50%)",
+        }}
+      >
+        {met ? " — met" : " — not met"}
+      </span>
+    </li>
+  );
+}
+
 function PasswordSection() {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
@@ -126,11 +199,20 @@ function PasswordSection() {
   const [state, setState] = useState<SaveState>("idle");
   const [message, setMessage] = useState("");
 
+  const { meetsMinimum } = scorePassword(next);
+  const matches = next.length > 0 && next === confirm;
+  // Mismatch is only worth showing once there is something to compare against,
+  // so typing the confirmation does not flash an error on every keystroke.
+  const showMismatch = confirm.length > 0 && next !== confirm;
+  const canSubmit = Boolean(current) && meetsMinimum && matches;
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (next.length < 8) {
+    // The button is disabled unless these hold; kept as a guard because form
+    // submission can still be triggered by Enter in some browsers.
+    if (!meetsMinimum) {
       setState("error");
-      setMessage("New password must be at least 8 characters.");
+      setMessage(`New password must be at least ${MIN_LENGTH} characters.`);
       return;
     }
     // Caught here rather than server-side: the backend has no reason to know
@@ -167,40 +249,69 @@ function PasswordSection() {
     >
       <form onSubmit={submit} style={{ display: "grid", gap: 18 }}>
         <SettingRow label="Current password" htmlFor="set-pw-current">
-          <input
+          <PasswordField
             id="set-pw-current"
-            type="password"
             autoComplete="current-password"
             value={current}
-            onChange={(e) => setCurrent(e.target.value)}
+            onChange={setCurrent}
             style={inputStyle}
           />
         </SettingRow>
+
+        <SettingRow label="New password" htmlFor="set-pw-new">
+          <>
+            <PasswordField
+              id="set-pw-new"
+              autoComplete="new-password"
+              value={next}
+              onChange={setNext}
+              style={inputStyle}
+              describedBy="set-pw-reqs"
+            />
+            <StrengthMeter pw={next} />
+            {/* Requirements are shown up front and tick off as they are met, so
+                the form never fails on submit for a rule it never displayed.
+                Only the two the server actually enforces appear here. */}
+            <ul
+              id="set-pw-reqs"
+              style={{
+                position: "relative",
+                listStyle: "none",
+                margin: "10px 0 0",
+                padding: 0,
+                display: "grid",
+                gap: 6,
+              }}
+            >
+              <Requirement met={meetsMinimum}>
+                {`At least ${MIN_LENGTH} characters`}
+              </Requirement>
+              <Requirement met={matches}>Both new passwords match</Requirement>
+            </ul>
+          </>
+        </SettingRow>
+
         <SettingRow
-          label="New password"
-          htmlFor="set-pw-new"
-          hint="At least 8 characters."
+          label="Confirm new password"
+          htmlFor="set-pw-confirm"
+          hint={showMismatch ? "These don't match yet." : undefined}
         >
-          <input
-            id="set-pw-new"
-            type="password"
-            autoComplete="new-password"
-            value={next}
-            onChange={(e) => setNext(e.target.value)}
-            style={inputStyle}
-          />
-        </SettingRow>
-        <SettingRow label="Confirm new password" htmlFor="set-pw-confirm">
-          <input
+          <PasswordField
             id="set-pw-confirm"
-            type="password"
             autoComplete="new-password"
             value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            style={inputStyle}
+            onChange={setConfirm}
+            style={
+              showMismatch
+                ? { ...inputStyle, borderColor: "var(--danger)" }
+                : inputStyle
+            }
           />
         </SettingRow>
-        <SaveButton saving={state === "saving"} disabled={!current || !next}>
+
+        {/* Disabled until the enforced rules pass, so the button never invites a
+            request the server is going to reject. */}
+        <SaveButton saving={state === "saving"} disabled={!canSubmit}>
           Change password
         </SaveButton>
         <FormStatus state={state} message={message} />
