@@ -38,6 +38,10 @@ export interface AuthUser {
   needsOnboarding: boolean;
 }
 
+// Mutable in mock mode so a profile edit persists for the session, the same
+// way MOCK_SETTINGS does for the settings page.
+const MOCK_PROFILE = { name: "Dev", orgName: "Acme Capital" };
+
 export const auth = {
   signIn: async (email: string, password: string): Promise<void> => {
     if (BASE) {
@@ -89,8 +93,11 @@ export const auth = {
     return {
       id: "dev",
       email: "dev@local",
-      name: "Dev",
-      orgName: "Acme Capital",
+      // Read from the same mock object updateProfile writes, so a saved
+      // name survives in mock mode instead of reverting to "Dev" on the
+      // next read -- matching how MOCK_SETTINGS already behaves.
+      name: MOCK_PROFILE.name,
+      orgName: MOCK_PROFILE.orgName,
       createdAt: "2026-01-01T00:00:00Z",
       // Read from the same mock the settings endpoints mutate, so changing
       // currency in mock mode propagates exactly as it does in real mode
@@ -115,11 +122,15 @@ export const auth = {
       if (!res.ok) throw new Error(data.error ?? "could not update profile");
       return data;
     }
+    MOCK_PROFILE.name = name;
+    MOCK_PROFILE.orgName = orgName;
     return {
       id: "dev",
       email: "dev@local",
       name,
       orgName,
+      createdAt: "2026-01-01T00:00:00Z",
+      displayCurrency: MOCK_SETTINGS.displayCurrency,
       needsOnboarding: false,
     };
   },
