@@ -6,6 +6,7 @@ import { auth, type AuthUser } from "@/lib/api";
 import {
   FormStatus,
   ReadOnlyRow,
+  formatDateUTC,
   SaveButton,
   SettingRow,
   SettingsSection,
@@ -13,23 +14,6 @@ import {
 } from "@/components/settings/ui";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
-
-const memberSince = (iso?: string): string => {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime())
-    ? "—"
-    : new Intl.DateTimeFormat("en", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        // Pinned, or the server (UTC) and a browser west of it disagree:
-        // 2026-01-01T00:00:00Z is "January 1, 2026" in UTC and
-        // "December 31, 2025" everywhere in the Americas, which hydrates
-        // as a mismatch. A signup date is the same day for everyone.
-        timeZone: "UTC",
-      }).format(d);
-};
 
 // `user` is deliberately non-nullable: the form below seeds its state with
 // useState, which ignores later prop changes, so mounting with a half-loaded
@@ -106,7 +90,7 @@ export function AccountSection({
               handles undefined. */}
           <ReadOnlyRow
             label="Member since"
-            value={memberSince(user.createdAt)}
+            value={formatDateUTC(user.createdAt)}
           />
           <SaveButton saving={profileState === "saving"} />
           <FormStatus state={profileState} message={profileMessage} />

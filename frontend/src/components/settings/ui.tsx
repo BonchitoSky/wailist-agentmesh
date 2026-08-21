@@ -214,3 +214,25 @@ export function FormStatus({
     </p>
   );
 }
+
+/**
+ * A date rendered in UTC.
+ *
+ * Pinned deliberately. Without an explicit timeZone the same instant formats a
+ * day earlier for every viewer west of the server -- 2026-01-01T00:00:00Z is
+ * "January 1, 2026" in UTC and "December 31, 2025" across the Americas. This
+ * page shipped that bug once already, so the formatting lives here rather than
+ * being retyped per section.
+ */
+export function formatDateUTC(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? "—"
+    : new Intl.DateTimeFormat("en", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        timeZone: "UTC",
+      }).format(d);
+}
