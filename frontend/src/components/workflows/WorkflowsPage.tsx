@@ -200,7 +200,7 @@ export function WorkflowsPage() {
                   opacity: creatingDemo ? 0.6 : 1,
                   position: "relative",
                 }}
-                title="Two Gemini 2.5 Flash agents + an HTTP tool + a Slack step (no-ops until you add your own webhook) + up to 3 real CANIX402 x402 calls (Algorand mainnet) -- only 1 of those 3 is guaranteed, the other 2 fire only if the agent's LLM chooses to call them (and can fire more than once). $2.07 guaranteed floor, ~$5.09 typical, no fixed ceiling."
+                title="Two Gemini 2.5 Flash agents + an HTTP tool + a Telegram step (no-ops until you add your own bot token/chat ID) + up to 3 real CANIX402 x402 calls (Algorand mainnet) -- only 1 of those 3 is guaranteed, the other 2 fire only if the agent's LLM chooses to call them (and can fire more than once). $2.07 guaranteed floor, ~$5.09 typical, no fixed ceiling."
               >
                 {creatingDemo ? "Loading…" : "Load demo workflow"}
                 <span style={{ marginLeft: 6 }}>
