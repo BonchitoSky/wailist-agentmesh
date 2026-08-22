@@ -27,7 +27,8 @@ export function WorkflowsPage() {
   const [creating, setCreating] = useState(false);
   const [creatingTendril, setCreatingTendril] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
-  const [pageError, setPageError] = useState("");
+  const [demoError, setDemoError] = useState("");
+  const [deleteError, setDeleteError] = useState("");
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
 
   useEffect(() => {
@@ -93,7 +94,7 @@ export function WorkflowsPage() {
   const handleLoadDemoWorkflow = useCallback(async () => {
     if (creatingDemo) return;
     setCreatingDemo(true);
-    setPageError("");
+    setDemoError("");
     let wf: Workflow | undefined;
     try {
       wf = await workflowsApi.create(DEMO_WORKFLOW.name);
@@ -107,7 +108,7 @@ export function WorkflowsPage() {
       // orphaned row behind in the user's workflow list -- best-effort
       // delete it before surfacing the error.
       if (wf) await workflowsApi.remove(wf.id).catch(() => {});
-      setPageError(
+      setDemoError(
         e instanceof Error ? e.message : "could not load demo workflow",
       );
       setCreatingDemo(false);
@@ -118,12 +119,12 @@ export function WorkflowsPage() {
   // confirm step. The backend refuses (409) for workflows with Tendril lease
   // history; that message is shown rather than leaving the row silently intact.
   const handleDelete = useCallback(async (id: string) => {
-    setPageError("");
+    setDeleteError("");
     try {
       await workflowsApi.remove(id);
       setWfList((prev) => prev.filter((w) => w.id !== id));
     } catch (e) {
-      setPageError(
+      setDeleteError(
         e instanceof Error ? e.message : "could not delete workflow",
       );
     }
@@ -185,12 +186,12 @@ export function WorkflowsPage() {
                   opacity: creatingDemo ? 0.6 : 1,
                   position: "relative",
                 }}
-                title="Two Gemini 2.5 Flash agents + 3 real CANIX402 x402 calls (Algorand mainnet) + an HTTP tool + a Slack step (no-ops until you add your own webhook) -- $5.09 of real node cost on a successful run."
+                title="Two Gemini 2.5 Flash agents + an HTTP tool + a Slack step (no-ops until you add your own webhook) + up to 3 real CANIX402 x402 calls (Algorand mainnet) -- only 1 of those 3 is guaranteed, the other 2 fire only if the agent's LLM chooses to call them (and can fire more than once). $2.07 guaranteed floor, ~$5.09 typical, no fixed ceiling."
               >
                 {creatingDemo ? "Loading…" : "Load demo workflow"}
                 <span style={{ marginLeft: 6 }}>
                   <Pill tone="accent" mono>
-                    ~$5.09/run
+                    $2.07+/run
                   </Pill>
                 </span>
               </button>
@@ -284,7 +285,7 @@ export function WorkflowsPage() {
             </button>
           </Card>
 
-          {pageError && (
+          {(demoError || deleteError) && (
             <div
               style={{
                 marginBottom: 16,
@@ -296,7 +297,7 @@ export function WorkflowsPage() {
                 fontSize: 12.5,
               }}
             >
-              {pageError}
+              {demoError || deleteError}
             </div>
           )}
 
