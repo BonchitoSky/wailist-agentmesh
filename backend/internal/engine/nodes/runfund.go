@@ -88,10 +88,15 @@ func SettlePlatformFee(ctx context.Context, cfg RunPreFundConfig, amountUSDMicro
 }
 
 // SettleRunTotal settles the whole run's non-tool402 billable total (agent
-// platform-key LLM fees, action/google/http BYOK flat fees, tendril lease
-// fees -- everything that otherwise only ever moves money inside the
-// internal credit ledger) as one more real, direct Wallet 1 -> Wallet 2
-// payment, same mechanism as FundRunReserve/SettlePlatformFee. Called once
+// platform-key LLM fees, action/google/http BYOK flat fees -- everything
+// that otherwise only ever moves money inside the internal credit ledger)
+// as one more real, direct Wallet 1 -> Wallet 2 payment, same mechanism as
+// FundRunReserve/SettlePlatformFee. Tendril lease/rent cost is NOT included
+// here -- it's charged against a wholly separate Tendril-credit pool
+// (Store.ChargeTendrilCredit), never the AgentMesh credit ledger this
+// settlement mirrors; only Tendril's own small gate fee is, and that
+// already flows through the tool402 relay path (excluded here the same way
+// as any other real tool402 spend). Called once
 // per run, after all node-level billing has already been committed to the
 // DB ledger -- this is an additive on-chain receipt for that already-final
 // total, not a second charge: the user's credit balance was already

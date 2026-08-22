@@ -136,6 +136,7 @@ func (r *Runner) debitOrLog(ctx context.Context, wf models.Workflow, run models.
 	if err := r.store.DebitCredits(ctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
 		log.Printf("debit failed: user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
 			wf.UserID, wf.ID, run.ID, nodeID, kind, amountUSDMicros, err)
+		return // the DB was never actually charged -- don't settle it on-chain either
 	}
 	// Always a BYOK flat fee (the only kind debitOrLog is ever called with),
 	// never a tool402 kind -- safe to accumulate unconditionally.
@@ -157,6 +158,18 @@ func (r *Runner) addRunBilling(runID string, amountUSDMicros int64) {
 // long enough for a single locked UPDATE, short enough not to hang a
 // terminating process indefinitely.
 const ledgerCompensationTimeout = 10 * time.Second
+
+// runTotalSettleTimeout bounds settleRunTotal's own facilitator round trip
+// (sign + Verify + Settle -- three real network calls, not a single locked
+// UPDATE), so it deliberately doesn't reuse ledgerCompensationTimeout.
+// reserveAndFundRun's identical FundRunReserve call has no timeout of its
+// own beyond the run's own ctx; settleRunTotal needs one because it runs
+// from a defer after ctx may already be cancelled (context.WithoutCancel),
+// but it should still give the facilitator as much room as the equivalent
+// pre-fund settlement effectively gets, not the much tighter DB-write
+// budget -- an overly tight bound here would spuriously drop a perfectly
+// good settlement under nothing worse than ordinary facilitator latency.
+const runTotalSettleTimeout = 60 * time.Second
 
 // newPaymentLedger builds the reserve/commit/release closures a real
 // on-chain tool402 payment (either dialect, standalone or agent-attached)
@@ -187,14 +200,20 @@ func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.Paym
 			defer cancel()
 			if err := r.store.CommitReservedDebit(bctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
 				criticalAlert(wf, run, "commit reserved debit failed (balance already decremented, no ledger row written)", err, "node", nodeID, "kind", kind, "amount", amountUSDMicros)
+				return // the DB ledger row was never actually written -- don't settle it on-chain either
 			}
 			// Real tool402 spend (standalone or agent-attached, either
-			// dialect) already gets its own on-chain settlement -- the
-			// run-level pre-fund or the per-call relay/legacy path -- so
-			// accumulating it here too would double-settle the same money.
-			// Everything else this shared ledger commits (tendril leases,
-			// agent-attached http/action flat fees) has no on-chain leg of
-			// its own yet, so it belongs in the run-total settlement.
+			// dialect, including Tendril's own gate fee -- which is routed
+			// through this same closure via ExecuteTool402V2) already gets
+			// its own on-chain settlement -- the run-level pre-fund or the
+			// per-call relay/legacy path -- so accumulating it here too
+			// would double-settle the same money. Everything else this
+			// shared ledger commits (agent-attached http/action flat fees)
+			// has no on-chain leg of its own yet, so it belongs in the
+			// run-total settlement. Tendril's own lease/rent cost never
+			// reaches this closure at all -- it's charged against a wholly
+			// separate Tendril-credit pool via Store.ChargeTendrilCredit,
+			// not this one.
 			if kind != models.DebitKindX402RelayCost && kind != models.DebitKindX402PlatformFee {
 				r.addRunBilling(run.ID, amountUSDMicros)
 			}
@@ -609,6 +628,7 @@ func (r *Runner) debitAgentFee(ctx context.Context, wf models.Workflow, run mode
 	if err := r.store.DebitCreditsForPlatformLLM(ctx, wf.UserID, amountUSDMicros, wf.ID, run.ID, nodeID, model, tokensIn, tokensOut); err != nil {
 		log.Printf("platform-key debit failed: user=%s workflow=%s run=%s node=%s model=%s amount=%d: %v",
 			wf.UserID, wf.ID, run.ID, nodeID, model, amountUSDMicros, err)
+		return // the DB was never actually charged -- don't settle it on-chain either
 	}
 	r.addRunBilling(run.ID, amountUSDMicros)
 }
@@ -652,7 +672,7 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run) {
 	runTotal := new(int64)
 	r.runBilling.Store(run.ID, runTotal)
 	defer func() {
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ledgerCompensationTimeout)
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runTotalSettleTimeout)
 		defer cancel()
 		r.settleRunTotal(sctx, wf, run, runTotal)
 		r.runBilling.Delete(run.ID)
