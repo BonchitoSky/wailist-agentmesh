@@ -585,11 +585,11 @@ export const SAMPLE_WORKFLOW: Workflow = {
 //     provider.go allows up to 15 tool-calling iterations per agent, so a
 //     run can bill for either tool more than once. $5.09 (both optional
 //     calls firing exactly once) is a realistic typical figure, not a ceiling.
-//   1 Slack action ("Post Summary") -- unbilled, see below  = 0.00
+//   1 Telegram action ("Post Summary") -- unbilled, see below  = 0.00
 // address (both the tool402 paramDefaults and the address text the workflow
 // owner pasted into each system prompt) is the real Wallet 2 /
 // PLATFORM_WALLET address, same as before.
-// d10 ("Post Summary") ships with no slackWebhookURL/slackOAuthAccessToken --
+// d10 ("Post Summary") ships with no telegramBotToken/telegramChatID --
 // a shared public template can't embed one user's real credential without
 // leaking it to everyone who clicks this button. ExecuteAction
 // (connectors_messaging.go) returns ErrActionSkipped when unconfigured,
@@ -723,12 +723,12 @@ export const DEMO_WORKFLOW: Workflow = {
     {
       id: "d10",
       type: "action",
-      template: "slack",
+      template: "telegram",
       x: 1460,
       y: 220,
       name: "Post Summary",
       description:
-        "Posts the pipeline's report to Slack -- add your own Incoming Webhook URL in this node's config to enable it. Unconfigured, this step no-ops (green, unbilled) rather than failing.",
+        "Posts the pipeline's report to Telegram -- add your own bot token (Secrets) and chat ID (Config) in this node's settings to enable it. Unconfigured, this step no-ops (green, unbilled) rather than failing.",
     },
     { id: "d11", type: "end", template: "done", x: 1700, y: 220 },
   ],
