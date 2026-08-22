@@ -568,12 +568,18 @@ export const SAMPLE_WORKFLOW: Workflow = {
 //   - action/google node, or an http-templated tool node, run standalone in
 //     the flow: flat $0.50 (models.ByokFlatFeeUSDMicros, gated by
 //     nodes.BillableFlatFee).
-//   2 economy-tier Gemini 2.5 Flash calls  0.03 + 0.03      = 0.06
-//   3 real CANIX402 x402 calls             (0.01 + 1.50) x3 = 4.53
-//   1 standalone http tool ("Fetch Data")                   = 0.50
-//   1 Slack action ("Post Summary") -- unbilled, see below  = 0.00
+//   2 economy-tier Gemini 2.5 Flash calls  0.03 + 0.03      = 0.06  guaranteed
+//   1 guaranteed CANIX402 x402 call (d8)   0.01 + 1.50      = 1.51  guaranteed
+//   1 standalone http tool ("Fetch Data")                   = 0.50  guaranteed
 //   -------------------------------------------------------------
-//   total                                                     $5.09 per successful run
+//   guaranteed floor                                          $2.07 per successful run
+//   + up to 2 more CANIX402 x402 calls (d4/d7, 0.01 + 1.50 = 1.51 each) --
+//     billed only if the agent's LLM opts into calling them, so NOT part of
+//     the guaranteed floor above. Not capped at one call each either:
+//     provider.go allows up to 15 tool-calling iterations per agent, so a
+//     run can bill for either tool more than once. $5.09 (both optional
+//     calls firing exactly once) is a realistic typical figure, not a ceiling.
+//   1 Slack action ("Post Summary") -- unbilled, see below  = 0.00
 // address (both the tool402 paramDefaults and the address text the workflow
 // owner pasted into each system prompt) is the real Wallet 2 /
 // PLATFORM_WALLET address, same as before.
