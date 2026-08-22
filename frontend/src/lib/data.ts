@@ -149,16 +149,22 @@ export function modelTier(
 
 // "code" (Pinecone/pgvector-style vector store, JS/Python inline) and "memory"
 // removed: ExecuteTool (backend/internal/engine/nodes/tool.go) only handles
-// calc/datetime/http -- every other template fell through to a default case
-// that echoed the input back and reported success, rendering a green node
-// that did nothing. Real inline code execution exists today via the Tendril
-// tab's "Run a Job" node (metered Python over x402); route there instead of
-// reintroducing a stub. "datetime" is fully implemented backend-side but had
-// no palette entry -- added below.
+// calc/datetime/http/websearch -- every other template fell through to a
+// default case that echoed the input back and reported success, rendering a
+// green node that did nothing. Real inline code execution exists today via
+// the Tendril tab's "Run a Job" node (metered Python over x402); route there
+// instead of reintroducing a stub. "datetime" is fully implemented
+// backend-side but had no palette entry -- added below.
 export const TOOL_TEMPLATES = [
   { id: "http", name: "HTTP Request", desc: "GET/POST any URL", icon: "⟶" },
   { id: "calc", name: "Calculator", desc: "Math expressions", icon: "Σ" },
   { id: "datetime", name: "Current Time", desc: "UTC timestamp", icon: "◔" },
+  {
+    id: "websearch",
+    name: "Web Search",
+    desc: "Search the live web (Gemini grounding)",
+    icon: "⌕",
+  },
 ];
 
 // TOOL402_TEMPLATES removed: the x402 tab's palette `map` never set an
