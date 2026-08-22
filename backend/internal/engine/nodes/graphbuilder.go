@@ -108,6 +108,17 @@ func addGraphNode(graph *models.WorkflowGraph, args map[string]any) (string, err
 			set(&node, v)
 		}
 	}
+	// Default a new Provider node to platform-key mode unless the model
+	// explicitly chose "byok" -- resolveAPIKey (provider.go) treats any
+	// KeyMode other than "platform" as BYOK and reads node.APIKey, which a
+	// chat-built node never has. Left to the model's own judgment (via the
+	// fieldsSchema description alone) this defaulted to "" == BYOK in
+	// practice, so every chat-built agent needed a manual Inspector trip
+	// before it could run at all. Deterministic here rather than relying on
+	// prompt compliance -- this must hold every time, not most of the time.
+	if node.Type == models.NodeTypeProvider && node.KeyMode == "" {
+		node.KeyMode = "platform"
+	}
 	graph.Nodes = append(graph.Nodes, node)
 	return fmt.Sprintf("added node %s (%s/%s)", id, nodeType, node.Template), nil
 }
@@ -229,7 +240,7 @@ func graphToolDecls() []funcDecl {
 	}
 	fieldsSchema := map[string]any{
 		"type":        "OBJECT",
-		"description": "Extra node fields, all optional strings. keyMode is either \"byok\" or \"platform\".",
+		"description": "Extra node fields, all optional strings. keyMode is either \"byok\" or \"platform\" -- a new Provider node defaults to \"platform\" already, only set this to \"byok\" if the user specifically asks to use their own API key.",
 		"properties":  fieldProperties,
 	}
 	return []funcDecl{
