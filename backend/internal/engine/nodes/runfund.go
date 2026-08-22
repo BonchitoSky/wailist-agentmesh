@@ -21,6 +21,12 @@ const runFundingPublicPath = "/api/x402/relay/run-funding"
 // any per-resource reporting even though both share one payTo.
 const platformFeePublicPath = "/api/x402/relay/platform-fee"
 
+// runTotalPublicPath is SettleRunTotal's resource identity, same rationale
+// as runFundingPublicPath/platformFeePublicPath -- a real, non-root,
+// genuinely 402-answering path under our own branded origin, distinct from
+// the other two so this settlement kind attributes separately.
+const runTotalPublicPath = "/api/x402/relay/run-total"
+
 // RunPreFundConfig carries what's needed to settle a single lump-sum inbound
 // x402 payment (Wallet 1 -> Wallet 2) before an agent node's tool-calling
 // loop starts. Distinct from Wallet2PayConfig (Task 3), which drives the
@@ -79,6 +85,23 @@ func SettlePlatformFee(ctx context.Context, cfg RunPreFundConfig, amountUSDMicro
 	return selfSettleWallet1ToWallet2(ctx, cfg, platformFeePublicPath,
 		"AgentMesh platform fee — flat per-call markup, settled from the platform spend wallet to the platform revenue wallet",
 		"platform fee settle", amountUSDMicros)
+}
+
+// SettleRunTotal settles the whole run's non-tool402 billable total (agent
+// platform-key LLM fees, action/google/http BYOK flat fees, tendril lease
+// fees -- everything that otherwise only ever moves money inside the
+// internal credit ledger) as one more real, direct Wallet 1 -> Wallet 2
+// payment, same mechanism as FundRunReserve/SettlePlatformFee. Called once
+// per run, after all node-level billing has already been committed to the
+// DB ledger -- this is an additive on-chain receipt for that already-final
+// total, not a second charge: the user's credit balance was already
+// decremented by the normal per-node debit calls. Real tool402 spend is
+// excluded (it already gets its own real settlement via FundRunReserve /
+// the per-call relay path) to avoid double-settling the same money on-chain.
+func SettleRunTotal(ctx context.Context, cfg RunPreFundConfig, amountUSDMicros int64) (string, error) {
+	return selfSettleWallet1ToWallet2(ctx, cfg, runTotalPublicPath,
+		"AgentMesh workflow run total — lump-sum settlement of this run's platform-billed work",
+		"run total settle", amountUSDMicros)
 }
 
 // selfSettleWallet1ToWallet2 signs, verifies, and settles one real GoPlausible

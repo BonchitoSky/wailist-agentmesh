@@ -55,6 +55,12 @@ type Runner struct {
 	tendrilSession           *tendril.Session
 	googleClientID           string
 	googleClientSecret       string
+	// runBilling accumulates each run's non-tool402 billable total (run.ID
+	// -> *int64, in USD micros) so it can be settled as one lump-sum x402
+	// payment at the end of Run -- see addRunBilling and settleRunTotal.
+	// Real tool402 spend is deliberately excluded (see addRunBilling's own
+	// filtering): it already gets its own on-chain settlement.
+	runBilling sync.Map
 }
 
 func NewRunner(
@@ -131,6 +137,19 @@ func (r *Runner) debitOrLog(ctx context.Context, wf models.Workflow, run models.
 		log.Printf("debit failed: user=%s workflow=%s run=%s node=%s kind=%s amount=%d: %v",
 			wf.UserID, wf.ID, run.ID, nodeID, kind, amountUSDMicros, err)
 	}
+	// Always a BYOK flat fee (the only kind debitOrLog is ever called with),
+	// never a tool402 kind -- safe to accumulate unconditionally.
+	r.addRunBilling(run.ID, amountUSDMicros)
+}
+
+// addRunBilling folds amountUSDMicros into the running total settleRunTotal
+// will settle on-chain once, at the end of the run -- see runBilling's own
+// doc comment. A no-op when runID isn't currently tracked (e.g. a unit test
+// calling this helper's callers directly without going through Run()).
+func (r *Runner) addRunBilling(runID string, amountUSDMicros int64) {
+	if v, ok := r.runBilling.Load(runID); ok {
+		atomic.AddInt64(v.(*int64), amountUSDMicros)
+	}
 }
 
 // ledgerCompensationTimeout bounds Commit/Release calls once they're
@@ -168,6 +187,16 @@ func (r *Runner) newPaymentLedger(wf models.Workflow, run models.Run) nodes.Paym
 			defer cancel()
 			if err := r.store.CommitReservedDebit(bctx, wf.UserID, amountUSDMicros, kind, wf.ID, run.ID, nodeID); err != nil {
 				criticalAlert(wf, run, "commit reserved debit failed (balance already decremented, no ledger row written)", err, "node", nodeID, "kind", kind, "amount", amountUSDMicros)
+			}
+			// Real tool402 spend (standalone or agent-attached, either
+			// dialect) already gets its own on-chain settlement -- the
+			// run-level pre-fund or the per-call relay/legacy path -- so
+			// accumulating it here too would double-settle the same money.
+			// Everything else this shared ledger commits (tendril leases,
+			// agent-attached http/action flat fees) has no on-chain leg of
+			// its own yet, so it belongs in the run-total settlement.
+			if kind != models.DebitKindX402RelayCost && kind != models.DebitKindX402PlatformFee {
+				r.addRunBilling(run.ID, amountUSDMicros)
 			}
 		},
 		Release: func(cctx context.Context, amountUSDMicros int64) {
@@ -281,6 +310,63 @@ func (r *Runner) newRecordSettlement(wf models.Workflow, run models.Run, funding
 // be told apart — see X402RelayConfig.RunFundedToolIDs), and a cleanup func
 // that releases whatever's left of the pool back to the DB balance at the
 // end of the agent's turn.
+// selfSettleConfig reports whether this Runner can settle a real Wallet 1 ->
+// Wallet 2 x402 payment at all, and if so builds the config both
+// reserveAndFundRun (tool402 pre-fund) and settleRunTotal (end-of-run lump
+// sum) need to do it. Shared so the two call sites can't drift on the
+// four-condition check a real settlement depends on. ok is false when any
+// piece is missing -- no platform spend wallet configured, r.walletSvc's
+// dynamic type not satisfying USDCGroupSigner (a real, valid configuration:
+// e.g. a noopSigner test double, or a WalletSigner-only production wiring),
+// no facilitator client, or no platform wallet address -- in which case
+// callers should degrade to a no-op rather than attempt a settlement that
+// can't succeed.
+func (r *Runner) selfSettleConfig() (cfg nodes.RunPreFundConfig, usdcSigner nodes.USDCGroupSigner, ok bool) {
+	usdcSigner, _ = r.walletSvc.(nodes.USDCGroupSigner)
+	if r.platformSpendEncMnemonic == "" || usdcSigner == nil || r.x402.FacilitatorClient == nil || r.x402.PlatformWalletAddress == "" {
+		return nodes.RunPreFundConfig{}, nil, false
+	}
+	return nodes.RunPreFundConfig{
+		USDCSigner:               usdcSigner,
+		PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
+		Facilitator:              r.x402.FacilitatorClient,
+		PlatformWalletAddress:    r.x402.PlatformWalletAddress,
+		RelayNetwork:             r.x402.RelayNetwork,
+		RelayFeePayer:            r.x402.RelayFeePayer,
+		ExpectedAssetID:          r.x402.USDCAssetID,
+		FrontendURL:              r.x402.FrontendURL,
+	}, usdcSigner, true
+}
+
+// settleRunTotal fires once per run (see Run's deferred call), settling
+// whatever addRunBilling accumulated for this run -- every non-tool402
+// billable amount committed during the run -- as one real, additive Wallet 1
+// -> Wallet 2 x402 payment. Called after the run has already finished and
+// finishRun has already recorded its status, so a failure here never fails
+// the run: the user's credit balance was already correctly debited per node
+// as it ran, and this is purely a missing on-chain receipt, not a billing
+// error. total <= 0 (no billable non-tool402 work happened, e.g. a
+// trigger-only workflow, or a run with only tool402 nodes) is a no-op, same
+// as no platform wallet being configured.
+func (r *Runner) settleRunTotal(ctx context.Context, wf models.Workflow, run models.Run, total *int64) {
+	amount := atomic.LoadInt64(total)
+	if amount <= 0 {
+		return
+	}
+	fundCfg, _, ok := r.selfSettleConfig()
+	if !ok {
+		return
+	}
+	txID, err := nodes.SettleRunTotal(ctx, fundCfg, amount)
+	if err != nil {
+		criticalAlert(wf, run, "run total settlement failed (run already finished, DB billing already correct -- this is a missing on-chain receipt only)", err, "amount", amount)
+		return
+	}
+	if _, err := r.store.RecordRunFunding(ctx, run.ID, txID, amount); err != nil {
+		criticalAlert(wf, run, "run total settled on-chain but RecordRunFunding failed", err, "txID", txID, "amount", amount)
+	}
+}
+
 type runFundResult struct {
 	Ledger nodes.PaymentLedger
 	// MarkupLedger is a second, separately-sized in-memory pool for the
@@ -385,8 +471,8 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 	// goroutine — after ReserveCredits already ran, stranding credits on
 	// top of the crash. Degrading gracefully here instead matches an agent
 	// with no attached tool402 nodes at all.
-	usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
-	if r.platformSpendEncMnemonic == "" || usdcSigner == nil || r.x402.FacilitatorClient == nil || r.x402.PlatformWalletAddress == "" {
+	fundCfg, _, ok := r.selfSettleConfig()
+	if !ok {
 		return noFund, nil
 	}
 
@@ -394,16 +480,6 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		return runFundResult{}, err
 	}
 
-	fundCfg := nodes.RunPreFundConfig{
-		USDCSigner:               usdcSigner,
-		PlatformSpendEncMnemonic: r.platformSpendEncMnemonic,
-		Facilitator:              r.x402.FacilitatorClient,
-		PlatformWalletAddress:    r.x402.PlatformWalletAddress,
-		RelayNetwork:             r.x402.RelayNetwork,
-		RelayFeePayer:            r.x402.RelayFeePayer,
-		ExpectedAssetID:          r.x402.USDCAssetID,
-		FrontendURL:              r.x402.FrontendURL,
-	}
 	txID, err := nodes.FundRunReserve(ctx, fundCfg, run.ID, creditReserve)
 	if err != nil {
 		if errors.Is(err, nodes.ErrSettlementIndeterminate) {
@@ -534,6 +610,7 @@ func (r *Runner) debitAgentFee(ctx context.Context, wf models.Workflow, run mode
 		log.Printf("platform-key debit failed: user=%s workflow=%s run=%s node=%s model=%s amount=%d: %v",
 			wf.UserID, wf.ID, run.ID, nodeID, model, amountUSDMicros, err)
 	}
+	r.addRunBilling(run.ID, amountUSDMicros)
 }
 
 // Start creates a cancellable context for the run, registers it, and launches
@@ -562,6 +639,24 @@ func (r *Runner) finishRun(wf models.Workflow, run models.Run, status models.Run
 func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run) {
 	defer r.broker.Close(run.ID)
 	defer r.registry.deregister(wf.ID)
+
+	// Tracks this run's non-tool402 billable total (see addRunBilling) so it
+	// can be settled as one lump-sum x402 payment once the run is done.
+	// Registered as a defer, not called at each of the explicit finishRun
+	// return sites below, so it fires unconditionally on every exit path --
+	// including the early TopologicalSort failure -- without those sites
+	// needing to know about it. context.WithoutCancel + a bounded timeout
+	// matches the same compensating-write convention used elsewhere in this
+	// file (e.g. reserveAndFundRun's Cleanup), so the settlement still runs
+	// even if Stop() already cancelled ctx.
+	runTotal := new(int64)
+	r.runBilling.Store(run.ID, runTotal)
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ledgerCompensationTimeout)
+		defer cancel()
+		r.settleRunTotal(sctx, wf, run, runTotal)
+		r.runBilling.Delete(run.ID)
+	}()
 
 	go alert.Notify(context.Background(), alert.ChannelWorkflows, fmt.Sprintf("workflow %q run %s started", wf.Name, run.ID))
 
