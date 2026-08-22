@@ -27,8 +27,15 @@ export function WorkflowsPage() {
   const [creating, setCreating] = useState(false);
   const [creatingTendril, setCreatingTendril] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
-  const [demoError, setDemoError] = useState("");
-  const [deleteError, setDeleteError] = useState("");
+  // Tagged by source so the banner always shows the most recent failure --
+  // two separate error strings with a fixed `a || b` precedence would let
+  // a stale error from one action permanently mask a newer one from the
+  // other. A success only clears the error if it's the one that owns it,
+  // so it never wipes an unrelated action's still-relevant error.
+  const [pageError, setPageError] = useState<{
+    source: "demo" | "delete";
+    message: string;
+  } | null>(null);
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
 
   useEffect(() => {
@@ -94,7 +101,7 @@ export function WorkflowsPage() {
   const handleLoadDemoWorkflow = useCallback(async () => {
     if (creatingDemo) return;
     setCreatingDemo(true);
-    setDemoError("");
+    setPageError((prev) => (prev?.source === "demo" ? null : prev));
     let wf: Workflow | undefined;
     try {
       wf = await workflowsApi.create(DEMO_WORKFLOW.name);
@@ -108,9 +115,11 @@ export function WorkflowsPage() {
       // orphaned row behind in the user's workflow list -- best-effort
       // delete it before surfacing the error.
       if (wf) await workflowsApi.remove(wf.id).catch(() => {});
-      setDemoError(
-        e instanceof Error ? e.message : "could not load demo workflow",
-      );
+      setPageError({
+        source: "demo",
+        message:
+          e instanceof Error ? e.message : "could not load demo workflow",
+      });
       setCreatingDemo(false);
     }
   }, [creatingDemo, router]);
@@ -119,14 +128,15 @@ export function WorkflowsPage() {
   // confirm step. The backend refuses (409) for workflows with Tendril lease
   // history; that message is shown rather than leaving the row silently intact.
   const handleDelete = useCallback(async (id: string) => {
-    setDeleteError("");
+    setPageError((prev) => (prev?.source === "delete" ? null : prev));
     try {
       await workflowsApi.remove(id);
       setWfList((prev) => prev.filter((w) => w.id !== id));
     } catch (e) {
-      setDeleteError(
-        e instanceof Error ? e.message : "could not delete workflow",
-      );
+      setPageError({
+        source: "delete",
+        message: e instanceof Error ? e.message : "could not delete workflow",
+      });
     }
   }, []);
 
@@ -285,7 +295,7 @@ export function WorkflowsPage() {
             </button>
           </Card>
 
-          {(demoError || deleteError) && (
+          {pageError && (
             <div
               style={{
                 marginBottom: 16,
@@ -297,7 +307,7 @@ export function WorkflowsPage() {
                 fontSize: 12.5,
               }}
             >
-              {demoError || deleteError}
+              {pageError.message}
             </div>
           )}
 
