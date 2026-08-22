@@ -105,7 +105,11 @@ export function WorkflowsPage() {
     let wf: Workflow | undefined;
     try {
       wf = await workflowsApi.create(DEMO_WORKFLOW.name);
+      // UpdateWorkflow (backend/internal/api/handlers/workflows.go) overwrites
+      // name unconditionally from the request body -- omitting it here would
+      // blank out the name create() just set.
       await workflowsApi.update(wf.id, {
+        name: DEMO_WORKFLOW.name,
         nodes: DEMO_WORKFLOW.nodes,
         edges: DEMO_WORKFLOW.edges,
       });
