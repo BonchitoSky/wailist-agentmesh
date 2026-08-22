@@ -304,8 +304,13 @@ Node types and their templates:
 - trigger: manual, chat, webhook, cron
 - agent: agent, router, human
 - provider: gemini, openai, anthropic, mistral, groq (attach to an agent's "model" port via an attach edge)
-- tool: http, code, calc, vector, memory (attach to an agent's "tools" port via an attach edge)
-- tool402: tavily, firecrawl, alpaca, ocr, flux, weather (attach to an agent's "tools" port via an attach edge)
+- tool: http, calc, datetime, websearch (attach to an agent's "tools" port via an attach edge). websearch answers
+  a query grounded in a live Google Search via the platform's own Gemini key -- use it for anything needing
+  current/real-world information, regardless of which provider the agent itself uses.
+- tool402: no preset templates -- every x402 tool is a real, live endpoint the workflow owner supplies (a
+  fictitious provider name like "tavily" or "firecrawl" is NOT wired to anything real). Only add one when the
+  user gives you an actual endpoint URL; set node fields url/endpoint accordingly and pick a short descriptive
+  template label. Prefer websearch for search unless the user specifically wants a paid x402 data source.
 - action: email, slack, db, discord, teams, google_chat, ntfy, telegram, github, notion, airtable, hubspot, trello, asana, clickup, jira, mailchimp, linear, todoist, gitlab, sentry, supabase, woocommerce, elevenlabs
 - end: http, done
 - tendril: tendril_topup, tendril_rent, tendril_run, tendril_release

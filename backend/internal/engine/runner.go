@@ -85,6 +85,7 @@ func NewRunner(
 // harness and any deployment that hasn't configured PLATFORM_*_API_KEY.
 func (r *Runner) SetPlatformKeys(keys map[string]string) {
 	r.platformKeys = keys
+	nodes.SetPlatformKeys(keys)
 }
 
 // SetTendril supplies the Tendril registry client and the Wallet 2 session
