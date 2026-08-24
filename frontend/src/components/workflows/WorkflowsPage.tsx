@@ -16,6 +16,7 @@ import { workflows as workflowsApi } from "@/lib/api";
 import { useCredits } from "@/lib/credits/store";
 import { tendril } from "@/lib/tendril";
 import { DEMO_WORKFLOW } from "@/lib/data";
+import { can } from "@/lib/readonly";
 
 export function WorkflowsPage() {
   const router = useRouter();
@@ -33,7 +34,7 @@ export function WorkflowsPage() {
   // other. A success only clears the error if it's the one that owns it,
   // so it never wipes an unrelated action's still-relevant error.
   const [pageError, setPageError] = useState<{
-    source: "demo" | "delete";
+    source: "demo" | "delete" | "tendril";
     message: string;
   } | null>(null);
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
@@ -80,11 +81,28 @@ export function WorkflowsPage() {
   // workflow that backs every user's console, so repeated clicks always
   // open the same row instead of workflowsApi.create minting a fresh
   // duplicate one every time.
+  // tendril.console() finds-OR-CREATES the console row. Creating one is
+  // authoring, and it is a GET, so isWriteBlocked cannot catch it -- this is
+  // the one place the distinction has to be drawn by hand. Read-only asks the
+  // non-creating variant and has nowhere to go if the desktop app has not
+  // opened this user's console yet.
   const handleLoadTendrilWorkflow = useCallback(async () => {
     if (creatingTendril) return;
     setCreatingTendril(true);
+    setPageError((prev) => (prev?.source === "tendril" ? null : prev));
     try {
-      const workflowId = await tendril.console();
+      const workflowId = can("workflow.create")
+        ? await tendril.console()
+        : await tendril.consoleWorkflowIdIfExists();
+      if (!workflowId) {
+        setPageError({
+          source: "tendril",
+          message:
+            "No Tendril console yet — open one from the AgentMesh desktop app first.",
+        });
+        setCreatingTendril(false);
+        return;
+      }
       router.push(`/workflows/${workflowId}`);
     } catch {
       setCreatingTendril(false);
@@ -191,24 +209,28 @@ export function WorkflowsPage() {
               </p>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button style={ghostBtn}>Import</button>
-              <button
-                onClick={handleLoadDemoWorkflow}
-                disabled={creatingDemo}
-                style={{
-                  ...ghostBtn,
-                  opacity: creatingDemo ? 0.6 : 1,
-                  position: "relative",
-                }}
-                title="Two Gemini 2.5 Flash agents + an HTTP tool + a Telegram step (no-ops until you add your own bot token/chat ID) + up to 3 real CANIX402 x402 calls (Algorand mainnet) -- only 1 of those 3 is guaranteed, the other 2 fire only if the agent's LLM chooses to call them (and can fire more than once). $2.07 guaranteed floor, ~$5.09 typical, no fixed ceiling."
-              >
-                {creatingDemo ? "Loading…" : "Load demo workflow"}
-                <span style={{ marginLeft: 6 }}>
-                  <Pill tone="accent" mono>
-                    $2.07+/run
-                  </Pill>
-                </span>
-              </button>
+              {can("workflow.create") && (
+                <button style={ghostBtn}>Import</button>
+              )}
+              {can("workflow.create") && (
+                <button
+                  onClick={handleLoadDemoWorkflow}
+                  disabled={creatingDemo}
+                  style={{
+                    ...ghostBtn,
+                    opacity: creatingDemo ? 0.6 : 1,
+                    position: "relative",
+                  }}
+                  title="Two Gemini 2.5 Flash agents + an HTTP tool + a Telegram step (no-ops until you add your own bot token/chat ID) + up to 3 real CANIX402 x402 calls (Algorand mainnet) -- only 1 of those 3 is guaranteed, the other 2 fire only if the agent's LLM chooses to call them (and can fire more than once). $2.07 guaranteed floor, ~$5.09 typical, no fixed ceiling."
+                >
+                  {creatingDemo ? "Loading…" : "Load demo workflow"}
+                  <span style={{ marginLeft: 6 }}>
+                    <Pill tone="accent" mono>
+                      $2.07+/run
+                    </Pill>
+                  </span>
+                </button>
+              )}
               <button
                 onClick={handleLoadTendrilWorkflow}
                 disabled={creatingTendril}
@@ -236,13 +258,15 @@ export function WorkflowsPage() {
                   Official
                 </span>
               </button>
-              <button
-                onClick={handleNewWorkflow}
-                disabled={creating}
-                style={{ ...primaryBtn, opacity: creating ? 0.6 : 1 }}
-              >
-                {creating ? "Creating…" : "+ New workflow"}
-              </button>
+              {can("workflow.create") && (
+                <button
+                  onClick={handleNewWorkflow}
+                  disabled={creating}
+                  style={{ ...primaryBtn, opacity: creating ? 0.6 : 1 }}
+                >
+                  {creating ? "Creating…" : "+ New workflow"}
+                </button>
+              )}
             </div>
           </div>
 
@@ -844,7 +868,9 @@ function WorkflowRows({
             >
               Open
             </button>
-            <RowMenu onDelete={() => onDelete(wf.id)} />
+            {can("workflow.delete") && (
+              <RowMenu onDelete={() => onDelete(wf.id)} />
+            )}
           </div>
         </div>
       ))}

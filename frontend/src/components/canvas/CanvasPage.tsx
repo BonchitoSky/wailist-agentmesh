@@ -22,6 +22,7 @@ import { ConsolePanel } from "./ConsolePanel";
 import { ResizeHandle } from "./ResizeHandle";
 import { ChatRail } from "./chat/ChatRail";
 import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
+import { can } from "@/lib/readonly";
 import {
   PALETTE,
   INSPECTOR,
@@ -115,6 +116,12 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // returns to its initial value (loading=true, selectedId=null, …).
   useEffect(() => {
     if (workflowId === "new") {
+      // Nothing to create here in read-only mode -- send the visitor back to
+      // the list rather than letting the route sit on "creating workflow…".
+      if (!can("workflow.create")) {
+        router.replace("/workflows");
+        return;
+      }
       workflowsApi
         .create("Untitled workflow")
         .then((wf) => router.replace(`/workflows/${wf.id}`))
@@ -182,6 +189,10 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   useEffect(() => {
     if (!workflow) return;
+    // Never arm the autosave in read-only mode. Every editing control is
+    // gone, but this effect answers to any change in `workflow` at all --
+    // left armed, one stray state update would PUT the graph back.
+    if (!can("workflow.editGraph")) return;
     if (justLoaded.current) {
       justLoaded.current = false;
       return;
@@ -307,7 +318,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [workflow],
   );
 
-  const buildMode = !hasProviderNode || manualBuildMode;
+  const buildMode =
+    can("workflow.buildFromChat") && (!hasProviderNode || manualBuildMode);
 
   // Returns the new run's id, or null when no run started. Callers that own a
   // chat turn need that signal: a failure here only raises a toast, and
@@ -550,7 +562,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 onShowLogs={() => setLogOpen(true)}
                 width={inspectorW}
                 buildMode={buildMode}
-                canToggleBuildMode={hasProviderNode}
+                canToggleBuildMode={
+                  can("workflow.buildFromChat") && hasProviderNode
+                }
                 onToggleBuildMode={() => setManualBuildMode((v) => !v)}
                 inspectorNode={
                   <Inspector
@@ -616,6 +630,22 @@ function ChatConsoleHost({
 }
 
 // ── Topbar ─────────────────────────────────────────────────────────────────
+// Shared by the editable field and its read-only twin so the workflow name
+// occupies exactly the same space in both modes.
+const nameFieldStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  outline: "none",
+  color: "var(--fg)",
+  fontSize: 13,
+  fontWeight: 500,
+  fontFamily: "var(--font-sans)",
+  flex: "0 1 200px",
+  minWidth: 0,
+  padding: "4px 6px",
+  borderRadius: 4,
+};
+
 function CanvasTopbar({
   workflow,
   setWorkflow,
@@ -680,23 +710,26 @@ function CanvasTopbar({
         ← Workflows
       </button>
       <span style={{ color: "var(--fg-dim)" }}>/</span>
-      <input
-        value={workflow.name}
-        onChange={(e) => setWorkflow((wf) => ({ ...wf, name: e.target.value }))}
-        style={{
-          background: "transparent",
-          border: "none",
-          outline: "none",
-          color: "var(--fg)",
-          fontSize: 13,
-          fontWeight: 500,
-          fontFamily: "var(--font-sans)",
-          flex: "0 1 200px",
-          minWidth: 0,
-          padding: "4px 6px",
-          borderRadius: 4,
-        }}
-      />
+      {can("workflow.editGraph") ? (
+        <input
+          value={workflow.name}
+          onChange={(e) =>
+            setWorkflow((wf) => ({ ...wf, name: e.target.value }))
+          }
+          style={nameFieldStyle}
+        />
+      ) : (
+        <span
+          style={{
+            ...nameFieldStyle,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {workflow.name}
+        </span>
+      )}
       {saveLabel && <Pill mono>{saveLabel}</Pill>}
 
       <div style={{ flex: 1 }} />
@@ -738,10 +771,14 @@ function CanvasTopbar({
         />
       </div>
 
-      <button style={ghostBtnSm}>Share</button>
-      <button onClick={onDeploy} style={btnStyle}>
-        {deployed ? "Re-deploy" : "Deploy"}
-      </button>
+      {can("workflow.deploy") && (
+        <>
+          <button style={ghostBtnSm}>Share</button>
+          <button onClick={onDeploy} style={btnStyle}>
+            {deployed ? "Re-deploy" : "Deploy"}
+          </button>
+        </>
+      )}
       <button
         onClick={onRun}
         disabled={!deployed}
