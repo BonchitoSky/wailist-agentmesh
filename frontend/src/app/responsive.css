@@ -1,0 +1,60 @@
+/* ── Responsive layer ─────────────────────────────────────────────────────
+   Almost every surface in this app is styled with inline React styles, which
+   media queries cannot reach. Anything whose only reason to change is the
+   viewport width lives here as a class instead, so the breakpoints sit in one
+   file rather than being re-derived per component in JavaScript.
+
+   The scale extends the one breakpoint the app already had (`.usage-split` at
+   1024px) rather than introducing a second, competing set:
+
+     <= 1024px   compact  — the studio collapses from three columns to one
+     <=  768px   mobile   — wide tables become cards, the top nav collapses
+     <=  480px   small    — tightest padding, single column everywhere
+
+   Imported from the top of globals.css, so these rules land BEFORE it: every
+   selector here is a new `.am-*` class with nothing to override. A rule that
+   genuinely needs to beat an existing globals.css declaration belongs in
+   globals.css next to the rule it overrides, not here.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Full-viewport shells ───────────────────────────────────────────────── */
+/* `100vh` on a mobile browser measures the LARGE viewport — the height the
+   page would have with the toolbars retracted — so a `height: 100vh` app shell
+   is taller than what is actually on screen and its bottom row hides behind
+   the address bar. `dvh` tracks the visible area as that chrome comes and
+   goes. The `vh` declaration stays first as the fallback for engines without
+   `dvh`; an inline style cannot express a two-value fallback, which is the
+   whole reason these shells need a class instead of a style prop. */
+.am-viewport {
+  height: 100vh;
+  height: 100dvh;
+}
+.am-viewport-min {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Bottom-docked bars sit under the home indicator on notched phones without
+   this. `0px` (not `0`) is deliberate — env() fallbacks must carry a unit. */
+.am-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ── Wide tables ────────────────────────────────────────────────────────── */
+/* The endpoint and settlement tables are ~900px of fixed grid columns and the
+   workflow table ~834px; none of them fit a phone. Rather than reflowing the
+   columns (which would misalign the header from its rows), the table keeps its
+   desktop grid and scrolls horizontally inside its own card, so the page body
+   never scrolls sideways. `overscroll-behavior-x: contain` stops a swipe that
+   reaches the end of the table from triggering the browser's back gesture. */
+.am-table-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Applied to the grid inside .am-table-scroll so the columns keep their
+   intended widths instead of being squeezed by the scroll container. */
+.am-table-track {
+  min-width: max-content;
+}
