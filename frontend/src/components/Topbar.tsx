@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Logo, Pill, Hairline, ghostBtnSm } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
+import { can } from "@/lib/readonly";
 
 // Which chain settlements actually run on. Mainnet is the default because
 // that is what the platform runs; overridable so a genuine testnet
@@ -115,6 +116,13 @@ export function Topbar() {
           <Pill mono dot tone="warm">
             {ALGORAND_NETWORK}
           </Pill>
+          {!can("workflow.editGraph") && (
+            <span title="Editing happens in the AgentMesh desktop app.">
+              <Pill mono dot tone="warm">
+                viewing only
+              </Pill>
+            </span>
+          )}
         </div>
       </div>
       <div style={{ flex: 1 }} />
@@ -303,9 +311,7 @@ function OnboardingModal({
             Tell us who you are so your teammates recognize you.
           </div>
         </div>
-        <label
-          style={{ display: "flex", flexDirection: "column", gap: 6 }}
-        >
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
             Full name
           </span>
@@ -318,9 +324,7 @@ function OnboardingModal({
             style={onboardingInputStyle}
           />
         </label>
-        <label
-          style={{ display: "flex", flexDirection: "column", gap: 6 }}
-        >
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <span style={{ fontSize: 12, color: "var(--fg-muted)" }}>
             Organization (optional)
           </span>

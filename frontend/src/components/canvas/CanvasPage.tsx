@@ -479,20 +479,28 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
           overflow: "hidden",
         }}
       >
-        <PalettePanel onDragNodeStart={onDragNodeStart} width={paletteW} />
-        <ResizeHandle
-          side="left"
-          value={paletteW}
-          min={PALETTE.min}
-          max={PALETTE.max}
-          ariaLabel="Resize palette panel"
-          onChange={resizePalette}
-          onCommit={persistWidths}
-          onReset={() => {
-            setPaletteW(PALETTE.default);
-            persistWidths();
-          }}
-        />
+        {/* The palette exists to drag new nodes onto the canvas, so in
+            read-only mode it has no job -- and dropping it gives the graph
+            back ~280px, which is what makes the studio fit a narrow window
+            at all (PALETTE.min + MIN_CANVAS + INSPECTOR.min was 780px). */}
+        {can("workflow.editGraph") && (
+          <>
+            <PalettePanel onDragNodeStart={onDragNodeStart} width={paletteW} />
+            <ResizeHandle
+              side="left"
+              value={paletteW}
+              min={PALETTE.min}
+              max={PALETTE.max}
+              ariaLabel="Resize palette panel"
+              onChange={resizePalette}
+              onCommit={persistWidths}
+              onReset={() => {
+                setPaletteW(PALETTE.default);
+                persistWidths();
+              }}
+            />
+          </>
+        )}
 
         <ChatConsoleHost
           runId={runId}
@@ -731,6 +739,13 @@ function CanvasTopbar({
         </span>
       )}
       {saveLabel && <Pill mono>{saveLabel}</Pill>}
+      {!can("workflow.editGraph") && (
+        <span title="Editing happens in the AgentMesh desktop app.">
+          <Pill mono dot tone="warm">
+            viewing only
+          </Pill>
+        </span>
+      )}
 
       <div style={{ flex: 1 }} />
 

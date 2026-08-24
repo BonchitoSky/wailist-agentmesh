@@ -1,5 +1,6 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
+import { can } from "@/lib/readonly";
 import { WorkflowNode, Workflow, PortName } from "@/lib/types";
 import { NODE_TYPES } from "@/lib/data";
 import {
@@ -46,6 +47,13 @@ export function CanvasGraph({
   running,
   attachedSummaries,
 }: CanvasGraphProps) {
+  // Read-only turns the graph into a diagram: pan, zoom, and selection all
+  // still work, because reading a workflow means moving around it and
+  // opening a node to see how it is configured. Only the gestures that
+  // CHANGE the graph -- dropping a node, moving one, drawing or cutting an
+  // edge -- come off.
+  const editable = can("workflow.editGraph");
+
   const wrapRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<ViewState>({ x: 40, y: 40, k: 0.95 });
   const [panning, setPanning] = useState(false);
@@ -213,6 +221,7 @@ export function CanvasGraph({
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    if (!editable) return;
     const data = e.dataTransfer.getData("application/agentmesh");
     if (!data || !wrapRef.current) return;
     const meta: Partial<WorkflowNode> = JSON.parse(data);
@@ -231,6 +240,8 @@ export function CanvasGraph({
     if ((e.target as HTMLElement).closest("[data-port]")) return;
     e.stopPropagation();
     setSelectedId(n.id);
+    // Selecting still opens the inspector; only the move is withheld.
+    if (!editable) return;
     dragRef.current = {
       id: n.id,
       sx: e.clientX,
@@ -246,6 +257,7 @@ export function CanvasGraph({
     fromPort: PortName,
   ) => {
     e.stopPropagation();
+    if (!editable) return;
     const n = workflow.nodes.find((x) => x.id === nodeId);
     if (!n) return;
     const p = portWorld(n, fromPort);
@@ -309,7 +321,7 @@ export function CanvasGraph({
                 y2={p2.y}
                 kind={e.kind}
                 running={running}
-                onClick={() => removeEdge(e.id)}
+                onClick={editable ? () => removeEdge(e.id) : undefined}
               />
             );
           })}
