@@ -53,7 +53,10 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable}`}
       style={{ fontFamily: "var(--font-sans)" }}
     >
-      <body style={{ margin: 0, background: "var(--bg)", color: "var(--fg)", minHeight: "100vh" }}>
+      <body
+        className="am-viewport-min"
+        style={{ margin: 0, background: "var(--bg)", color: "var(--fg)" }}
+      >
         {children}
       </body>
     </html>

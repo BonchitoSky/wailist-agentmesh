@@ -105,8 +105,8 @@ export default function BillingPage() {
 
   return (
     <div
+      className="am-viewport"
       style={{
-        height: "100vh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",

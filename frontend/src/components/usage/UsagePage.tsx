@@ -114,8 +114,8 @@ export function UsagePage() {
 
   return (
     <div
+      className="am-viewport"
       style={{
-        height: "100vh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",

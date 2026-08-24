@@ -365,7 +365,10 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "unknown error";
         showToast(`Build failed · ${message}`);
-        return { ok: false, reply: `Could not update the workflow: ${message}` };
+        return {
+          ok: false,
+          reply: `Could not update the workflow: ${message}`,
+        };
       }
     },
     [workflow, showToast, flushPendingSave],
@@ -418,8 +421,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   if (loading || !workflow) {
     return (
       <div
+        className="am-viewport"
         style={{
-          height: "100vh",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -436,8 +439,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   return (
     <div
+      className="am-viewport"
       style={{
-        height: "100vh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",

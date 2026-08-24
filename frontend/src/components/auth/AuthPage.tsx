@@ -106,10 +106,10 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
 
   return (
     <div
+      className="am-viewport"
       style={{
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
-        height: "100vh",
         overflow: "hidden",
         background: "var(--bg)",
       }}

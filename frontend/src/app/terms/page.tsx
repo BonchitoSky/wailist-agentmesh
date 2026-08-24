@@ -12,7 +12,7 @@ const CONTACT = "legal@agentmesh.ai";
 
 export default function TermsPage() {
   return (
-    <div style={{ background: "var(--bg)", minHeight: "100vh", color: "var(--fg)" }}>
+    <div className="am-viewport-min" style={{ background: "var(--bg)", color: "var(--fg)" }}>
       {/* Nav bar */}
       <div style={{ borderBottom: "1px solid var(--border)", padding: "16px 32px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <Link href="/" style={{ fontFamily: "var(--font-mono)", fontSize: 14, fontWeight: 700, color: "var(--fg)", textDecoration: "none", letterSpacing: "-0.01em" }}>

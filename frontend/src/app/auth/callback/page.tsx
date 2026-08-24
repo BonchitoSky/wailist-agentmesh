@@ -13,8 +13,8 @@ export default function AuthCallbackPage() {
   }, [router]);
 
   return (
-    <div style={{
-      height: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+    <div className="am-viewport" style={{
+      display: "flex", alignItems: "center", justifyContent: "center",
       background: "var(--bg)", color: "var(--fg-muted)", fontFamily: "var(--font-mono)", fontSize: 13,
     }}>
       Signing you in…

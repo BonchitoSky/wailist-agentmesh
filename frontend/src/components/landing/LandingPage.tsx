@@ -77,7 +77,7 @@ export function LandingPage({ signedIn }: LandingPageProps) {
   };
 
   return (
-    <div style={{ height: "100vh", position: "relative", background: "hsl(260 90% 2%)", overflow: "hidden" }}>
+    <div className="am-viewport" style={{ position: "relative", background: "hsl(260 90% 2%)", overflow: "hidden" }}>
       {/* Background video */}
       <video
         ref={videoRef}
@@ -91,9 +91,9 @@ export function LandingPage({ signedIn }: LandingPageProps) {
       />
 
       {/* Scroll container */}
-      <div ref={scrollRef} style={{
+      <div ref={scrollRef} className="am-viewport" style={{
         position: "relative", zIndex: 1,
-        height: "100vh", overflowY: "auto", overflowX: "hidden",
+        overflowY: "auto", overflowX: "hidden",
         scrollBehavior: "smooth",
       }}>
         <HeroSection openStudio={openStudio} signedIn={signedIn} scrollToId={scrollToId} />
@@ -114,7 +114,7 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
 }) {
   const router = useRouter();
   return (
-    <section style={{ position: "relative", minHeight: "100vh", display: "flex", flexDirection: "column", background: "transparent" }}>
+    <section className="am-viewport-min" style={{ position: "relative", display: "flex", flexDirection: "column", background: "transparent" }}>
       {/* Readability bloom behind headline */}
       <div style={{
         position: "absolute", top: "50%", left: "50%",
@@ -126,7 +126,7 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
         pointerEvents: "none", zIndex: 1,
       }} />
 
-      <div style={{ position: "relative", zIndex: 10, display: "flex", flexDirection: "column", flex: 1, minHeight: "100vh" }}>
+      <div className="am-viewport-min" style={{ position: "relative", zIndex: 10, display: "flex", flexDirection: "column", flex: 1 }}>
         {/* Nav */}
         <div style={{ position: "relative", zIndex: 11 }}>
           <div style={{ padding: "20px 32px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
