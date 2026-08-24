@@ -1,0 +1,122 @@
+package api
+
+import (
+	"crypto/subtle"
+	"net/http"
+	"os"
+	"regexp"
+	"strings"
+
+	"github.com/agentmesh/backend/internal/respond"
+)
+
+// Read-only mode: the web client is a viewer, and authoring a workflow belongs
+// to the desktop app.
+//
+// The frontend already hides every authoring control (frontend/src/lib/
+// readonly.ts) and refuses these calls before they reach the network, but that
+// is a UX guarantee, not an enforcement one -- a console call or a stale bundle
+// would still be served. This is the enforcement half.
+//
+// Deliberately configured from the environment rather than from the request's
+// identity: recording *which* clients may write would mean a user- or
+// session-level capability, and that means a schema change. Nothing here reads
+// or writes the database.
+
+const (
+	// Off unless explicitly enabled, so an existing deployment keeps behaving
+	// exactly as it does today until someone opts in.
+	readOnlyEnvVar = "WEB_READONLY_MODE"
+
+	// The desktop app's way through. It is a shared secret, so it is exactly
+	// as strong as that app's ability to keep one -- which is why the frontend
+	// never sends it and never learns it.
+	editorKeyEnvVar    = "EDITOR_CLIENT_KEY"
+	editorKeyHeaderKey = "X-AgentMesh-Editor-Key"
+)
+
+// The graph-mutating endpoints, and only those. Running and stopping a
+// workflow, reading anything, and every billing or account call are all
+// deliberately absent -- a viewer can still operate a workflow somebody else
+// built, which is the whole point of the second screen.
+//
+// Kept in step with WRITE_RULES in frontend/src/lib/readonly.ts: a call this
+// list rejects but the frontend permits becomes a control that fails at the
+// server with no explanation.
+var readOnlyBlocked = []struct {
+	method string
+	path   *regexp.Regexp
+}{
+	{http.MethodPost, regexp.MustCompile(`^/workflows$`)},
+	{http.MethodPut, regexp.MustCompile(`^/workflows/[^/]+$`)},
+	{http.MethodDelete, regexp.MustCompile(`^/workflows/[^/]+$`)},
+	{http.MethodPost, regexp.MustCompile(`^/workflows/[^/]+/deploy$`)},
+	{http.MethodPost, regexp.MustCompile(`^/workflows/[^/]+/build$`)},
+}
+
+// blocksWrite reports whether read-only mode rejects this method and path.
+// Split out from the middleware so the rules can be tested without standing up
+// a router or a request chain.
+//
+// A trailing slash is normalised away first: chi routes "/workflows/" to the
+// same handler as "/workflows", so a rule that only matched the bare form
+// would be trivially sidestepped.
+func blocksWrite(method, path string) bool {
+	if len(path) > 1 {
+		path = strings.TrimRight(path, "/")
+		if path == "" {
+			path = "/"
+		}
+	}
+	for _, rule := range readOnlyBlocked {
+		if rule.method == method && rule.path.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// NewReadOnlyMiddleware rejects graph-mutating requests with 403 while
+// WEB_READONLY_MODE is set. When it is not, the returned middleware is a
+// pass-through.
+//
+// The environment is read once, when the router is built, so a request cannot
+// change the mode it is judged under.
+func NewReadOnlyMiddleware() func(http.Handler) http.Handler {
+	enabled := isTruthy(os.Getenv(readOnlyEnvVar))
+	editorKey := os.Getenv(editorKeyEnvVar)
+
+	return func(next http.Handler) http.Handler {
+		if !enabled {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !blocksWrite(r.Method, r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// An empty EDITOR_CLIENT_KEY must never mean "everyone is an
+			// editor", so the bypass is only available once a key is set.
+			if editorKey != "" && constantTimeEqual(r.Header.Get(editorKeyHeaderKey), editorKey) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			respond.Error(w, http.StatusForbidden,
+				"workflows are read-only here; edit them in the AgentMesh desktop app")
+		})
+	}
+}
+
+func isTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// Compared in constant time so a wrong key cannot be discovered a byte at a
+// time from response timing.
+func constantTimeEqual(got, want string) bool {
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}

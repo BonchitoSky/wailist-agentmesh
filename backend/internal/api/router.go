@@ -49,6 +49,8 @@ func NewRouter(d *handlers.Deps) http.Handler {
 	// Protected routes — JWT required
 	r.Group(func(r chi.Router) {
 		r.Use(NewAuthMiddleware(d.JWTSecret))
+		// Pass-through unless WEB_READONLY_MODE is set; see readonly.go.
+		r.Use(NewReadOnlyMiddleware())
 
 		r.Get("/auth/me", d.Me)
 		r.Patch("/auth/me", d.UpdateProfile)
