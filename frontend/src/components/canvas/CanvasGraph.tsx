@@ -1,6 +1,16 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { can } from "@/lib/readonly";
+import {
+  DEFAULT_VIEW,
+  distance,
+  midpoint,
+  zoomAbout,
+  zoomByFactor,
+  fitToRects,
+  type Point,
+  type ViewState,
+} from "./viewport";
 import { WorkflowNode, Workflow, PortName } from "@/lib/types";
 import { NODE_TYPES } from "@/lib/data";
 import {
@@ -22,11 +32,6 @@ interface CanvasGraphProps {
   attachedSummaries: Record<string, { model: string | null; tools: number }>;
 }
 
-interface ViewState {
-  x: number;
-  y: number;
-  k: number;
-}
 interface WireState {
   fromId: string;
   fromPort: PortName;
@@ -55,7 +60,7 @@ export function CanvasGraph({
   const editable = can("workflow.editGraph");
 
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<ViewState>({ x: 40, y: 40, k: 0.95 });
+  const [view, setView] = useState<ViewState>(DEFAULT_VIEW);
   const [panning, setPanning] = useState(false);
   const panRef = useRef({ active: false, sx: 0, sy: 0, ox: 0, oy: 0 });
   const dragRef = useRef<{
@@ -87,12 +92,7 @@ export function CanvasGraph({
       const rect = el.getBoundingClientRect();
       const mx = e.clientX - rect.left,
         my = e.clientY - rect.top;
-      setView((v) => {
-        const dk = -e.deltaY * 0.0015;
-        const k2 = Math.min(2, Math.max(0.3, v.k * (1 + dk)));
-        const f = k2 / v.k;
-        return { x: mx - (mx - v.x) * f, y: my - (my - v.y) * f, k: k2 };
-      });
+      setView((v) => zoomAbout(v, v.k * (1 - e.deltaY * 0.0015), mx, my));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -219,6 +219,162 @@ export function CanvasGraph({
       edges: wf.edges.filter((e) => e.id !== id),
     }));
 
+  const nodeRects = useCallback(
+    () =>
+      workflow.nodes.map((n) => {
+        const t = NODE_TYPES[n.type];
+        return { x: n.x, y: n.y, w: t?.w ?? 180, h: t?.h ?? 60 };
+      }),
+    [workflow.nodes],
+  );
+
+  const fitView = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    setView(fitToRects(nodeRects(), rect.width, rect.height));
+  }, [nodeRects]);
+
+  // The +/- buttons magnify the middle of what is on screen. Anchoring on the
+  // world origin instead would slide the graph away as you zoom, which is what
+  // the raw `k` multiply used to do.
+  const zoomFromCentre = useCallback((factor: number) => {
+    const el = wrapRef.current;
+    const rect = el?.getBoundingClientRect();
+    const cx = rect ? rect.width / 2 : 0;
+    const cy = rect ? rect.height / 2 : 0;
+    setView((v) => zoomByFactor(v, factor, cx, cy));
+  }, []);
+
+  // ── Touch ───────────────────────────────────────────────────────────────
+  // The mouse path above is untouched; this runs alongside it. Without it the
+  // graph is completely inert on a phone -- there is no mousedown, so there is
+  // no way to pan or zoom, and a workflow whose nodes start off-screen simply
+  // cannot be looked at.
+  //
+  // Touch events rather than pointer events on purpose: a pinch needs two
+  // simultaneous contacts, and `e.touches` hands them over directly where
+  // pointer events would mean maintaining a live map of active pointer ids.
+  const touchRef = useRef<{
+    mode: "none" | "pan" | "pinch";
+    sx: number;
+    sy: number;
+    startView: ViewState;
+    startDist: number;
+  }>({ mode: "none", sx: 0, sy: 0, startView: DEFAULT_VIEW, startDist: 0 });
+
+  // Touch coordinates relative to the canvas box, which is the space the view
+  // transform is expressed in.
+  const localPoint = (t: React.Touch, rect: DOMRect): Point => ({
+    x: t.clientX - rect.left,
+    y: t.clientY - rect.top,
+  });
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+
+    if (e.touches.length >= 2) {
+      const a = localPoint(e.touches[0], rect);
+      const b = localPoint(e.touches[1], rect);
+      touchRef.current = {
+        mode: "pinch",
+        sx: 0,
+        sy: 0,
+        startView: view,
+        startDist: distance(a, b),
+      };
+      return;
+    }
+
+    if (e.touches.length !== 1) return;
+    const target = e.target as HTMLElement;
+    const onNode = !!(
+      target.closest("[data-node]") || target.closest("[data-port]")
+    );
+    // While the graph is editable a drag that starts on a node belongs to that
+    // node. With nothing to drag, panning from anywhere is what a viewer
+    // expects -- otherwise a graph whose nodes fill the screen has no
+    // background left to grab.
+    if (onNode && editable) return;
+    const t = e.touches[0];
+    touchRef.current = {
+      mode: "pan",
+      sx: t.clientX,
+      sy: t.clientY,
+      startView: view,
+      startDist: 0,
+    };
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    const st = touchRef.current;
+    const el = wrapRef.current;
+    if (!el || st.mode === "none") return;
+
+    if (st.mode === "pinch") {
+      if (e.touches.length < 2 || st.startDist <= 0) return;
+      const rect = el.getBoundingClientRect();
+      const a = localPoint(e.touches[0], rect);
+      const b = localPoint(e.touches[1], rect);
+      const m = midpoint(a, b);
+      // Recomputed from the gesture's starting view every frame rather than
+      // accumulated, so a long pinch cannot drift.
+      setView(
+        zoomAbout(
+          st.startView,
+          st.startView.k * (distance(a, b) / st.startDist),
+          m.x,
+          m.y,
+        ),
+      );
+      return;
+    }
+
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    setView({
+      ...st.startView,
+      x: st.startView.x + (t.clientX - st.sx),
+      y: st.startView.y + (t.clientY - st.sy),
+    });
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length === 0) {
+      touchRef.current.mode = "none";
+      return;
+    }
+    // Lifting one finger out of a pinch hands the gesture back to pan rather
+    // than ending it, so the graph does not jump.
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      touchRef.current = {
+        mode: "pan",
+        sx: t.clientX,
+        sy: t.clientY,
+        startView: view,
+        startDist: 0,
+      };
+    }
+  };
+
+  // Frame the whole graph on first paint. The stored view is whatever the last
+  // editor left behind, and on a narrow screen that regularly puts every node
+  // off-canvas -- the page would open on empty grid with no clue which way to
+  // drag. Runs once, and only once the box has actually been measured.
+  const didFit = useRef(false);
+  useEffect(() => {
+    if (didFit.current) return;
+    if (workflow.nodes.length === 0) return;
+    const rect = wrapRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return;
+    didFit.current = true;
+    fitView();
+  }, [workflow.nodes, fitView]);
+
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     if (!editable) return;
@@ -269,6 +425,10 @@ export function CanvasGraph({
     <div
       ref={wrapRef}
       onMouseDown={onBgMouseDown}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onTouchCancel={onTouchEnd}
       onDragOver={(e) => e.preventDefault()}
       onDrop={onDrop}
       className="canvas-bg"
@@ -281,6 +441,10 @@ export function CanvasGraph({
         backgroundPosition: `${view.x}px ${view.y}px`,
         cursor: panning ? "grabbing" : "default",
         userSelect: "none",
+        // Without this the browser takes the drag for page scroll and the
+        // pinch for its own page zoom, and the handlers above never see a
+        // usable gesture.
+        touchAction: "none",
       }}
     >
       <div
@@ -380,8 +544,10 @@ export function CanvasGraph({
         }}
       >
         <button
-          onClick={() => setView((v) => ({ ...v, k: Math.min(2, v.k * 1.15) }))}
+          onClick={() => zoomFromCentre(1.15)}
           style={ctrlBtn}
+          aria-label="Zoom in"
+          title="Zoom in"
         >
           +
         </button>
@@ -396,10 +562,10 @@ export function CanvasGraph({
           {Math.round(view.k * 100)}%
         </div>
         <button
-          onClick={() =>
-            setView((v) => ({ ...v, k: Math.max(0.3, v.k / 1.15) }))
-          }
+          onClick={() => zoomFromCentre(1 / 1.15)}
           style={ctrlBtn}
+          aria-label="Zoom out"
+          title="Zoom out"
         >
           −
         </button>
@@ -407,9 +573,10 @@ export function CanvasGraph({
           style={{ height: 1, background: "var(--border)", margin: "2px 0" }}
         />
         <button
-          onClick={() => setView({ x: 40, y: 40, k: 0.95 })}
+          onClick={fitView}
           style={ctrlBtn}
-          title="Reset view"
+          aria-label="Fit workflow to screen"
+          title="Fit to screen"
         >
           ⊡
         </button>
