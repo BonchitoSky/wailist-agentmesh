@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ChatPane } from "./ChatPane";
 import { TerminalTab } from "../TerminalTab";
 import { IconChat, IconInspect } from "@/components/ui";
@@ -17,7 +17,7 @@ interface ChatRailProps {
   onSend: (text: string) => void;
   busy: boolean;
   onShowLogs?: () => void;
-  width?: number;
+  width?: number | string;
   // Build mode edits the graph instead of running the deployed agent.
   // canToggleBuildMode is false until a provider node exists -- before
   // that, build mode is forced on and there's nothing to toggle.
@@ -32,6 +32,11 @@ interface ChatRailProps {
   hasSelection: boolean;
   /** Non-null only while the run holds a Tendril lease; gates the TERM pill. */
   leaseId: string | null;
+  /** Switches the visible pane when it changes. The rail still owns its own
+   *  tab state -- this only nudges it, so tapping a pill afterwards still
+   *  wins. Used by the compact bottom sheet to open on the node the reader
+   *  just selected. */
+  forceTab?: RailTab | null;
 }
 
 export function ChatRail({
@@ -46,8 +51,17 @@ export function ChatRail({
   inspectorNode,
   hasSelection,
   leaseId,
+  forceTab = null,
 }: ChatRailProps) {
   const [tab, setTab] = useState<RailTab>("chat");
+
+  // Only on a *change* of forceTab, so the reader can switch away from the
+  // inspector while the same node stays selected.
+  const lastForced = useRef<RailTab | null>(null);
+  useEffect(() => {
+    if (forceTab && forceTab !== lastForced.current) setTab(forceTab);
+    lastForced.current = forceTab;
+  }, [forceTab]);
   // A lease that ends mid-run must not leave the rail stuck on a dead
   // terminal. Derived at render rather than synced through an effect: an
   // effect fires a second render pass and can lose a race with a pill click

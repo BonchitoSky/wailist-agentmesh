@@ -23,6 +23,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { ChatRail } from "./chat/ChatRail";
 import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
 import { can } from "@/lib/readonly";
+import { useIsCompact } from "@/hooks/useIsCompact";
 import {
   PALETTE,
   INSPECTOR,
@@ -37,12 +38,18 @@ interface CanvasPageProps {
 
 export function CanvasPage({ workflowId }: CanvasPageProps) {
   const router = useRouter();
+  const compact = useIsCompact();
 
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [manualBuildMode, setManualBuildMode] = useState(false);
+  // Below the compact breakpoint the studio stacks instead of sitting in
+  // three columns, and the rail becomes a sheet. Closed by default: the
+  // reader came to look at the graph, so the graph gets the screen until
+  // they ask for something else.
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [deployed, setDeployed] = useState(false);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -472,12 +479,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
       <div
         ref={attachRow}
-        style={{
-          flex: 1,
-          display: "flex",
-          position: "relative",
-          overflow: "hidden",
-        }}
+        className="am-studio-row"
+        data-compact={compact ? "true" : "false"}
       >
         {/* The palette exists to drag new nodes onto the canvas, so in
             read-only mode it has no job -- and dropping it gives the graph
@@ -550,44 +553,92 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 />
               </div>
 
-              <ResizeHandle
-                side="right"
-                value={inspectorW}
-                min={INSPECTOR.min}
-                max={INSPECTOR.max}
-                ariaLabel="Resize chat panel"
-                onChange={resizeInspector}
-                onCommit={persistWidths}
-                onReset={() => {
-                  setInspectorW(INSPECTOR.default);
-                  persistWidths();
-                }}
-              />
-              <ChatRail
-                session={chat.session}
-                onSend={chat.handleSend}
-                busy={chat.busy}
-                onShowLogs={() => setLogOpen(true)}
-                width={inspectorW}
-                buildMode={buildMode}
-                canToggleBuildMode={
-                  can("workflow.buildFromChat") && hasProviderNode
-                }
-                onToggleBuildMode={() => setManualBuildMode((v) => !v)}
-                inspectorNode={
-                  <Inspector
-                    selected={selected}
-                    workflowId={workflow.id}
-                    onUpdate={onUpdate}
-                    onDelete={onDelete}
-                    onClose={() => setSelectedId(null)}
-                    width="100%"
-                    embedded
+              {compact ? (
+                <div
+                  className="am-studio-sheet am-safe-bottom"
+                  data-open={sheetOpen ? "true" : "false"}
+                >
+                  <button
+                    className="am-sheet-grip"
+                    onClick={() => setSheetOpen((o) => !o)}
+                    aria-expanded={sheetOpen}
+                    aria-label={
+                      sheetOpen ? "Collapse the panel" : "Expand the panel"
+                    }
+                  >
+                    {sheetOpen ? "" : selected ? "node selected" : "chat"}
+                  </button>
+                  {sheetOpen && (
+                    <ChatRail
+                      session={chat.session}
+                      onSend={chat.handleSend}
+                      busy={chat.busy}
+                      onShowLogs={() => setLogOpen(true)}
+                      width="100%"
+                      buildMode={buildMode}
+                      canToggleBuildMode={
+                        can("workflow.buildFromChat") && hasProviderNode
+                      }
+                      onToggleBuildMode={() => setManualBuildMode((v) => !v)}
+                      inspectorNode={
+                        <Inspector
+                          selected={selected}
+                          workflowId={workflow.id}
+                          onUpdate={onUpdate}
+                          onDelete={onDelete}
+                          onClose={() => setSelectedId(null)}
+                          width="100%"
+                          embedded
+                        />
+                      }
+                      hasSelection={selected !== null}
+                      leaseId={chat.leaseId}
+                      forceTab={selected ? "inspector" : null}
+                    />
+                  )}
+                </div>
+              ) : (
+                <>
+                  <ResizeHandle
+                    side="right"
+                    value={inspectorW}
+                    min={INSPECTOR.min}
+                    max={INSPECTOR.max}
+                    ariaLabel="Resize chat panel"
+                    onChange={resizeInspector}
+                    onCommit={persistWidths}
+                    onReset={() => {
+                      setInspectorW(INSPECTOR.default);
+                      persistWidths();
+                    }}
                   />
-                }
-                hasSelection={selected !== null}
-                leaseId={chat.leaseId}
-              />
+                  <ChatRail
+                    session={chat.session}
+                    onSend={chat.handleSend}
+                    busy={chat.busy}
+                    onShowLogs={() => setLogOpen(true)}
+                    width={inspectorW}
+                    buildMode={buildMode}
+                    canToggleBuildMode={
+                      can("workflow.buildFromChat") && hasProviderNode
+                    }
+                    onToggleBuildMode={() => setManualBuildMode((v) => !v)}
+                    inspectorNode={
+                      <Inspector
+                        selected={selected}
+                        workflowId={workflow.id}
+                        onUpdate={onUpdate}
+                        onDelete={onDelete}
+                        onClose={() => setSelectedId(null)}
+                        width="100%"
+                        embedded
+                      />
+                    }
+                    hasSelection={selected !== null}
+                    leaseId={chat.leaseId}
+                  />
+                </>
+              )}
             </>
           )}
         </ChatConsoleHost>

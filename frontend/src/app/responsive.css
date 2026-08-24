@@ -139,3 +139,85 @@
     gap: 14px;
   }
 }
+
+/* ── Studio, compact ────────────────────────────────────────────────────── */
+/* The studio is a three-column desktop IDE: palette | graph | rail. Read-only
+   already drops the palette, but the rail's 320px still leaves ~55px of graph
+   on a 375px screen. Below the compact breakpoint the two remaining columns
+   stack instead, so the graph gets the whole width and the rail becomes a
+   sheet the reader pulls up when they want it.
+   Widths/structure are switched in React (useIsCompact) because this changes
+   which elements mount, not just how they look — these rules dress the result. */
+.am-studio-row {
+  flex: 1;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+.am-studio-row[data-compact="true"] {
+  flex-direction: column;
+}
+
+/* Sheet sits under the graph in flow, not over it: overlaying would hide the
+   node whose config the reader just opened the sheet to read. */
+.am-studio-sheet {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-elev-1);
+  border-top: 1px solid var(--border);
+}
+.am-studio-sheet[data-open="true"] {
+  /* Just over half the screen: enough to read a node's config without losing
+     sight of the graph it belongs to. */
+  height: 55dvh;
+}
+
+/* The grip is 14px of visible bar in a 44px target — the minimum a thumb can
+   reliably hit, per the same rule .pw-reveal follows. */
+.am-sheet-grip {
+  flex-shrink: 0;
+  height: 44px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.12s var(--ease);
+}
+.am-sheet-grip:hover {
+  color: var(--fg-muted);
+}
+.am-sheet-grip:active {
+  transform: scale(0.97);
+}
+.am-sheet-grip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--r-2);
+}
+.am-sheet-grip::before {
+  content: "";
+  width: 34px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-sheet-grip {
+    transition: none;
+  }
+  .am-sheet-grip:active {
+    transform: none;
+  }
+}
