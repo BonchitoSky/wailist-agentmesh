@@ -106,7 +106,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
 
   return (
     <div
-      className="am-viewport"
+      className="am-viewport am-auth-split"
       style={{
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
@@ -425,6 +425,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
 
       {/* Right -- visual */}
       <div
+        className="am-auth-aside"
         style={{
           background: "var(--bg-elev-1)",
           borderLeft: "1px solid var(--border)",

@@ -85,20 +85,12 @@ export function Topbar() {
   };
 
   return (
-    <div
-      style={{
-        height: 56,
-        flexShrink: 0,
-        background: "var(--bg-elev-1)",
-        borderBottom: "1px solid var(--border)",
-        padding: "0 24px",
-        display: "flex",
-        alignItems: "center",
-        gap: 20,
-      }}
-    >
+    <div className="am-topbar">
       {/* Brand + workspace context — one visual group */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div
+        className="am-topbar-brand"
+        style={{ display: "flex", alignItems: "center", gap: 12 }}
+      >
         <button
           onClick={() => router.push("/")}
           style={{
@@ -111,7 +103,10 @@ export function Topbar() {
           <Logo size={18} />
         </button>
         <Hairline vertical length={22} />
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div
+          className="am-topbar-context"
+          style={{ display: "flex", alignItems: "center", gap: 8 }}
+        >
           <button style={ghostBtnSm}>{orgName} ▾</button>
           <Pill mono dot tone="warm">
             {ALGORAND_NETWORK}
@@ -125,10 +120,16 @@ export function Topbar() {
           )}
         </div>
       </div>
-      <div style={{ flex: 1 }} />
+      <div className="am-topbar-spacer" style={{ flex: 1 }} />
       {/* Navigation + account — the other group */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <nav style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+      <div
+        className="am-topbar-actions"
+        style={{ display: "flex", alignItems: "center", gap: 12 }}
+      >
+        <nav
+          className="am-topbar-nav"
+          style={{ display: "inline-flex", alignItems: "center", gap: 2 }}
+        >
           <NavLink
             label="Workflows"
             active={pathname.startsWith("/workflows")}
@@ -145,7 +146,9 @@ export function Topbar() {
             onClick={() => router.push("/billing")}
           />
         </nav>
-        <Hairline vertical length={22} />
+        <span className="am-topbar-divider">
+          <Hairline vertical length={22} />
+        </span>
         <div
           className="profile-menu"
           ref={menuRef}
@@ -394,6 +397,7 @@ function NavLink({
 }) {
   return (
     <button
+      className="am-nav-link"
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       onMouseEnter={(e) => {
@@ -403,8 +407,6 @@ function NavLink({
         if (!active) e.currentTarget.style.background = "transparent";
       }}
       style={{
-        height: 28,
-        padding: "0 12px",
         fontSize: 12.5,
         fontWeight: 500,
         background: active ? "var(--bg-elev-3)" : "transparent",

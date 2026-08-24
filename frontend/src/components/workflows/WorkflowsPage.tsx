@@ -739,11 +739,8 @@ function WorkflowRows({
   return (
     <Card style={{ padding: 0, overflowX: "auto" }}>
       <div
+        className="am-wf-grid am-wf-head"
         style={{
-          display: "grid",
-          gridTemplateColumns:
-            "minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr) minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px",
-          gap: 12,
           padding: "10px 16px",
           background: "var(--bg-elev-2)",
           borderBottom: "1px solid var(--border)",
@@ -766,11 +763,8 @@ function WorkflowRows({
         <div
           key={wf.id}
           onClick={() => onOpen(wf.id)}
+          className="am-wf-grid"
           style={{
-            display: "grid",
-            gridTemplateColumns:
-              "minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr) minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px",
-            gap: 12,
             padding: "14px 16px",
             alignItems: "center",
             borderBottom:
@@ -824,13 +818,19 @@ function WorkflowRows({
               </div>
             </div>
           </div>
-          <StatusBadge status={wf.status} />
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+          <span data-label="Status">
+            <StatusBadge status={wf.status} />
+          </span>
+          <span
+            data-label="Agents"
+            style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}
+          >
             {wf.agents ??
               wf.nodes?.filter((n) => n.type === "agent").length ??
               0}
           </span>
           <span
+            data-label="Runs · 30d"
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 12,
@@ -840,6 +840,7 @@ function WorkflowRows({
             {wf.runs?.toLocaleString() ?? "-"}
           </span>
           <span
+            data-label="Spend · 30d"
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 12,
@@ -850,6 +851,7 @@ function WorkflowRows({
             {wf.spend && <span style={{ color: "var(--fg-dim)" }}> ALGO</span>}
           </span>
           <span
+            data-label="Updated"
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 11,

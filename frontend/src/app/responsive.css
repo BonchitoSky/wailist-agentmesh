@@ -221,3 +221,159 @@
     transform: none;
   }
 }
+
+/* ── App top bar ────────────────────────────────────────────────────────── */
+.am-nav-link {
+  height: 28px;
+  padding: 0 12px;
+}
+
+/* One 56px row of brand + workspace + network + three nav links + avatar needs
+   well over 375px, so on a phone the bar wraps: identity stays on the first
+   row, navigation drops to a full-width second row where the links are wide,
+   evenly spaced, and comfortably thumb-sized. Nothing is hidden behind a menu
+   — the whole point of this pass is that the UI stops cutting things off. */
+.am-topbar {
+  height: 56px;
+  flex-shrink: 0;
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+@media (max-width: 768px) {
+  .am-topbar {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 0 14px;
+    gap: 10px;
+  }
+  /* The workspace switcher and the network pill are context, not navigation.
+     They are the first things to go when the row runs out of width. */
+  .am-topbar-context {
+    display: none;
+  }
+  .am-topbar-spacer {
+    display: none;
+  }
+  .am-topbar-brand {
+    min-width: 0;
+    /* `flex: 1` would set a 0% basis, and a 0-basis item plus a 100% one
+       sums to exactly one line -- so the row would never wrap and the brand
+       would collapse to zero width instead. An auto basis makes the brand
+       count its own content, which is what pushes the second row down. */
+    flex: 1 1 auto;
+    /* Owns the 56px the bar no longer fixes. */
+    height: 56px;
+  }
+  /* The nav sits inside this cluster, so the whole cluster is what drops to
+     a second row -- navigation on the left, account on the right. Moving
+     just the nav would mean reparenting it, and `width: 100%` on a nested
+     child cannot escape its own flex container. */
+  .am-topbar-actions {
+    order: 10;
+    /* flex-basis, not width: a flex item still shrinks out of a 100% width
+       to stay on the line, so the row never actually wraps. */
+    flex: 0 0 100%;
+    margin: 0 -14px;
+    padding: 0 10px;
+    border-top: 1px solid var(--border);
+    justify-content: space-between;
+  }
+  .am-topbar-nav {
+    flex: 1;
+    justify-content: space-around;
+  }
+  /* 28px is a comfortable pointer target and a poor thumb one. */
+  .am-nav-link {
+    flex: 1;
+    height: 44px;
+    justify-content: center;
+  }
+  .am-topbar-divider {
+    display: none;
+  }
+}
+
+/* ── Wide tables → labelled cards ───────────────────────────────────────── */
+/* The workflow table is ~834px of grid before it can lay out a single row, so
+   on a phone it either overflows or crushes. Below the mobile breakpoint each
+   row becomes a small card instead: the name spans the full width, and the
+   remaining figures sit in a two-up grid, each captioned by the column header
+   it lost when the header row was dropped (data-label on the cell).
+   Cards, not a sideways scroll, because these rows are separate entities you
+   pick from -- unlike the usage tables below, where the columns are numbers
+   you compare across, and keeping them aligned matters more. */
+.am-wf-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr)
+    minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px;
+  gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .am-wf-head {
+    display: none;
+  }
+  .am-wf-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+    align-items: start;
+  }
+  /* Name, and the actions, each get their own full-width line. */
+  .am-wf-grid > :first-child,
+  .am-wf-grid > :last-child {
+    grid-column: 1 / -1;
+  }
+  .am-wf-grid > [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+  }
+}
+
+/* Usage tables keep their columns and scroll sideways inside their own card,
+   so the page body never does. */
+@media (max-width: 1024px) {
+  .am-usage-table {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ── Assorted fixed grids ───────────────────────────────────────────────── */
+.am-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 768px) {
+  .am-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .am-grid-4 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The sign-in split: form beside artwork on a desktop, form alone on a phone
+   (the artwork half is decorative, and it is the half that goes). */
+@media (max-width: 900px) {
+  .am-auth-split {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .am-auth-aside {
+    display: none;
+  }
+}

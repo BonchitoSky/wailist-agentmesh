@@ -271,9 +271,8 @@ export default function BillingPage() {
 
                 {/* Preset cards */}
                 <div
+                  className="am-grid-4"
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(4, 1fr)",
                     gap: 8,
                   }}
                 >

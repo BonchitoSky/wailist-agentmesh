@@ -716,85 +716,88 @@ function UsageBody({
             </span>
           }
         />
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: SETTLE_GRID,
-            gap: 14,
-            padding: "8px 10px",
-            background: "var(--bg-elev-2)",
-            borderRadius: "var(--r-2)",
-            marginTop: 4,
-            alignItems: "center",
-          }}
-        >
-          <span style={hcell}>Endpoint</span>
-          <span style={hcell}>Hash</span>
-          <span style={hcell}>Workflow</span>
-          <span style={{ ...hcell, textAlign: "right" }}>Amount</span>
-          <span style={{ ...hcell, textAlign: "right" }}>Time</span>
-        </div>
-        <div style={{ padding: "2px 0" }}>
-          {settlements.map((s, i) => (
-            <div
-              key={s.txId}
-              style={{
-                display: "grid",
-                gridTemplateColumns: SETTLE_GRID,
-                gap: 14,
-                alignItems: "center",
-                padding: "11px 10px",
-                borderBottom:
-                  i < settlements.length - 1
-                    ? "1px solid var(--border-soft)"
-                    : "none",
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-              }}
-            >
-              <span
+        <div className="am-usage-table">
+          <div
+            style={{
+              minWidth: 720,
+              display: "grid",
+              gridTemplateColumns: SETTLE_GRID,
+              gap: 14,
+              padding: "8px 10px",
+              background: "var(--bg-elev-2)",
+              borderRadius: "var(--r-2)",
+              marginTop: 4,
+              alignItems: "center",
+            }}
+          >
+            <span style={hcell}>Endpoint</span>
+            <span style={hcell}>Hash</span>
+            <span style={hcell}>Workflow</span>
+            <span style={{ ...hcell, textAlign: "right" }}>Amount</span>
+            <span style={{ ...hcell, textAlign: "right" }}>Time</span>
+          </div>
+          <div style={{ minWidth: 720, padding: "2px 0" }}>
+            {settlements.map((s, i) => (
+              <div
+                key={s.txId}
                 style={{
-                  color: "var(--fg-muted)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
+                  display: "grid",
+                  gridTemplateColumns: SETTLE_GRID,
+                  gap: 14,
+                  alignItems: "center",
+                  padding: "11px 10px",
+                  borderBottom:
+                    i < settlements.length - 1
+                      ? "1px solid var(--border-soft)"
+                      : "none",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
                 }}
               >
-                {s.endpoint}
-              </span>
-              <a
-                href={s.explorerURL}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  color: "#E879F9",
-                  textDecoration: "underline",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {s.txId.slice(0, 13)}…
-              </a>
-              <span
-                style={{
-                  color: "var(--fg-dim)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {s.workflowId || "—"}
-              </span>
-              <span style={{ color: "var(--fg)", textAlign: "right" }}>
-                {s.amountAlgo.toFixed(6)}{" "}
-                <span style={{ color: "var(--fg-dim)" }}>ALGO</span>
-              </span>
-              <span style={{ color: "var(--fg-dim)", textAlign: "right" }}>
-                {relTime(s.ts)}
-              </span>
-            </div>
-          ))}
+                <span
+                  style={{
+                    color: "var(--fg-muted)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {s.endpoint}
+                </span>
+                <a
+                  href={s.explorerURL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: "#E879F9",
+                    textDecoration: "underline",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {s.txId.slice(0, 13)}…
+                </a>
+                <span
+                  style={{
+                    color: "var(--fg-dim)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {s.workflowId || "—"}
+                </span>
+                <span style={{ color: "var(--fg)", textAlign: "right" }}>
+                  {s.amountAlgo.toFixed(6)}{" "}
+                  <span style={{ color: "var(--fg-dim)" }}>ALGO</span>
+                </span>
+                <span style={{ color: "var(--fg-dim)", textAlign: "right" }}>
+                  {relTime(s.ts)}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </Card>
 
