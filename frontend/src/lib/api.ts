@@ -11,12 +11,26 @@ import {
   Settlement,
 } from "./types";
 import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
+import { isWriteBlocked } from "./readonly";
 
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
 const _CONFIGURED = process.env.NEXT_PUBLIC_API_URL ?? "";
 export const BASE =
   _CONFIGURED && typeof window !== "undefined" ? "/api" : _CONFIGURED;
+
+// Defence in depth for read-only mode. Every authoring control is hidden from
+// the UI, but a stale bundle, a deep link, or a console call must not be able
+// to put a graph write on the wire either. This throws before the request is
+// built, and sits outside the `if (BASE)` branches so mock mode behaves the
+// same as a real backend rather than quietly permitting more.
+function assertWritable(method: string, path: string): void {
+  if (isWriteBlocked(method, path)) {
+    throw new Error(
+      "Workflows can only be edited in the AgentMesh desktop app.",
+    );
+  }
+}
 
 // -- Auth ------------------------------------------------------------------
 export interface AuthUser {
@@ -158,6 +172,7 @@ export const workflows = {
 
   // TODO: POST /workflows
   create: async (name: string): Promise<Workflow> => {
+    assertWritable("POST", "/workflows");
     if (BASE) {
       const res = await fetch(`${BASE}/workflows`, {
         method: "POST",
@@ -175,6 +190,7 @@ export const workflows = {
 
   // TODO: PUT /workflows/:id
   update: async (id: string, wf: Partial<Workflow>): Promise<Workflow> => {
+    assertWritable("PUT", `/workflows/${id}`);
     if (BASE) {
       const res = await fetch(`${BASE}/workflows/${id}`, {
         method: "PUT",
@@ -200,6 +216,7 @@ export const workflows = {
   // the only copy of an active lease's encrypted credentials; that message is
   // surfaced to the caller rather than swallowed.
   remove: async (id: string): Promise<void> => {
+    assertWritable("DELETE", `/workflows/${id}`);
     if (BASE) {
       const res = await fetch(`${BASE}/workflows/${id}`, {
         method: "DELETE",
@@ -220,6 +237,7 @@ export const workflows = {
   ): Promise<{
     agents: { nodeId: string; address: string; network: string }[];
   }> => {
+    assertWritable("POST", `/workflows/${id}/deploy`);
     if (BASE) {
       const res = await fetch(`${BASE}/workflows/${id}/deploy`, {
         method: "POST",
@@ -258,6 +276,7 @@ export const workflows = {
     id: string,
     message: string,
   ): Promise<{ reply: string; workflow: Workflow }> => {
+    assertWritable("POST", `/workflows/${id}/build`);
     if (BASE) {
       const res = await fetch(`${BASE}/workflows/${id}/build`, {
         method: "POST",
@@ -548,7 +567,9 @@ export const oauth2 = {
   // async request.
   connectURL: (provider: string): string => `${BASE}/oauth2/${provider}/start`,
 
-  listCredentials: async (provider: string): Promise<OAuthCredentialSummary[]> => {
+  listCredentials: async (
+    provider: string,
+  ): Promise<OAuthCredentialSummary[]> => {
     if (!BASE) return []; // No connected-account concept in mock mode.
     const res = await fetch(
       `${BASE}/oauth2/credentials?provider=${encodeURIComponent(provider)}`,
