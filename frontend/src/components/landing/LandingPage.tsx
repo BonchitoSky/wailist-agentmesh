@@ -132,7 +132,6 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
           <div className="landing-gutter" style={{ paddingTop: 20, paddingBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <Logo size={20} />
             <nav className="landing-nav" style={{
-              display: "flex", alignItems: "center", gap: 4,
               position: "absolute", left: "50%", transform: "translateX(-50%)",
             }}>
               {["Overview", "How it works", "Waitlist"].map((label, i) => (

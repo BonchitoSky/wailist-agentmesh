@@ -112,6 +112,11 @@
    logo and the CTA rather than pushing them apart. There is no room for all
    three on a phone; the page is a single scroll narrative and both CTAs
    survive, so the anchors are what give way. */
+.landing-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 @media (max-width: 768px) {
   .landing-nav {
     display: none;
