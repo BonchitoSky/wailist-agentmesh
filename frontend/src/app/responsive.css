@@ -58,3 +58,79 @@
 .am-table-track {
   min-width: max-content;
 }
+
+/* ── Landing page ───────────────────────────────────────────────────────── */
+/* The marketing page was laid out for a desktop window: fixed 32px gutters,
+   a 2-up pillar grid, a 4-up step grid, and a hero whose clamp() floor was
+   taller than a phone is wide. Each of these replaces an inline style, so the
+   corresponding style prop has to be removed from the JSX — an inline
+   declaration always beats a stylesheet. */
+
+.landing-gutter {
+  padding-left: clamp(16px, 4vw, 32px);
+  padding-right: clamp(16px, 4vw, 32px);
+}
+
+.landing-pillars {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+@media (max-width: 768px) {
+  .landing-pillars {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.landing-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+/* Two-up before one-up: these are four short, numbered cards, and a 2x2 block
+   reads as one sequence where a 4x1 stack reads as four separate things. */
+@media (max-width: 900px) {
+  .landing-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .landing-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The "›" chevrons between steps point along a row. Once the grid wraps they
+   point at the card below, so they come off. */
+@media (max-width: 900px) {
+  .landing-step-chevron {
+    display: none;
+  }
+}
+
+/* The anchor nav is centred by absolute positioning, so it sits on top of the
+   logo and the CTA rather than pushing them apart. There is no room for all
+   three on a phone; the page is a single scroll narrative and both CTAs
+   survive, so the anchors are what give way. */
+@media (max-width: 768px) {
+  .landing-nav {
+    display: none;
+  }
+}
+
+/* Label beside a marquee needs ~140px, leaving ~150px of track on a 375px
+   screen. Stacking gives the track the full width instead. */
+.landing-marquee-row {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 48px;
+}
+@media (max-width: 640px) {
+  .landing-marquee-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+}

@@ -129,9 +129,9 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
       <div className="am-viewport-min" style={{ position: "relative", zIndex: 10, display: "flex", flexDirection: "column", flex: 1 }}>
         {/* Nav */}
         <div style={{ position: "relative", zIndex: 11 }}>
-          <div style={{ padding: "20px 32px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div className="landing-gutter" style={{ paddingTop: 20, paddingBottom: 20, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <Logo size={20} />
-            <nav style={{
+            <nav className="landing-nav" style={{
               display: "flex", alignItems: "center", gap: 4,
               position: "absolute", left: "50%", transform: "translateX(-50%)",
             }}>
@@ -175,9 +175,9 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
         </div>
 
         {/* Hero content */}
-        <div style={{
+        <div className="landing-gutter" style={{
           flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-          padding: "0 32px", position: "relative",
+          position: "relative",
         }}>
           <div style={{
             position: "relative", zIndex: 12, display: "flex", flexDirection: "column",
@@ -185,7 +185,7 @@ function HeroSection({ openStudio, signedIn, scrollToId }: {
           }}>
             <h1 style={{
               margin: 0, fontFamily: "var(--font-sans)", fontWeight: 400,
-              fontSize: "clamp(80px, 16vw, 220px)", lineHeight: 1.02,
+              fontSize: "clamp(44px, 16vw, 220px)", lineHeight: 1.02,
               letterSpacing: "-0.024em", color: "rgba(242, 240, 247, 0.98)",
             }}>
               Agent<span className="hero-gradient">Mesh</span>
@@ -231,8 +231,8 @@ function LogoMarquee() {
   const doubled = [...logos, ...logos];
 
   return (
-    <div style={{ padding: "0 32px 40px", position: "relative", zIndex: 11 }}>
-      <div style={{ maxWidth: 1100, margin: "0 auto", display: "flex", alignItems: "center", gap: 48 }}>
+    <div className="landing-gutter" style={{ paddingBottom: 40, position: "relative", zIndex: 11 }}>
+      <div className="landing-marquee-row">
         <div style={{ flex: "0 0 auto", color: "rgba(242, 240, 247, 0.5)", fontSize: 13, lineHeight: 1.4, fontFamily: "var(--font-sans)" }}>
           Built with best-in-class<br />agent tooling
         </div>
@@ -265,18 +265,18 @@ function LandingPillars() {
     { tag: "04", kicker: "run",   title: "Agent-to-agent messages, audit-ready.",  body: "Inter-agent messages produce verifiable receipts. Replay any run. Audit-friendly by default.", glyph: "◈" },
   ];
   return (
-    <section id="pillars" style={{
-      padding: "128px 32px", borderTop: "1px solid var(--border)",
+    <section id="pillars" className="landing-gutter" style={{
+      paddingTop: 128, paddingBottom: 128, borderTop: "1px solid var(--border)",
       position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.55)",
     }}>
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         <div className="in-view" style={{ marginBottom: 72 }}>
           <Tag>what is agentmesh</Tag>
-          <h2 style={{ margin: "16px 0 0", fontSize: 48, fontWeight: 500, letterSpacing: "-0.028em", maxWidth: 680, fontFamily: "var(--font-sans)", lineHeight: 1.12 }}>
+          <h2 style={{ margin: "16px 0 0", fontSize: "clamp(30px, 6vw, 48px)", fontWeight: 500, letterSpacing: "-0.028em", maxWidth: 680, fontFamily: "var(--font-sans)", lineHeight: 1.12 }}>
             Visual workflow design for autonomous agents.
           </h2>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 20 }}>
+        <div className="landing-pillars">
           {pillars.map((p, i) => (
             <div key={i} className="in-view" style={{ transitionDelay: `${i * 90}ms` }}>
               <div
@@ -309,19 +309,19 @@ function LandingFlow() {
     { k: "04", label: "Fund + run",  body: "Top up agent budgets. Watch usage settle live.",           glyph: "▶" },
   ];
   return (
-    <section id="flow" style={{ borderTop: "1px solid var(--border)", background: "rgba(4, 3, 12, 0.62)", padding: "112px 32px", position: "relative", zIndex: 1 }}>
+    <section id="flow" className="landing-gutter" style={{ borderTop: "1px solid var(--border)", background: "rgba(4, 3, 12, 0.62)", paddingTop: 112, paddingBottom: 112, position: "relative", zIndex: 1 }}>
       <div style={{ maxWidth: 1280, margin: "0 auto" }}>
         <div className="in-view" style={{ marginBottom: 64 }}>
           <Tag>flow</Tag>
-          <h2 style={{ margin: "16px 0 0", fontSize: 40, fontWeight: 500, letterSpacing: "-0.025em", fontFamily: "var(--font-sans)", lineHeight: 1.15 }}>
+          <h2 style={{ margin: "16px 0 0", fontSize: "clamp(26px, 5vw, 40px)", fontWeight: 500, letterSpacing: "-0.025em", fontFamily: "var(--font-sans)", lineHeight: 1.15 }}>
             Zero to running pipeline in four moves.
           </h2>
         </div>
-        <div className="in-view" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
+        <div className="in-view landing-steps">
           {steps.map((s, i) => (
             <div key={i} style={{ position: "relative" }}>
               {i < steps.length - 1 && (
-                <div style={{ position: "absolute", top: 42, right: -10, zIndex: 2, color: "var(--fg-dim)", fontSize: 16, pointerEvents: "none" }}>›</div>
+                <div className="landing-step-chevron" style={{ position: "absolute", top: 42, right: -10, zIndex: 2, color: "var(--fg-dim)", fontSize: 16, pointerEvents: "none" }}>›</div>
               )}
               <div
                 style={{ height: "100%", padding: "28px 24px 32px", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, backdropFilter: "blur(6px)", transition: "border-color .2s, background .2s" }}
@@ -358,10 +358,10 @@ function LandingWaitlist() {
   };
 
   return (
-    <section id="waitlist" style={{ borderTop: "1px solid var(--border)", padding: "128px 32px", position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.55)" }}>
+    <section id="waitlist" className="landing-gutter" style={{ borderTop: "1px solid var(--border)", paddingTop: 128, paddingBottom: 128, position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.55)" }}>
       <div className="in-view" style={{ maxWidth: 540, margin: "0 auto", textAlign: "center" }}>
         <Tag>early access</Tag>
-        <h2 style={{ margin: "20px 0 14px", fontSize: 48, fontWeight: 500, letterSpacing: "-0.028em", fontFamily: "var(--font-sans)", lineHeight: 1.1 }}>Join the waitlist.</h2>
+        <h2 style={{ margin: "20px 0 14px", fontSize: "clamp(30px, 6vw, 48px)", fontWeight: 500, letterSpacing: "-0.028em", fontFamily: "var(--font-sans)", lineHeight: 1.1 }}>Join the waitlist.</h2>
         <p style={{ color: "var(--fg-muted)", fontSize: 15, lineHeight: 1.6, marginBottom: 40 }}>
           {WAITLIST_COUNT}+ teams in queue. Early access opens in cohorts; it&apos;s free to start.
         </p>
@@ -393,7 +393,7 @@ function LandingWaitlist() {
 function LandingFooter() {
   const linkStyle: React.CSSProperties = { color: "inherit", textDecoration: "none" };
   return (
-    <footer style={{ borderTop: "1px solid var(--border)", padding: "28px 32px", position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.70)" }}>
+    <footer className="landing-gutter" style={{ borderTop: "1px solid var(--border)", paddingTop: 28, paddingBottom: 28, position: "relative", zIndex: 1, background: "rgba(4, 3, 12, 0.70)" }}>
       <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-dim)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           <Logo size={14} />

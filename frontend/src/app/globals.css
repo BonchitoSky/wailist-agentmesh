@@ -191,6 +191,16 @@ body {
   mask: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
 }
 
+/* The track scrolls forever, so it is exactly the kind of ambient motion that
+   has to stop when the reader has asked for less of it. Halting it simply
+   leaves the first copy of the logo set parked in place, which is legible --
+   the track renders the set twice so the loop can be seamless. */
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track {
+    animation: none;
+  }
+}
+
 /* ── Liquid glass ─────────────────────────────────────────────────────── */
 .liquid-glass {
   background: rgba(255, 255, 255, 0.01);
