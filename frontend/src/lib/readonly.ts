@@ -1,18 +1,12 @@
-import { COMPACT_QUERY } from "@/hooks/useIsCompact";
+import { isHandheldNow } from "./device";
 
-// The web app is an editor on a desktop and a viewer on a small screen.
+// The web app is an editor on a computer and a viewer on a handheld.
 //
-// This is the GitHub arrangement: browse anywhere, author where there is room
-// to. It is not an arbitrary line. The studio is a three-column IDE whose own
-// constants need 780px before it can lay out at all, so below the compact
-// breakpoint there is no editor to offer -- the palette does not fit, and
-// dragging a node into place with a thumb is not the same gesture. Rather than
-// serve a cramped editor, a narrow client gets a viewer that fits.
-//
-// The threshold is COMPACT_QUERY, the same one the studio uses to stack its
-// columns, and deliberately so: if the two disagreed there would be a band of
-// widths where the palette renders inside a stacked layout it was never
-// designed for.
+// This is the GitHub arrangement: browse anywhere, author where you have the
+// keyboard and pointer to do it with. The line is drawn by DEVICE, not by
+// window width -- a laptop dragged narrow is still a laptop, and taking its
+// editor away because of a window size was simply a bug. See lib/device.ts
+// for how a handheld is identified and why no single browser API suffices.
 
 // Named for what the user is trying to do, not for the endpoint behind it, so
 // a call site reads as intent: `can("workflow.deploy", readOnly)`.
@@ -86,6 +80,5 @@ export function isWriteBlocked(
 // out, right now", and nothing needs to re-render when the answer changes.
 // Components must use useReadOnly() instead.
 export function isReadOnlyNow(): boolean {
-  if (typeof window === "undefined" || !window.matchMedia) return false;
-  return window.matchMedia(COMPACT_QUERY).matches;
+  return isHandheldNow();
 }
