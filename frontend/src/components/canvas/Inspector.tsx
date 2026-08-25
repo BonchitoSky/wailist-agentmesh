@@ -16,6 +16,7 @@ import {
 import { IconClose, StatusDot } from "@/components/ui";
 import { BrandLogo } from "./nodes/brandLogos";
 import { can } from "@/lib/readonly";
+import { iconBtn } from "@/components/ui/buttons";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import { tools as toolsApi, oauth2, OAuthCredentialSummary } from "@/lib/api";
 import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
@@ -742,22 +743,6 @@ function ConfigField({
   );
 }
 
-const iconBtnStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "transparent",
-  border: "1px solid var(--border-strong)",
-  borderRadius: "var(--r-2)",
-  color: "var(--fg-muted)",
-  cursor: "pointer",
-  fontSize: 12,
-  fontFamily: "var(--font-mono)",
-  flexShrink: 0,
-};
-
 const inputStyle: React.CSSProperties = {
   height: 36,
   padding: "0 10px",
@@ -904,7 +889,7 @@ function HttpHeadersField({
             />
             <button
               type="button"
-              style={iconBtnStyle}
+              style={iconBtn}
               onClick={() => removeRow(i)}
               title="Remove header"
             >
@@ -915,7 +900,7 @@ function HttpHeadersField({
         <button
           type="button"
           style={{
-            ...iconBtnStyle,
+            ...iconBtn,
             width: "auto",
             padding: "0 10px",
             alignSelf: "flex-start",

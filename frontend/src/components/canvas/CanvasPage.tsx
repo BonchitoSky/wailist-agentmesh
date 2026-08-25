@@ -23,6 +23,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { ChatRail } from "./chat/ChatRail";
 import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
 import { can } from "@/lib/readonly";
+import { ghostBtnSm, primaryBtnSm } from "@/components/ui/buttons";
 import { useIsCompact } from "@/hooks/useIsCompact";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import {
@@ -871,7 +872,7 @@ function CanvasTopbar({
         disabled={!deployed}
         title={!deployed ? "Deploy first" : "Run workflow"}
         style={{
-          ...primaryBtnStyle,
+          ...primaryBtnSm,
           minWidth: 86,
           justifyContent: "center",
           opacity: !deployed ? 0.5 : 1,
@@ -950,22 +951,6 @@ function Stat({
     </div>
   );
 }
-
-const ghostBtnSm: React.CSSProperties = {
-  height: 28,
-  padding: "0 10px",
-  fontSize: 12,
-  fontWeight: 500,
-  background: "transparent",
-  border: "1px solid var(--border-strong)",
-  borderRadius: "var(--r-2)",
-  color: "var(--fg-muted)",
-  cursor: "pointer",
-  fontFamily: "var(--font-sans)",
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-};
 const btnStyle: React.CSSProperties = {
   height: 28,
   padding: "0 12px",
@@ -975,21 +960,6 @@ const btnStyle: React.CSSProperties = {
   border: "1px solid var(--border-strong)",
   borderRadius: "var(--r-2)",
   color: "var(--fg)",
-  cursor: "pointer",
-  fontFamily: "var(--font-sans)",
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-};
-const primaryBtnStyle: React.CSSProperties = {
-  height: 28,
-  padding: "0 12px",
-  fontSize: 12,
-  fontWeight: 600,
-  background: "var(--accent)",
-  border: "1px solid var(--accent)",
-  borderRadius: "var(--r-2)",
-  color: "var(--accent-fg)",
   cursor: "pointer",
   fontFamily: "var(--font-sans)",
   display: "inline-flex",

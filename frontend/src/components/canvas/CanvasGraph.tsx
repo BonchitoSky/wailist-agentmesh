@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { can } from "@/lib/readonly";
+import { ctrlBtn } from "@/components/ui/buttons";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import {
   DEFAULT_VIEW,
@@ -758,18 +759,3 @@ function EdgePath({
     </g>
   );
 }
-
-const ctrlBtn: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "transparent",
-  border: "none",
-  color: "var(--fg-muted)",
-  cursor: "pointer",
-  fontFamily: "var(--font-mono)",
-  fontSize: 16,
-  borderRadius: "var(--r-1)",
-};

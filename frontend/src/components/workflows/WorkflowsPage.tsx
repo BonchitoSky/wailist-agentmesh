@@ -17,6 +17,7 @@ import { useCredits } from "@/lib/credits/store";
 import { tendril } from "@/lib/tendril";
 import { DEMO_WORKFLOW } from "@/lib/data";
 import { can } from "@/lib/readonly";
+import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
 import { useReadOnly } from "@/hooks/useReadOnly";
 
 export function WorkflowsPage() {
@@ -1021,31 +1022,3 @@ function fmtDate(iso?: string): string {
 }
 
 // Shared styles
-const ghostBtn: React.CSSProperties = {
-  height: 36,
-  padding: "0 14px",
-  fontSize: 13,
-  fontWeight: 500,
-  background: "var(--bg-elev-2)",
-  border: "1px solid var(--border-strong)",
-  borderRadius: "var(--r-2)",
-  color: "var(--fg)",
-  cursor: "pointer",
-  fontFamily: "var(--font-sans)",
-  display: "inline-flex",
-  alignItems: "center",
-};
-const primaryBtn: React.CSSProperties = {
-  height: 36,
-  padding: "0 14px",
-  fontSize: 13,
-  fontWeight: 600,
-  background: "var(--accent)",
-  border: "1px solid var(--accent)",
-  borderRadius: "var(--r-2)",
-  color: "var(--accent-fg)",
-  cursor: "pointer",
-  fontFamily: "var(--font-sans)",
-  display: "inline-flex",
-  alignItems: "center",
-};
