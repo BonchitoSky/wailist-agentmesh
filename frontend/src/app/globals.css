@@ -512,6 +512,15 @@ body {
 
 /* Static chrome only; the moving values (transform + opacity) are set inline
    by ChatRail, matching how the rest of this codebase styles stateful bits. */
+/* Three segments when the palette joins the rail -- a narrow window on a
+   computer, where the palette has no column of its own to live in. */
+.rail-switch[data-segments="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.rail-switch[data-segments="3"] .rail-switch__thumb {
+  width: calc(33.333% - 2px);
+}
+
 .rail-switch__thumb {
   position: absolute;
   top: 2px;

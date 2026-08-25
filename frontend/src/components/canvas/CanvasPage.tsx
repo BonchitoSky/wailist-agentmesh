@@ -489,7 +489,12 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
             read-only mode it has no job -- and dropping it gives the graph
             back ~280px, which is what makes the studio fit a narrow window
             at all (PALETTE.min + MIN_CANVAS + INSPECTOR.min was 780px). */}
-        {can("workflow.editGraph", readOnly) && (
+        {/* The palette lives in exactly one place at a time: its own column
+            when there is room, otherwise a pane in the bottom sheet (see
+            paletteNode below). Rendering it here while the row is stacked
+            gave it a full-height column of its own and squeezed the canvas
+            to zero. */}
+        {!compact && can("workflow.editGraph", readOnly) && (
           <>
             <PalettePanel onDragNodeStart={onDragNodeStart} width={paletteW} />
             <ResizeHandle
@@ -598,6 +603,17 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                       hasSelection={selected !== null}
                       leaseId={chat.leaseId}
                       forceTab={selected ? "inspector" : null}
+                      // Only when this client may author: a stacked layout
+                      // on a computer. A handheld gets no palette at all,
+                      // and a desktop gives it its own column instead.
+                      paletteNode={
+                        can("workflow.editGraph", readOnly) ? (
+                          <PalettePanel
+                            onDragNodeStart={onDragNodeStart}
+                            width="100%"
+                          />
+                        ) : undefined
+                      }
                     />
                   )}
                 </div>

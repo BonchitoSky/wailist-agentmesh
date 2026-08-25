@@ -277,7 +277,7 @@ const CREATE_META: Record<string, Partial<WorkflowNode>> = {
 
 interface PalettePanelProps {
   onDragNodeStart: (e: React.DragEvent, meta: Partial<WorkflowNode>) => void;
-  width?: number;
+  width?: number | string;
 }
 
 export function PalettePanel({
@@ -352,8 +352,16 @@ export function PalettePanel({
     return groups;
   }, [actionEntries]);
 
-  // Reflow the item list into two columns once the panel is dragged wide.
-  const cols = width >= PALETTE_TWO_COL_MIN ? 2 : 1;
+  // Reflow the item list into two columns once the panel is wide enough.
+  //
+  // A non-numeric width means the panel is filling its container rather than
+  // being dragged to a size -- today that is only the bottom sheet, which
+  // spans the whole window. The palette is offered there solely on a
+  // computer (a handheld gets no palette at all), and no desktop browser
+  // window goes near PALETTE_TWO_COL_MIN, so two columns is always the right
+  // answer in that case and is worth more than a ResizeObserver here.
+  const cols =
+    typeof width === "number" ? (width >= PALETTE_TWO_COL_MIN ? 2 : 1) : 2;
 
   // FLIP: when the column count changes, glide each item from its old position
   // to its new one instead of letting the grid snap. Rects are captured every
@@ -521,87 +529,83 @@ export function PalettePanel({
           />
         </div>
 
-        {isActions ? (
-          q_ ? (
-            // Searching: flat, ranked, matched text highlighted.
-            actionSearched.map((e, i) => {
-              const title = (e.meta.name ?? e.meta.label ?? "") as string;
-              const sub = (e.meta.sub ?? "") as string;
-              return (
-                <DraggableRow
-                  key={i}
-                  icon={(e.meta.icon ?? "") as string}
-                  template={(e.meta.template ?? "") as string}
-                  title={title}
-                  titleNode={highlightMatch(title, q_)}
-                  sub={sub}
-                  subNode={highlightMatch(sub, q_)}
-                  dotColor={tabDef.dotColor}
-                  onDragStart={(e2) => onDragNodeStart(e2, e.meta)}
-                />
-              );
-            })
-          ) : (
-            // Browsing: grouped under category headers, mirroring the
-            // backend's own connectors_{messaging,productivity,...}.go split.
-            // Note: each group renders as one grid-spanning wrapper so its
-            // header never breaks the column flow -- as a side effect, the
-            // column-reflow FLIP animation above glides per-group rather
-            // than per-row while this view is showing (every other tab, and
-            // the searching view above, keep the original per-row glide).
-            ACTION_CATEGORIES.map((cat) => {
-              const group = actionsByCategory.get(cat) ?? [];
-              if (group.length === 0) return null;
-              return (
-                <div key={cat} style={{ gridColumn: "1 / -1" }}>
-                  <div
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 10,
-                      textTransform: "uppercase",
-                      letterSpacing: "0.08em",
-                      color: "var(--fg-dim)",
-                      padding: "10px 2px 6px",
-                    }}
-                  >
-                    {cat} · {group.length}
+        {isActions
+          ? q_
+            ? // Searching: flat, ranked, matched text highlighted.
+              actionSearched.map((e, i) => {
+                const title = (e.meta.name ?? e.meta.label ?? "") as string;
+                const sub = (e.meta.sub ?? "") as string;
+                return (
+                  <DraggableRow
+                    key={i}
+                    icon={(e.meta.icon ?? "") as string}
+                    template={(e.meta.template ?? "") as string}
+                    title={title}
+                    titleNode={highlightMatch(title, q_)}
+                    sub={sub}
+                    subNode={highlightMatch(sub, q_)}
+                    dotColor={tabDef.dotColor}
+                    onDragStart={(e2) => onDragNodeStart(e2, e.meta)}
+                  />
+                );
+              })
+            : // Browsing: grouped under category headers, mirroring the
+              // backend's own connectors_{messaging,productivity,...}.go split.
+              // Note: each group renders as one grid-spanning wrapper so its
+              // header never breaks the column flow -- as a side effect, the
+              // column-reflow FLIP animation above glides per-group rather
+              // than per-row while this view is showing (every other tab, and
+              // the searching view above, keep the original per-row glide).
+              ACTION_CATEGORIES.map((cat) => {
+                const group = actionsByCategory.get(cat) ?? [];
+                if (group.length === 0) return null;
+                return (
+                  <div key={cat} style={{ gridColumn: "1 / -1" }}>
+                    <div
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 10,
+                        textTransform: "uppercase",
+                        letterSpacing: "0.08em",
+                        color: "var(--fg-dim)",
+                        padding: "10px 2px 6px",
+                      }}
+                    >
+                      {cat} · {group.length}
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                        gap: 6,
+                      }}
+                    >
+                      {group.map((e, i) => (
+                        <DraggableRow
+                          key={i}
+                          icon={(e.meta.icon ?? "") as string}
+                          template={(e.meta.template ?? "") as string}
+                          title={(e.meta.name ?? e.meta.label ?? "") as string}
+                          sub={(e.meta.sub ?? "") as string}
+                          dotColor={tabDef.dotColor}
+                          onDragStart={(e2) => onDragNodeStart(e2, e.meta)}
+                        />
+                      ))}
+                    </div>
                   </div>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-                      gap: 6,
-                    }}
-                  >
-                    {group.map((e, i) => (
-                      <DraggableRow
-                        key={i}
-                        icon={(e.meta.icon ?? "") as string}
-                        template={(e.meta.template ?? "") as string}
-                        title={(e.meta.name ?? e.meta.label ?? "") as string}
-                        sub={(e.meta.sub ?? "") as string}
-                        dotColor={tabDef.dotColor}
-                        onDragStart={(e2) => onDragNodeStart(e2, e.meta)}
-                      />
-                    ))}
-                  </div>
-                </div>
-              );
-            })
-          )
-        ) : (
-          filtered.map((it, i) => (
-            <DraggableRow
-              key={i}
-              icon={(it.icon ?? "") as string}
-              template={(it.template ?? "") as string}
-              title={(it.name ?? it.label ?? "") as string}
-              sub={(it.sub ?? "") as string}
-              dotColor={tabDef.dotColor}
-              onDragStart={(e) => onDragNodeStart(e, it)}
-            />
-          ))
-        )}
+                );
+              })
+          : filtered.map((it, i) => (
+              <DraggableRow
+                key={i}
+                icon={(it.icon ?? "") as string}
+                template={(it.template ?? "") as string}
+                title={(it.name ?? it.label ?? "") as string}
+                sub={(it.sub ?? "") as string}
+                dotColor={tabDef.dotColor}
+                onDragStart={(e) => onDragNodeStart(e, it)}
+              />
+            ))}
 
         {((isActions && q_ && actionSearched.length === 0) ||
           (!isActions && filtered.length === 0)) && (
