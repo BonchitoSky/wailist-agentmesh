@@ -192,6 +192,10 @@ export function WorkflowsPage() {
               display: "flex",
               alignItems: "flex-end",
               justifyContent: "space-between",
+              // The actions drop under the title rather than compressing
+              // it once the two no longer fit side by side.
+              flexWrap: "wrap",
+              gap: 16,
               marginBottom: 28,
             }}
           >
@@ -211,7 +215,14 @@ export function WorkflowsPage() {
                 Design, deploy, and monitor agent pipelines.
               </p>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 8,
+              }}
+            >
               {can("workflow.create", readOnly) && (
                 <button style={ghostBtn}>Import</button>
               )}
