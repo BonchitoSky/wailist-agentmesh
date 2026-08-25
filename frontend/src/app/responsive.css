@@ -385,3 +385,17 @@
 .am-studio-sheet .rail-switch__seg {
   min-height: 44px;
 }
+
+/* ── Studio topbar ──────────────────────────────────────────────────────── */
+/* The bar carries brand, breadcrumb, workflow name, four counters and three
+   actions. Below ~900px that no longer fits, and what gave way was the
+   workflow NAME -- it was squeezed to 12px, which is worse than useless.
+   The three ancillary counters go instead: they are tallies of what the canvas
+   already shows, and both they and the credit balance appear in full on
+   /usage. The credit balance stays, because it is the one number that decides
+   whether a run can happen. */
+@media (max-width: 900px) {
+  .am-studio-stats-extra {
+    display: none;
+  }
+}

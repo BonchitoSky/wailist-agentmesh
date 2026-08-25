@@ -721,7 +721,13 @@ const nameFieldStyle: React.CSSProperties = {
   fontWeight: 500,
   fontFamily: "var(--font-sans)",
   flex: "0 1 200px",
-  minWidth: 0,
+  // A floor, not 0. With minWidth:0 the field collapsed to 12px on a narrow
+  // topbar -- the workflow name was simply gone. 120px keeps enough to read
+  // and to recognise, and the text ellipsizes from there.
+  minWidth: 120,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
   padding: "4px 6px",
   borderRadius: 4,
 };
@@ -839,24 +845,32 @@ function CanvasTopbar({
           value={balanceKnown ? `$${balanceUSD.toFixed(2)}` : "-"}
           color={lowBalance ? "var(--danger)" : "var(--accent)"}
         />
-        <Hairline vertical length={18} />
-        <Stat
-          label="agents"
-          value={workflow.nodes.filter((n) => n.type === "agent").length}
-        />
-        <Stat
-          label="tools"
-          value={
-            workflow.nodes.filter(
-              (n) => n.type === "tool" || n.type === "tool402",
-            ).length
-          }
-        />
-        <Stat
-          label="x402"
-          value={workflow.nodes.filter((n) => n.type === "tool402").length}
-          color="#E879F9"
-        />
+        <span className="am-studio-stats-extra">
+          <Hairline vertical length={18} />
+        </span>
+        <span className="am-studio-stats-extra">
+          <Stat
+            label="agents"
+            value={workflow.nodes.filter((n) => n.type === "agent").length}
+          />
+        </span>
+        <span className="am-studio-stats-extra">
+          <Stat
+            label="tools"
+            value={
+              workflow.nodes.filter(
+                (n) => n.type === "tool" || n.type === "tool402",
+              ).length
+            }
+          />
+        </span>
+        <span className="am-studio-stats-extra">
+          <Stat
+            label="x402"
+            value={workflow.nodes.filter((n) => n.type === "tool402").length}
+            color="#E879F9"
+          />
+        </span>
       </div>
 
       {can("workflow.deploy", readOnly) && (
