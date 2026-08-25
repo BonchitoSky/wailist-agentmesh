@@ -567,9 +567,7 @@ export const oauth2 = {
   // async request.
   connectURL: (provider: string): string => `${BASE}/oauth2/${provider}/start`,
 
-  listCredentials: async (
-    provider: string,
-  ): Promise<OAuthCredentialSummary[]> => {
+  listCredentials: async (provider: string): Promise<OAuthCredentialSummary[]> => {
     if (!BASE) return []; // No connected-account concept in mock mode.
     const res = await fetch(
       `${BASE}/oauth2/credentials?provider=${encodeURIComponent(provider)}`,
