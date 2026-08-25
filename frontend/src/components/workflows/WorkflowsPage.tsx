@@ -17,9 +17,11 @@ import { useCredits } from "@/lib/credits/store";
 import { tendril } from "@/lib/tendril";
 import { DEMO_WORKFLOW } from "@/lib/data";
 import { can } from "@/lib/readonly";
+import { useReadOnly } from "@/hooks/useReadOnly";
 
 export function WorkflowsPage() {
   const router = useRouter();
+  const readOnly = useReadOnly();
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
   const [view, setView] = useState<"rows" | "grid">("rows");
@@ -91,7 +93,7 @@ export function WorkflowsPage() {
     setCreatingTendril(true);
     setPageError((prev) => (prev?.source === "tendril" ? null : prev));
     try {
-      const workflowId = can("workflow.create")
+      const workflowId = can("workflow.create", readOnly)
         ? await tendril.console()
         : await tendril.consoleWorkflowIdIfExists();
       if (!workflowId) {
@@ -107,7 +109,7 @@ export function WorkflowsPage() {
     } catch {
       setCreatingTendril(false);
     }
-  }, [creatingTendril, router]);
+  }, [creatingTendril, router, readOnly]);
 
   // Loads DEMO_WORKFLOW (lib/data.ts) into a brand-new workflow row every
   // click -- unlike handleLoadTendrilWorkflow's find-or-create console, a
@@ -209,10 +211,10 @@ export function WorkflowsPage() {
               </p>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              {can("workflow.create") && (
+              {can("workflow.create", readOnly) && (
                 <button style={ghostBtn}>Import</button>
               )}
-              {can("workflow.create") && (
+              {can("workflow.create", readOnly) && (
                 <button
                   onClick={handleLoadDemoWorkflow}
                   disabled={creatingDemo}
@@ -258,7 +260,7 @@ export function WorkflowsPage() {
                   Official
                 </span>
               </button>
-              {can("workflow.create") && (
+              {can("workflow.create", readOnly) && (
                 <button
                   onClick={handleNewWorkflow}
                   disabled={creating}
@@ -736,6 +738,7 @@ function WorkflowRows({
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
+  const readOnly = useReadOnly();
   return (
     <Card style={{ padding: 0, overflowX: "auto" }}>
       <div
@@ -870,7 +873,7 @@ function WorkflowRows({
             >
               Open
             </button>
-            {can("workflow.delete") && (
+            {can("workflow.delete", readOnly) && (
               <RowMenu onDelete={() => onDelete(wf.id)} />
             )}
           </div>

@@ -11,7 +11,7 @@ import {
   Settlement,
 } from "./types";
 import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
-import { isWriteBlocked } from "./readonly";
+import { isWriteBlocked, isReadOnlyNow } from "./readonly";
 
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
@@ -25,7 +25,7 @@ export const BASE =
 // built, and sits outside the `if (BASE)` branches so mock mode behaves the
 // same as a real backend rather than quietly permitting more.
 function assertWritable(method: string, path: string): void {
-  if (isWriteBlocked(method, path)) {
+  if (isWriteBlocked(method, path, isReadOnlyNow())) {
     throw new Error(
       "Workflows can only be edited in the AgentMesh desktop app.",
     );

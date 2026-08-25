@@ -24,6 +24,7 @@ import { ChatRail } from "./chat/ChatRail";
 import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
 import { can } from "@/lib/readonly";
 import { useIsCompact } from "@/hooks/useIsCompact";
+import { useReadOnly } from "@/hooks/useReadOnly";
 import {
   PALETTE,
   INSPECTOR,
@@ -39,6 +40,7 @@ interface CanvasPageProps {
 export function CanvasPage({ workflowId }: CanvasPageProps) {
   const router = useRouter();
   const compact = useIsCompact();
+  const readOnly = useReadOnly();
 
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -125,7 +127,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     if (workflowId === "new") {
       // Nothing to create here in read-only mode -- send the visitor back to
       // the list rather than letting the route sit on "creating workflow…".
-      if (!can("workflow.create")) {
+      if (!can("workflow.create", readOnly)) {
         router.replace("/workflows");
         return;
       }
@@ -152,7 +154,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       .catch(() => {
         router.push("/workflows");
       });
-  }, [workflowId, router]);
+  }, [workflowId, router, readOnly]);
 
   // Auto-save: debounce 1.5s after any change, skip on initial load.
   // pendingSave holds the graph the debounce timer is still sitting on, and
@@ -199,7 +201,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     // Never arm the autosave in read-only mode. Every editing control is
     // gone, but this effect answers to any change in `workflow` at all --
     // left armed, one stray state update would PUT the graph back.
-    if (!can("workflow.editGraph")) return;
+    if (!can("workflow.editGraph", readOnly)) return;
     if (justLoaded.current) {
       justLoaded.current = false;
       return;
@@ -213,7 +215,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     }, 1500);
     saveTimer.current = t;
     return () => clearTimeout(t);
-  }, [workflow, saveWorkflow]);
+  }, [workflow, saveWorkflow, readOnly]);
 
   const selected = useMemo(
     () => workflow?.nodes.find((n) => n.id === selectedId) ?? null,
@@ -326,7 +328,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   );
 
   const buildMode =
-    can("workflow.buildFromChat") && (!hasProviderNode || manualBuildMode);
+    can("workflow.buildFromChat", readOnly) &&
+    (!hasProviderNode || manualBuildMode);
 
   // Returns the new run's id, or null when no run started. Callers that own a
   // chat turn need that signal: a failure here only raises a toast, and
@@ -486,7 +489,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
             read-only mode it has no job -- and dropping it gives the graph
             back ~280px, which is what makes the studio fit a narrow window
             at all (PALETTE.min + MIN_CANVAS + INSPECTOR.min was 780px). */}
-        {can("workflow.editGraph") && (
+        {can("workflow.editGraph", readOnly) && (
           <>
             <PalettePanel onDragNodeStart={onDragNodeStart} width={paletteW} />
             <ResizeHandle
@@ -577,7 +580,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                       width="100%"
                       buildMode={buildMode}
                       canToggleBuildMode={
-                        can("workflow.buildFromChat") && hasProviderNode
+                        can("workflow.buildFromChat", readOnly) &&
+                        hasProviderNode
                       }
                       onToggleBuildMode={() => setManualBuildMode((v) => !v)}
                       inspectorNode={
@@ -620,7 +624,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                     width={inspectorW}
                     buildMode={buildMode}
                     canToggleBuildMode={
-                      can("workflow.buildFromChat") && hasProviderNode
+                      can("workflow.buildFromChat", readOnly) && hasProviderNode
                     }
                     onToggleBuildMode={() => setManualBuildMode((v) => !v)}
                     inspectorNode={
@@ -724,6 +728,7 @@ function CanvasTopbar({
   saveLabel: string;
   onBack: () => void;
 }) {
+  const readOnly = useReadOnly();
   // Wallet balance is global (not per-node), so it lives in the topbar's
   // financial cluster. The value comes from the backend (the same row the
   // engine debits), so it is only meaningful once that fetch has landed —
@@ -769,7 +774,7 @@ function CanvasTopbar({
         ← Workflows
       </button>
       <span style={{ color: "var(--fg-dim)" }}>/</span>
-      {can("workflow.editGraph") ? (
+      {can("workflow.editGraph", readOnly) ? (
         <input
           value={workflow.name}
           onChange={(e) =>
@@ -790,7 +795,7 @@ function CanvasTopbar({
         </span>
       )}
       {saveLabel && <Pill mono>{saveLabel}</Pill>}
-      {!can("workflow.editGraph") && (
+      {!can("workflow.editGraph", readOnly) && (
         <span title="Editing happens in the AgentMesh desktop app.">
           <Pill mono dot tone="warm">
             viewing only
@@ -837,7 +842,7 @@ function CanvasTopbar({
         />
       </div>
 
-      {can("workflow.deploy") && (
+      {can("workflow.deploy", readOnly) && (
         <>
           <button style={ghostBtnSm}>Share</button>
           <button onClick={onDeploy} style={btnStyle}>

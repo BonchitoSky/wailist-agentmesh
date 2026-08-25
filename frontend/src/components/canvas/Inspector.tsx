@@ -16,6 +16,7 @@ import {
 import { IconClose, StatusDot } from "@/components/ui";
 import { BrandLogo } from "./nodes/brandLogos";
 import { can } from "@/lib/readonly";
+import { useReadOnly } from "@/hooks/useReadOnly";
 import { tools as toolsApi, oauth2, OAuthCredentialSummary } from "@/lib/api";
 import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
 import {
@@ -46,12 +47,16 @@ export function Inspector({
   width = 320,
   embedded = false,
 }: InspectorProps) {
+  // Above the early return: a hook after a conditional return is a hook
+  // that does not always run.
+  const readOnly = useReadOnly();
+
   if (!selected) return <EmptyInspector width={width} embedded={embedded} />;
 
   // A viewer gets a description of the node, not its editor -- see
   // ReadOnlyInspector below for why that is a separate component rather
   // than this one with every input disabled.
-  if (!can("workflow.editGraph")) {
+  if (!can("workflow.editGraph", readOnly)) {
     return (
       <ReadOnlyInspector
         selected={selected}

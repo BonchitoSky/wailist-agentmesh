@@ -10,18 +10,24 @@ import (
 	"github.com/agentmesh/backend/internal/respond"
 )
 
-// Read-only mode: the web client is a viewer, and authoring a workflow belongs
-// to the desktop app.
+// Read-only mode: refuse to let a client author a workflow.
 //
-// The frontend already hides every authoring control (frontend/src/lib/
-// readonly.ts) and refuses these calls before they reach the network, but that
-// is a UX guarantee, not an enforcement one -- a console call or a stale bundle
-// would still be served. This is the enforcement half.
+// Note what this is NOT. The frontend decides who may author by viewport --
+// a desktop is an editor, a phone is a viewer (frontend/src/lib/readonly.ts) --
+// and a server cannot see a viewport. So this middleware cannot enforce that
+// split, and does not try to. It answers a coarser question: may ANY client
+// write to this deployment at all?
 //
-// Deliberately configured from the environment rather than from the request's
-// identity: recording *which* clients may write would mean a user- or
-// session-level capability, and that means a schema change. Nothing here reads
-// or writes the database.
+// That makes it useful for a deployment that is meant to be wholly read-only --
+// a public demo, a mirror, a read replica -- and useless for the ordinary one,
+// which is why it is off unless switched on. The client-side split remains a
+// UX decision, honestly labelled as such rather than dressed up as a security
+// boundary.
+//
+// Configured from the environment rather than from the request's identity:
+// recording *which* clients may write would mean a user- or session-level
+// capability, and that means a schema change. Nothing here reads or writes
+// the database.
 
 const (
 	// Off unless explicitly enabled, so an existing deployment keeps behaving

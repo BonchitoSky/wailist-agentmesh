@@ -4,6 +4,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { Logo, Pill, Hairline, ghostBtnSm } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { can } from "@/lib/readonly";
+import { useReadOnly } from "@/hooks/useReadOnly";
 
 // Which chain settlements actually run on. Mainnet is the default because
 // that is what the platform runs; overridable so a genuine testnet
@@ -16,6 +17,7 @@ export function Topbar() {
   const router = useRouter();
   const pathname = usePathname();
   const { signOut, user, completeOnboarding } = useAuth();
+  const readOnly = useReadOnly();
 
   // Avatar shows the first letter of the signed-in user's name, falling back
   // to the email local part while auth is still loading or for an OAuth
@@ -111,7 +113,7 @@ export function Topbar() {
           <Pill mono dot tone="warm">
             {ALGORAND_NETWORK}
           </Pill>
-          {!can("workflow.editGraph") && (
+          {!can("workflow.editGraph", readOnly) && (
             <span title="Editing happens in the AgentMesh desktop app.">
               <Pill mono dot tone="warm">
                 viewing only

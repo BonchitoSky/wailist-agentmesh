@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { can } from "@/lib/readonly";
+import { useReadOnly } from "@/hooks/useReadOnly";
 import {
   DEFAULT_VIEW,
   distance,
@@ -57,7 +58,7 @@ export function CanvasGraph({
   // opening a node to see how it is configured. Only the gestures that
   // CHANGE the graph -- dropping a node, moving one, drawing or cutting an
   // edge -- come off.
-  const editable = can("workflow.editGraph");
+  const editable = can("workflow.editGraph", useReadOnly());
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<ViewState>(DEFAULT_VIEW);
