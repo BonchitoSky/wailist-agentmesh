@@ -378,3 +378,10 @@
   }
 }
 
+/* The rail's segmented switch is sized for a pointer (26px) because in its own
+   column that is all it ever meets. Inside the bottom sheet it is tapped, so it
+   takes the full 44px target -- the same floor .pw-reveal and .am-sheet-grip
+   hold to. Scoped to the sheet so the desktop rail keeps its density. */
+.am-studio-sheet .rail-switch__seg {
+  min-height: 44px;
+}

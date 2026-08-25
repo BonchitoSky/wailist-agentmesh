@@ -545,8 +545,10 @@ body {
   justify-content: center;
   gap: 5px;
   /* 26px matches this toolbar's existing dense pills and ghostBtnSm's 28px.
-     The 44px touch minimum is deliberately not met: the studio rail header is
-     desktop-only chrome and a 44px control would double its height. */
+     The 44px touch minimum is not met here on purpose: in its own column the
+     rail header is pointer-driven chrome, and a 44px control would double its
+     height. Inside the bottom sheet it IS thumb-driven, and the override
+     below restores the full target. */
   min-height: 26px;
   padding: 0 9px;
   border: none;
