@@ -277,11 +277,16 @@ const CREATE_META: Record<string, Partial<WorkflowNode>> = {
 
 interface PalettePanelProps {
   onDragNodeStart: (e: React.DragEvent, meta: Partial<WorkflowNode>) => void;
+  /** Adds the item without a drag -- a tap, Enter, or Space. Drag is a
+   *  mouse-only API, so on a touch device it is the ONLY way to get a node
+   *  onto the canvas; it also makes the palette keyboard-operable. */
+  onAddNode?: (meta: Partial<WorkflowNode>) => void;
   width?: number | string;
 }
 
 export function PalettePanel({
   onDragNodeStart,
+  onAddNode,
   width = 280,
 }: PalettePanelProps) {
   const [tab, setTab] = useState<TabId>("triggers");
@@ -525,6 +530,10 @@ export function PalettePanel({
           <CreateRow
             meta={CREATE_META[tab]}
             onDragStart={(e) => onDragNodeStart(e, CREATE_META[tab])}
+            onActivate={
+              onAddNode ? () => onAddNode(CREATE_META[tab]) : undefined
+            }
+            label={(CREATE_META[tab].label ?? "node") as string}
             isX402={tab === "x402"}
           />
         </div>
@@ -546,6 +555,8 @@ export function PalettePanel({
                     subNode={highlightMatch(sub, q_)}
                     dotColor={tabDef.dotColor}
                     onDragStart={(e2) => onDragNodeStart(e2, e.meta)}
+                    onActivate={onAddNode ? () => onAddNode(e.meta) : undefined}
+                    label={(e.meta.name ?? e.meta.label ?? "node") as string}
                   />
                 );
               })
@@ -589,6 +600,12 @@ export function PalettePanel({
                           sub={(e.meta.sub ?? "") as string}
                           dotColor={tabDef.dotColor}
                           onDragStart={(e2) => onDragNodeStart(e2, e.meta)}
+                          onActivate={
+                            onAddNode ? () => onAddNode(e.meta) : undefined
+                          }
+                          label={
+                            (e.meta.name ?? e.meta.label ?? "node") as string
+                          }
                         />
                       ))}
                     </div>
@@ -604,6 +621,8 @@ export function PalettePanel({
                 sub={(it.sub ?? "") as string}
                 dotColor={tabDef.dotColor}
                 onDragStart={(e) => onDragNodeStart(e, it)}
+                onActivate={onAddNode ? () => onAddNode(it) : undefined}
+                label={(it.name ?? it.label ?? "node") as string}
               />
             ))}
 
@@ -645,10 +664,14 @@ export function PalettePanel({
 function CreateRow({
   meta,
   onDragStart,
+  onActivate,
+  label,
   isX402,
 }: {
   meta: Partial<WorkflowNode>;
   onDragStart: (e: React.DragEvent) => void;
+  onActivate?: () => void;
+  label?: string;
   isX402: boolean;
 }) {
   const accent = isX402 ? "#E879F9" : "var(--accent)";
@@ -659,6 +682,17 @@ function CreateRow({
     <div
       draggable
       onDragStart={onDragStart}
+      role={onActivate ? "button" : undefined}
+      tabIndex={onActivate ? 0 : undefined}
+      aria-label={onActivate && label ? `Add ${label}` : undefined}
+      onClick={onActivate}
+      onKeyDown={(e) => {
+        if (!onActivate) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onActivate();
+        }
+      }}
       style={{
         display: "flex",
         alignItems: "center",
@@ -724,6 +758,8 @@ function DraggableRow({
   subNode,
   dotColor,
   onDragStart,
+  onActivate,
+  label,
 }: {
   icon: string;
   template?: string;
@@ -736,6 +772,8 @@ function DraggableRow({
   subNode?: React.ReactNode;
   dotColor: "mute" | "accent" | "magenta";
   onDragStart: (e: React.DragEvent) => void;
+  onActivate?: () => void;
+  label?: string;
 }) {
   const dotBg =
     dotColor === "magenta"
@@ -754,6 +792,17 @@ function DraggableRow({
     <div
       draggable
       onDragStart={onDragStart}
+      role={onActivate ? "button" : undefined}
+      tabIndex={onActivate ? 0 : undefined}
+      aria-label={onActivate && label ? `Add ${label}` : undefined}
+      onClick={onActivate}
+      onKeyDown={(e) => {
+        if (!onActivate) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onActivate();
+        }
+      }}
       style={{
         display: "flex",
         alignItems: "center",

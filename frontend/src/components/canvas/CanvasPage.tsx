@@ -53,6 +53,11 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // reader came to look at the graph, so the graph gets the screen until
   // they ask for something else.
   const [sheetOpen, setSheetOpen] = useState(false);
+  // Filled in by CanvasGraph. Tap-to-add has no cursor position to place
+  // against, and the centre of the current view is only known down there.
+  const addAtCentre = useRef<((meta: Partial<WorkflowNode>) => void) | null>(
+    null,
+  );
   const [deployed, setDeployed] = useState(false);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -504,7 +509,11 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
             to zero. */}
         {!compact && can("workflow.editGraph", readOnly) && (
           <>
-            <PalettePanel onDragNodeStart={onDragNodeStart} width={paletteW} />
+            <PalettePanel
+              onDragNodeStart={onDragNodeStart}
+              onAddNode={(meta) => addAtCentre.current?.(meta)}
+              width={paletteW}
+            />
             <ResizeHandle
               side="left"
               value={paletteW}
@@ -550,6 +559,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 }}
               >
                 <CanvasGraph
+                  addAtCentreRef={addAtCentre}
                   workflow={workflow}
                   setWorkflow={setWorkflowNN}
                   selectedId={selectedId}
@@ -618,6 +628,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                         can("workflow.editGraph", readOnly) ? (
                           <PalettePanel
                             onDragNodeStart={onDragNodeStart}
+                            onAddNode={(meta) => addAtCentre.current?.(meta)}
                             width="100%"
                           />
                         ) : undefined

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  screenToWorld,
   DEFAULT_VIEW,
   MIN_SCALE,
   MAX_SCALE,
@@ -65,6 +66,34 @@ describe("zoomAbout", () => {
     const v: ViewState = { x: 0, y: 0, k: 1 };
     expect(zoomByFactor(v, 1.15, 0, 0).k).toBeCloseTo(1.15, 6);
     expect(zoomByFactor({ ...v, k: 0.4 }, 0.5, 0, 0).k).toBe(MIN_SCALE);
+  });
+});
+
+describe("screenToWorld", () => {
+  // The property that matters: it must undo `project` exactly, or a node
+  // lands somewhere other than where it was dropped.
+  it("is the inverse of the projection", () => {
+    for (const v of [
+      { x: 40, y: 40, k: 1 },
+      { x: -318, y: 96, k: 0.55 },
+      { x: 12, y: -400, k: 1.9 },
+    ]) {
+      for (const [wx, wy] of [
+        [0, 0],
+        [420, 260],
+        [-800, -600],
+      ]) {
+        const s = project(v, wx, wy);
+        const back = screenToWorld(v, s.x, s.y);
+        expect(back.x).toBeCloseTo(wx, 6);
+        expect(back.y).toBeCloseTo(wy, 6);
+      }
+    }
+  });
+
+  it("maps the view origin to the world origin", () => {
+    const v = { x: 40, y: 40, k: 0.95 };
+    expect(screenToWorld(v, 40, 40)).toEqual({ x: 0, y: 0 });
   });
 });
 

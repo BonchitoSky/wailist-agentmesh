@@ -10,6 +10,7 @@ import {
   zoomAbout,
   zoomByFactor,
   fitToRects,
+  screenToWorld,
   type Point,
   type ViewState,
 } from "./viewport";
@@ -32,6 +33,12 @@ interface CanvasGraphProps {
   deployed: boolean;
   running: boolean;
   attachedSummaries: Record<string, { model: string | null; tools: number }>;
+  /** Populated with a function that drops a node in the middle of whatever
+   *  the canvas is currently showing. The palette uses it for tap-to-add,
+   *  which has no cursor position to place against. */
+  addAtCentreRef?: React.MutableRefObject<
+    ((meta: Partial<WorkflowNode>) => void) | null
+  >;
 }
 
 interface WireState {
@@ -53,6 +60,7 @@ export function CanvasGraph({
   deployed,
   running,
   attachedSummaries,
+  addAtCentreRef,
 }: CanvasGraphProps) {
   // Read-only turns the graph into a diagram: pan, zoom, and selection all
   // still work, because reading a workflow means moving around it and
@@ -259,12 +267,25 @@ export function CanvasGraph({
   // simultaneous contacts, and `e.touches` hands them over directly where
   // pointer events would mean maintaining a live map of active pointer ids.
   const touchRef = useRef<{
-    mode: "none" | "pan" | "pinch";
+    mode: "none" | "pan" | "pinch" | "node";
     sx: number;
     sy: number;
     startView: ViewState;
     startDist: number;
-  }>({ mode: "none", sx: 0, sy: 0, startView: DEFAULT_VIEW, startDist: 0 });
+    // "node" mode only: which node is moving, and where it started.
+    nodeId: string;
+    ox: number;
+    oy: number;
+  }>({
+    mode: "none",
+    sx: 0,
+    sy: 0,
+    startView: DEFAULT_VIEW,
+    startDist: 0,
+    nodeId: "",
+    ox: 0,
+    oy: 0,
+  });
 
   // Touch coordinates relative to the canvas box, which is the space the view
   // transform is expressed in.
@@ -282,6 +303,7 @@ export function CanvasGraph({
       const a = localPoint(e.touches[0], rect);
       const b = localPoint(e.touches[1], rect);
       touchRef.current = {
+        ...touchRef.current,
         mode: "pinch",
         sx: 0,
         sy: 0,
@@ -292,17 +314,39 @@ export function CanvasGraph({
     }
 
     if (e.touches.length !== 1) return;
-    const target = e.target as HTMLElement;
-    const onNode = !!(
-      target.closest("[data-node]") || target.closest("[data-port]")
-    );
-    // While the graph is editable a drag that starts on a node belongs to that
-    // node. With nothing to drag, panning from anywhere is what a viewer
-    // expects -- otherwise a graph whose nodes fill the screen has no
-    // background left to grab.
-    if (onNode && editable) return;
     const t = e.touches[0];
+    const target = e.target as HTMLElement;
+    const nodeEl = target.closest("[data-node]") as HTMLElement | null;
+    const onPort = !!target.closest("[data-port]");
+
+    // While the graph is editable a drag that starts on a node belongs to
+    // that node, exactly as it does for the mouse. With nothing to drag,
+    // panning from anywhere is what a viewer expects -- otherwise a graph
+    // whose nodes fill the screen has no background left to grab.
+    if (editable && nodeEl && !onPort) {
+      const id = nodeEl.getAttribute("data-node");
+      const n = id ? workflow.nodes.find((x) => x.id === id) : undefined;
+      if (n) {
+        setSelectedId(n.id);
+        touchRef.current = {
+          mode: "node",
+          sx: t.clientX,
+          sy: t.clientY,
+          startView: view,
+          startDist: 0,
+          nodeId: n.id,
+          ox: n.x,
+          oy: n.y,
+        };
+        return;
+      }
+    }
+    // Drawing an edge by touch is not implemented, so a touch on a port does
+    // nothing rather than panning the canvas out from under the finger.
+    if (editable && onPort) return;
+
     touchRef.current = {
+      ...touchRef.current,
       mode: "pan",
       sx: t.clientX,
       sy: t.clientY,
@@ -337,6 +381,21 @@ export function CanvasGraph({
 
     if (e.touches.length !== 1) return;
     const t = e.touches[0];
+
+    if (st.mode === "node") {
+      // Same arithmetic the mouse drag uses: screen delta divided by the
+      // zoom, so a finger and a cursor move a node by the same amount.
+      const dx = (t.clientX - st.sx) / st.startView.k;
+      const dy = (t.clientY - st.sy) / st.startView.k;
+      setWorkflow((wf) => ({
+        ...wf,
+        nodes: wf.nodes.map((n) =>
+          n.id === st.nodeId ? { ...n, x: st.ox + dx, y: st.oy + dy } : n,
+        ),
+      }));
+      return;
+    }
+
     setView({
       ...st.startView,
       x: st.startView.x + (t.clientX - st.sx),
@@ -354,6 +413,7 @@ export function CanvasGraph({
     if (e.touches.length === 1) {
       const t = e.touches[0];
       touchRef.current = {
+        ...touchRef.current,
         mode: "pan",
         sx: t.clientX,
         sy: t.clientY,
@@ -377,20 +437,49 @@ export function CanvasGraph({
     fitView();
   }, [workflow.nodes, fitView]);
 
+  // Places a node so its CENTRE sits at the given point in the canvas box.
+  // Shared by the drop (point = cursor) and the palette tap (point = middle
+  // of the view), so the two cannot drift apart.
+  const addNodeAt = useCallback(
+    (meta: Partial<WorkflowNode>, px: number, py: number) => {
+      const t = NODE_TYPES[meta.type!];
+      const w = screenToWorld(view, px, py);
+      const id = `n_${Date.now()}`;
+      const node = {
+        id,
+        x: w.x - (t ? t.w / 2 : 90),
+        y: w.y - (t ? t.h / 2 : 30),
+        ...meta,
+      } as WorkflowNode;
+      setWorkflow((wf) => ({ ...wf, nodes: [...wf.nodes, node] }));
+      setSelectedId(id);
+    },
+    [view, setWorkflow, setSelectedId],
+  );
+
+  useEffect(() => {
+    if (!addAtCentreRef) return;
+    addAtCentreRef.current = (meta) => {
+      const rect = wrapRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      addNodeAt(meta, rect.width / 2, rect.height / 2);
+    };
+    return () => {
+      addAtCentreRef.current = null;
+    };
+  }, [addAtCentreRef, addNodeAt]);
+
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     if (!editable) return;
     const data = e.dataTransfer.getData("application/agentmesh");
     if (!data || !wrapRef.current) return;
-    const meta: Partial<WorkflowNode> = JSON.parse(data);
     const rect = wrapRef.current.getBoundingClientRect();
-    const t = NODE_TYPES[meta.type!];
-    const x = (e.clientX - rect.left - view.x) / view.k - (t ? t.w / 2 : 90);
-    const y = (e.clientY - rect.top - view.y) / view.k - (t ? t.h / 2 : 30);
-    const id = `n_${Date.now()}`;
-    const node: WorkflowNode = { id, x, y, ...meta } as WorkflowNode;
-    setWorkflow((wf) => ({ ...wf, nodes: [...wf.nodes, node] }));
-    setSelectedId(id);
+    addNodeAt(
+      JSON.parse(data) as Partial<WorkflowNode>,
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+    );
   };
 
   const startNodeDrag = (e: React.MouseEvent, n: WorkflowNode) => {

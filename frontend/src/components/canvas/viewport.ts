@@ -51,6 +51,17 @@ export interface Point {
   y: number;
 }
 
+// Screen point (relative to the canvas box) -> world point. The exact
+// inverse of the projection the view applies: a world point lands on screen
+// at `w * k + offset`, so recovering it is `(screen - offset) / k`.
+//
+// Shared by the two ways a node gets placed -- dropped at the cursor, or
+// added at the centre of the view by tapping the palette -- so the two
+// cannot drift apart.
+export function screenToWorld(view: ViewState, px: number, py: number): Point {
+  return { x: (px - view.x) / view.k, y: (py - view.y) / view.k };
+}
+
 export function distance(a: Point, b: Point): number {
   return Math.hypot(b.x - a.x, b.y - a.y);
 }
