@@ -739,6 +739,21 @@ func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run,
 	defer r.broker.Close(run.ID)
 	defer r.registry.deregister(wf.ID, gen)
 
+	// Same run-total billing registration Run() does (see its own doc
+	// comment) -- a resumed run can still execute new billable non-tool402
+	// work (whatever wasn't already logged success), and without this,
+	// addRunBilling's Load(run.ID) would miss and silently drop it: the
+	// user's credit balance still gets debited correctly per node, but the
+	// matching on-chain settlement would just never happen.
+	runTotal := new(int64)
+	r.runBilling.Store(run.ID, runTotal)
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runTotalSettleTimeout)
+		defer cancel()
+		r.settleRunTotal(sctx, wf, run, runTotal)
+		r.runBilling.Delete(run.ID)
+	}()
+
 	states, err := r.store.GetLatestNodeStates(ctx, run.ID)
 	if err != nil {
 		log.Printf("resume: loading prior node state failed, run=%s: %v", run.ID, err)
