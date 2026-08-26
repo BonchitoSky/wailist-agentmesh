@@ -111,7 +111,12 @@ export function useAuth() {
   // top bar picks the new name up in the same render.
   const completeOnboarding = useCallback(async (name: string, org: string) => {
     const updated = await auth.updateProfile(name, org);
-    commit({ ...snapshot, user: updated });
+    // Merged, not replaced. The response is authoritative for what it carries,
+    // but a frontend can be deployed against an older backend whose PATCH reply
+    // omits fields /auth/me returns -- and because those fields are optional on
+    // AuthUser, dropping one type-checks silently and quietly resets the app's
+    // display currency to USD.
+    commit({ ...snapshot, user: { ...snapshot.user, ...updated } });
   }, []);
 
   return {

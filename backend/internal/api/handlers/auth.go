@@ -186,6 +186,42 @@ func (d *Deps) SignOut(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// userResponse is the one shape /auth/me and PATCH /auth/me both return.
+//
+// Shared deliberately. These were two hand-written maps, and UpdateProfile's was
+// missing createdAt and displayCurrency. Both are optional on the frontend's
+// AuthUser type -- so that a stale cached response still type-checks -- which
+// meant nothing caught the gap: saving a profile silently reset the whole app's
+// display currency to USD and blanked "member since".
+func userResponse(user models.User, displayCurrency string) map[string]any {
+	result := map[string]any{
+		"id":              user.ID,
+		"email":           user.Email,
+		"name":            user.Name,
+		"orgName":         user.OrgName,
+		"displayCurrency": displayCurrency,
+		// Selected by GetUserByID. The settings page shows it as "member since";
+		// nothing else needs it.
+		"createdAt": user.CreatedAt,
+		// OAuth accounts are created with no name -- the frontend prompts for
+		// name+org once, right after the provider redirect lands them here.
+		"needsOnboarding": user.Name == "",
+	}
+	return result
+}
+
+// displayCurrencyFor reads the account's display preference, degrading to the
+// default instead of propagating: a settings read failing must never turn a
+// profile request into a sign-out. Costs one indexed primary-key lookup.
+func (d *Deps) displayCurrencyFor(r *http.Request, userID, logPrefix string) string {
+	settings, err := d.Store.GetUserSettings(r.Context(), userID)
+	if err != nil {
+		log.Printf("%s: display currency: %v", logPrefix, err)
+		return models.DefaultCurrency
+	}
+	return settings.DisplayCurrency
+}
+
 func (d *Deps) Me(w http.ResponseWriter, r *http.Request) {
 	userID, _ := r.Context().Value(CtxUserID).(string)
 	user, err := d.Store.GetUserByID(r.Context(), userID)
@@ -195,29 +231,8 @@ func (d *Deps) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	// Carried on /auth/me rather than fetched separately, because every page
 	// already calls this endpoint once and none of them should gain a second
-	// request for a preference that is USD for most accounts. Costs one indexed
-	// primary-key lookup; a failure here must not sign the user out, so it
-	// degrades to the default rather than propagating.
-	displayCurrency := models.DefaultCurrency
-	if settings, sErr := d.Store.GetUserSettings(r.Context(), userID); sErr == nil {
-		displayCurrency = settings.DisplayCurrency
-	} else {
-		log.Printf("me: display currency: %v", sErr)
-	}
-
-	respond.JSON(w, http.StatusOK, map[string]any{
-		"id":              user.ID,
-		"email":           user.Email,
-		"name":            user.Name,
-		"orgName":         user.OrgName,
-		"displayCurrency": displayCurrency,
-		// Already selected by GetUserByID and previously dropped here. The
-		// settings page shows it as "member since"; nothing else needs it.
-		"createdAt": user.CreatedAt,
-		// OAuth accounts are created with no name — the frontend prompts for
-		// name+org once, right after the provider redirect lands them here.
-		"needsOnboarding": user.Name == "",
-	})
+	// request for a preference that is USD for most accounts.
+	respond.JSON(w, http.StatusOK, userResponse(user, d.displayCurrencyFor(r, userID, "me")))
 }
 
 // UpdateProfile sets the signed-in user's display name and organization
@@ -244,13 +259,7 @@ func (d *Deps) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	respond.JSON(w, http.StatusOK, map[string]any{
-		"id":              user.ID,
-		"email":           user.Email,
-		"name":            user.Name,
-		"orgName":         user.OrgName,
-		"needsOnboarding": false,
-	})
+	respond.JSON(w, http.StatusOK, userResponse(user, d.displayCurrencyFor(r, userID, "update profile")))
 }
 
 // ChangePassword sets a new password for the signed-in user after verifying
