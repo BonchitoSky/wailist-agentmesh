@@ -7,6 +7,8 @@ import {
   SettingRow,
   SettingsSection,
   amountInputStyle,
+  microsToUSD,
+  usdToMicros,
 } from "@/components/settings/ui";
 import { useCurrency } from "@/lib/currency/store";
 
@@ -19,9 +21,6 @@ const PLATFORM_CEILING_USD = 1000;
 // Below this a ceiling stops limiting spend and starts blocking tool402 nodes
 // outright — the engine checks the same floor before a tool's price is known.
 const MIN_CEILING_USD = 0.05;
-
-const microsToUSD = (micros: number): string => String(micros / 1e6);
-const usdToMicros = (usd: number): number => Math.round(usd * 1e6);
 
 export function ExecutionSection({
   settings,

@@ -236,3 +236,16 @@ export function formatDateUTC(iso?: string): string {
         timeZone: "UTC",
       }).format(d);
 }
+
+/**
+ * Money conversions for the settings forms.
+ *
+ * `microsToUSD` deliberately does not pad to two decimals. These strings seed
+ * *editable* inputs, and `toFixed(2)` is lossy: a stored ceiling of 50_500
+ * micros ($0.0505) would render "0.05", and saving the untouched form would
+ * write back 50_000 -- silently lowering a limit the user never touched.
+ * String() round-trips exactly, at the cost of showing "5" rather than "5.00".
+ */
+export const microsToUSD = (micros: number): string => String(micros / 1e6);
+
+export const usdToMicros = (usd: number): number => Math.round(usd * 1e6);

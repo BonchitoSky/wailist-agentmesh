@@ -16,6 +16,8 @@ import {
   SettingsSection,
   amountInputStyle,
   inputStyle,
+  microsToUSD,
+  usdToMicros,
 } from "@/components/settings/ui";
 import { ghostBtnSm } from "@/components/ui";
 
@@ -24,8 +26,6 @@ type SaveState = "idle" | "saving" | "saved" | "error";
 // Micros are the storage unit everywhere in this codebase; dollars exist only
 // for display. Rounding on the way in keeps a typed "12.3456789" from becoming
 // a fractional micro the BIGINT column can't hold.
-const microsToUSD = (micros: number): string => (micros / 1e6).toFixed(2);
-const usdToMicros = (usd: number): number => Math.round(usd * 1e6);
 
 export function BillingSection({
   settings,
