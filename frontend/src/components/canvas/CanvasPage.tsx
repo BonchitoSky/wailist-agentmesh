@@ -258,7 +258,14 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     );
   }, []);
 
+  // Guarded here rather than at the call sites. This is the single node-
+  // deletion path -- the Delete/Backspace handler below and the Inspector
+  // both route through it -- so the gate belongs on the mutation itself,
+  // not on each caller. A viewer can reach it because selecting a node is
+  // allowed (that is how the read-only inspector opens); only the removal
+  // is withheld.
   const onDelete = useCallback(() => {
+    if (!can("workflow.editGraph", readOnly)) return;
     if (!selectedId) return;
     setWorkflow((wf) =>
       wf
@@ -272,7 +279,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         : wf,
     );
     setSelectedId(null);
-  }, [selectedId]);
+  }, [selectedId, readOnly]);
 
   // Delete/Backspace removes the selected node -- ignored while typing in a field.
   useEffect(() => {
