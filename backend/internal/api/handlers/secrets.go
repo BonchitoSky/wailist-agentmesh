@@ -223,6 +223,13 @@ func redactNodesForBuildAgent(nodes []models.WorkflowNode) []models.WorkflowNode
 	return out
 }
 
+// DecryptNodes is decryptNodes, exported for the scheduler package, which
+// needs the identical "decrypt just before handing to the engine" step for
+// a scheduled run but isn't part of this package's request/response cycle.
+func DecryptNodes(nodes []models.WorkflowNode, key string) []models.WorkflowNode {
+	return decryptNodes(nodes, key)
+}
+
 // decryptNodes returns a copy of nodes with encrypted blobs decrypted in-memory.
 // Call this just before passing nodes to the engine for execution.
 func decryptNodes(nodes []models.WorkflowNode, key string) []models.WorkflowNode {

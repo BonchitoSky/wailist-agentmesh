@@ -173,7 +173,45 @@ func (d *Deps) GetRun(w http.ResponseWriter, r *http.Request) {
 	if logs == nil {
 		logs = []models.RunLog{}
 	}
-	respond.JSON(w, http.StatusOK, map[string]any{"run": run, "logs": logs})
+	deadLetters, err := d.Store.GetDeadLetterRuns(ctx, runID)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if deadLetters == nil {
+		deadLetters = []models.DeadLetterRun{}
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"run": run, "logs": logs, "deadLetters": deadLetters})
+}
+
+// ResumeRun continues a run that ended in "failed" or "stopped": nodes
+// already logged as success are skipped, everything else re-executes. See
+// engine.Runner.Resume for the skip contract.
+func (d *Deps) ResumeRun(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "runId")
+	ctx := r.Context()
+	userID, _ := ctx.Value(CtxUserID).(string)
+
+	run, err := d.Store.GetRun(ctx, runID)
+	if err != nil {
+		respond.Error(w, http.StatusNotFound, "run not found")
+		return
+	}
+	if run.Status == models.RunStatusRunning {
+		respond.Error(w, http.StatusConflict, "run is already in progress")
+		return
+	}
+	wf, err := d.Store.GetWorkflow(ctx, run.WorkflowID)
+	if err != nil || wf.UserID != userID {
+		respond.Error(w, http.StatusNotFound, "run not found")
+		return
+	}
+
+	wf.Nodes = decryptNodes(wf.Nodes, d.EncryptionKey)
+	d.Broker.Create(run.ID)
+	d.Engine.StartResume(wf, run)
+
+	respond.JSON(w, http.StatusAccepted, map[string]string{"runId": run.ID})
 }
 
 func (d *Deps) StreamRun(w http.ResponseWriter, r *http.Request) {

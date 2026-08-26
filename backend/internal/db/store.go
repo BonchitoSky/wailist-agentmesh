@@ -126,11 +126,13 @@ func (s *Store) GetWorkflow(ctx context.Context, id string) (models.Workflow, er
 	var graphJSON []byte
 	var runEndpoint *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
+		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
+		       schedule_cron, schedule_next_run_at
 		FROM workflows WHERE id = $1
 	`, id).Scan(
 		&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
 		&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
+		&w.ScheduleCron, &w.ScheduleNextRunAt,
 	)
 	if err != nil {
 		return w, err
@@ -140,6 +142,108 @@ func (s *Store) GetWorkflow(ctx context.Context, id string) (models.Workflow, er
 	}
 	unmarshalGraph(graphJSON, &w)
 	return w, nil
+}
+
+// SetWorkflowSchedule enables (or updates) this workflow's cron schedule.
+// nextRunAt is caller-computed (scheduler.nextCronRun) rather than derived
+// here, so this method has no cron-parsing dependency of its own.
+func (s *Store) SetWorkflowSchedule(ctx context.Context, workflowID, cronExpr string, nextRunAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE workflows SET schedule_cron=$2, schedule_next_run_at=$3 WHERE id=$1
+	`, workflowID, cronExpr, nextRunAt)
+	return err
+}
+
+// ClearWorkflowSchedule disables scheduling for a workflow. Idempotent --
+// clearing an already-unscheduled workflow is a no-op, not an error.
+func (s *Store) ClearWorkflowSchedule(ctx context.Context, workflowID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE workflows SET schedule_cron=NULL, schedule_next_run_at=NULL WHERE id=$1
+	`, workflowID)
+	return err
+}
+
+// ClaimDueSchedules finds every deployed workflow whose schedule is due at
+// or before `now`, advances each one's schedule_next_run_at (via nextRun,
+// caller-supplied so this package carries no cron-parsing dependency) in
+// the SAME transaction that claims it, and returns the claimed workflows.
+//
+// Uses SELECT ... FOR UPDATE SKIP LOCKED rather than the
+// pg_advisory_xact_lock(hashtext(id)) pattern LockOAuthCredentialForRefresh
+// uses: that pattern fits one caller-known ID, while this claims an
+// unknown-in-advance BATCH of due rows in one pass. SKIP LOCKED is the
+// standard Postgres job-queue idiom for exactly that -- a second replica's
+// concurrent sweep simply skips any row this transaction already holds,
+// rather than blocking on it, so the same tick can never fire twice.
+func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time, nextRun func(cronExpr string, after time.Time) (time.Time, error)) ([]models.Workflow, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
+		       schedule_cron, schedule_next_run_at
+		FROM workflows
+		WHERE status = 'deployed' AND schedule_cron IS NOT NULL AND schedule_next_run_at <= $1
+		FOR UPDATE SKIP LOCKED
+	`, now)
+	if err != nil {
+		return nil, err
+	}
+	type claimed struct {
+		wf    models.Workflow
+		graph []byte
+		runEP *string
+	}
+	var batch []claimed
+	for rows.Next() {
+		var c claimed
+		if err := rows.Scan(
+			&c.wf.ID, &c.wf.UserID, &c.wf.Name, &c.wf.Status, &c.graph,
+			&c.wf.DeployedAt, &c.runEP, &c.wf.CreatedAt, &c.wf.UpdatedAt,
+			&c.wf.ScheduleCron, &c.wf.ScheduleNextRunAt,
+		); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		batch = append(batch, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]models.Workflow, 0, len(batch))
+	for _, c := range batch {
+		w := c.wf
+		if c.runEP != nil {
+			w.RunEndpoint = *c.runEP
+		}
+		unmarshalGraph(c.graph, &w)
+
+		next, err := nextRun(*w.ScheduleCron, now)
+		if err != nil {
+			// A schedule that no longer parses (edited into an invalid
+			// expression some other way) must not wedge the sweep forever
+			// re-claiming the same broken row every tick -- clear it and
+			// move on rather than failing the whole batch.
+			if _, clearErr := tx.Exec(ctx, `UPDATE workflows SET schedule_cron=NULL, schedule_next_run_at=NULL WHERE id=$1`, w.ID); clearErr != nil {
+				return nil, clearErr
+			}
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE workflows SET schedule_next_run_at=$2 WHERE id=$1`, w.ID, next); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Workflow, error) {
@@ -477,6 +581,76 @@ func (s *Store) GetRunLogs(ctx context.Context, runID string) ([]models.RunLog, 
 		logs = append(logs, l)
 	}
 	return logs, rows.Err()
+}
+
+// GetLatestNodeStates returns each node's most recent logged status/output
+// for a run, keyed by node ID. Runner.Resume uses this to skip re-executing
+// (and re-billing/re-paying) any node that already reached a terminal state
+// on a prior attempt.
+func (s *Store) GetLatestNodeStates(ctx context.Context, runID string) (map[string]models.RunLog, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (node_id) node_id, status, output
+		FROM run_logs WHERE run_id=$1
+		ORDER BY node_id, ts DESC
+	`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	states := make(map[string]models.RunLog)
+	for rows.Next() {
+		var l models.RunLog
+		var outJSON []byte
+		if err := rows.Scan(&l.NodeID, &l.Status, &outJSON); err != nil {
+			return nil, err
+		}
+		if outJSON != nil {
+			json.Unmarshal(outJSON, &l.Output)
+		}
+		states[l.NodeID] = l
+	}
+	return states, rows.Err()
+}
+
+// MarkRunRunning resets a run back to "running" with no finish time -- used
+// by Resume to undo the "failed"/"stopped" terminal state a prior attempt
+// left behind, so the run reads correctly as in-progress while it's retried.
+func (s *Store) MarkRunRunning(ctx context.Context, runID string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE runs SET status='running', finished_at=NULL WHERE id=$1`, runID)
+	return err
+}
+
+// --- DeadLetterRun methods ---
+
+func (s *Store) InsertDeadLetterRun(ctx context.Context, dl models.DeadLetterRun) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO dead_letter_runs (run_id, node_id, error, attempt_count)
+		VALUES ($1,$2,$3,$4)
+	`, dl.RunID, dl.NodeID, dl.Error, dl.AttemptCount)
+	return err
+}
+
+// GetDeadLetterRuns returns every dead-letter entry for a run, oldest
+// first -- normally one row (the level failure stops the run), but a
+// workflow can have more than one node fail in the same parallel level.
+func (s *Store) GetDeadLetterRuns(ctx context.Context, runID string) ([]models.DeadLetterRun, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, run_id, node_id, error, attempt_count, created_at
+		FROM dead_letter_runs WHERE run_id=$1 ORDER BY created_at
+	`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.DeadLetterRun
+	for rows.Next() {
+		var dl models.DeadLetterRun
+		if err := rows.Scan(&dl.ID, &dl.RunID, &dl.NodeID, &dl.Error, &dl.AttemptCount, &dl.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, dl)
+	}
+	return out, rows.Err()
 }
 
 // --- AgentWallet methods ---

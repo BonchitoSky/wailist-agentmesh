@@ -667,6 +667,16 @@ func (r *Runner) Start(wf models.Workflow, run models.Run) {
 	go r.Run(ctx, wf, run, gen)
 }
 
+// StartResume is Start's counterpart for continuing a run that already has
+// some nodes logged as success (e.g. a dead-lettered run, retried by hand).
+// Same cancellation registration as Start; the only difference is Resume
+// loads prior node state before executing.
+func (r *Runner) StartResume(wf models.Workflow, run models.Run) {
+	ctx, cancel := context.WithCancel(context.Background())
+	gen := r.registry.register(wf.ID, cancel)
+	go r.Resume(ctx, wf, run, gen)
+}
+
 // Stop cancels the active run for the given workflow ID. Returns false if no
 // run was registered (i.e. the workflow is not currently running).
 func (r *Runner) Stop(workflowID string) bool {
@@ -681,7 +691,7 @@ func (r *Runner) finishRun(wf models.Workflow, run models.Run, status models.Run
 	go alert.Notify(context.Background(), alert.ChannelWorkflows, fmt.Sprintf("workflow %q run %s finished: %s", wf.Name, run.ID, status))
 }
 
-// Run executes a workflow. Call via Start rather than directly.
+// Run executes a workflow from scratch. Call via Start rather than directly.
 func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, gen uint64) {
 	defer r.broker.Close(run.ID)
 	defer r.registry.deregister(wf.ID, gen)
@@ -712,6 +722,47 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 
 	go alert.Notify(context.Background(), alert.ChannelWorkflows, fmt.Sprintf("workflow %q run %s started", wf.Name, run.ID))
 
+	r.execute(ctx, wf, run, nil)
+}
+
+// Resume continues run.ID from wherever it left off: nodes already logged as
+// success in run_logs are skipped (their prior output is fed to downstream
+// nodes unchanged) rather than re-executed, so nothing that already
+// side-effected -- an x402 payment, a debited flat fee, a sent email -- runs
+// twice. Call via StartResume rather than directly.
+//
+// Only a node's own prior success is checked here; a level upstream of the
+// failed node that fully succeeded falls through immediately with nothing
+// left to do, which is what makes "resume" cheaper than "restart" for
+// workflows with real side-effecting steps earlier in the graph.
+func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run, gen uint64) {
+	defer r.broker.Close(run.ID)
+	defer r.registry.deregister(wf.ID, gen)
+
+	states, err := r.store.GetLatestNodeStates(ctx, run.ID)
+	if err != nil {
+		log.Printf("resume: loading prior node state failed, run=%s: %v", run.ID, err)
+		r.finishRun(wf, run, models.RunStatusFailed)
+		return
+	}
+
+	// The run row is still sitting in whatever terminal status ended the
+	// prior attempt (failed/stopped) -- reset it to running so it reads
+	// correctly as in-progress while Resume executes, matching CreateRun's
+	// own initial status for a fresh run.
+	if err := r.store.MarkRunRunning(ctx, run.ID); err != nil {
+		log.Printf("resume: marking run running failed, run=%s: %v", run.ID, err)
+	}
+
+	go alert.Notify(context.Background(), alert.ChannelWorkflows, fmt.Sprintf("workflow %q run %s resumed", wf.Name, run.ID))
+
+	r.execute(ctx, wf, run, states)
+}
+
+// execute is Run and Resume's shared body. seed is nil for a fresh run, or
+// the prior run_logs state for a resumed one -- every node whose seed entry
+// has LogStatusSuccess is skipped rather than re-executed.
+func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run, seed map[string]models.RunLog) {
 	attachMap := BuildAttachMap(wf.Nodes, wf.Edges)
 	levels, err := TopologicalSort(wf.Nodes, wf.Edges)
 	if err != nil {
@@ -792,6 +843,14 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 				if atomic.LoadInt32(&failed) != 0 {
 					return
 				}
+				// Resume path: this node already reached success on a prior
+				// attempt (real payments/debits included) — reuse its logged
+				// output rather than re-executing and risking a double
+				// side-effect. seed is nil for a fresh Run.
+				if prior, ok := seed[n.ID]; ok && prior.Status == models.LogStatusSuccess {
+					rc.Set(n.ID, prior.Output)
+					return
+				}
 
 				start := time.Now()
 				logEntry, _ := r.store.InsertRunLog(ctx, models.RunLog{
@@ -802,13 +861,48 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 					Status:    models.LogStatusRunning,
 				})
 
-				result, execErr := r.executeNode(ctx, n, attachMap, walletByAgent, rc, run, wf)
+				// Retry only on an error the node explicitly marked safe
+				// (nodes.Retryable) — e.g. a transport failure on an
+				// idempotent HTTP method. Anything unclassified defaults to
+				// NOT retryable, the same fail-closed stance the payment
+				// paths in this file already take, since a node this loop
+				// doesn't understand may have already side-effected.
+				var result any
+				var execErr error
+				attempts := 0
+				for {
+					attempts++
+					result, execErr = r.executeNode(ctx, n, attachMap, walletByAgent, rc, run, wf)
+					if execErr == nil || ctx.Err() != nil || attempts > n.MaxRetries || !nodes.IsRetryable(execErr) {
+						break
+					}
+					if n.RetryBackoffMs > 0 {
+						timer := time.NewTimer(time.Duration(n.RetryBackoffMs) * time.Millisecond)
+						select {
+						case <-timer.C:
+						case <-ctx.Done():
+							timer.Stop()
+						}
+					}
+				}
 				dur := int(time.Since(start).Milliseconds())
 
 				if execErr != nil {
 					atomic.StoreInt32(&failed, 1)
 					outJSON, _ := json.Marshal(execErr.Error())
 					r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusFailed, outJSON, dur)
+					// A run cancelled mid-node (Stop) surfaces as execErr too,
+					// but that's not a permanent node failure worth
+					// dead-lettering -- the finishRun path below already
+					// reports it as "stopped", not "failed".
+					if ctx.Err() == nil {
+						r.store.InsertDeadLetterRun(context.Background(), models.DeadLetterRun{
+							RunID:        run.ID,
+							NodeID:       n.ID,
+							Error:        execErr.Error(),
+							AttemptCount: attempts,
+						})
+					}
 					r.broker.Publish(run.ID, models.LogEvent{
 						StepIndex:  idx,
 						NodeID:     n.ID,

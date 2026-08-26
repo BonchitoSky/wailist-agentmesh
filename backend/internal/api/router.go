@@ -59,6 +59,9 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Put("/workflows/{id}", d.UpdateWorkflow)
 		r.Delete("/workflows/{id}", d.DeleteWorkflow)
 
+		r.Put("/workflows/{id}/schedule", d.SetSchedule)
+		r.Delete("/workflows/{id}/schedule", d.ClearSchedule)
+
 		r.Post("/workflows/{id}/deploy", d.Deploy)
 		r.Post("/workflows/{id}/build", d.BuildWorkflow)
 		r.Get("/workflows/{id}/agents/{agentId}/balance", d.AgentBalance)
@@ -68,6 +71,7 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Post("/workflows/{id}/stop", d.StopWorkflow)
 		r.Get("/runs/{runId}", d.GetRun)
 		r.Get("/runs/{runId}/stream", d.StreamRun)
+		r.Post("/runs/{runId}/resume", d.ResumeRun)
 
 		r.Post("/tools/x402/quote", d.X402Quote)
 		r.Get("/bazaar/resources", d.BazaarResources)

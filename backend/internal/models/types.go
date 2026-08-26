@@ -145,6 +145,14 @@ type WorkflowNode struct {
 	// out of band. Never persisted on a saved workflow — it is only ever set
 	// on the synthesized nodes payTendril builds at call time.
 	TendrilLeaseToken string `json:"-"`
+	// MaxRetries is how many additional attempts the runner makes for this
+	// node after a failure classified as safe to retry (see
+	// nodes.IsRetryable) — 0 (default) means no automatic retry. A
+	// non-retryable error is never retried regardless of this value.
+	MaxRetries int `json:"maxRetries,omitempty"`
+	// RetryBackoffMs is the delay before each retry attempt. 0 with
+	// MaxRetries > 0 means retry immediately.
+	RetryBackoffMs int `json:"retryBackoffMs,omitempty"`
 }
 
 type WorkflowEdge struct {
@@ -184,6 +192,15 @@ type Workflow struct {
 	Updated     string         `json:"updated,omitempty"`
 	CreatedAt   time.Time      `json:"createdAt"`
 	UpdatedAt   time.Time      `json:"updatedAt"`
+	// ScheduleCron is a standard 5-field cron expression (UTC). Empty/nil
+	// means the workflow has no schedule -- set via SetWorkflowSchedule,
+	// never written directly through UpdateWorkflow's graph save.
+	ScheduleCron *string `json:"scheduleCron,omitempty"`
+	// ScheduleNextRunAt is when the scheduler will next fire this workflow.
+	// Advanced past `now` atomically at claim time (Store.ClaimDueSchedules)
+	// so two server replicas polling concurrently can't both fire the same
+	// tick.
+	ScheduleNextRunAt *time.Time `json:"scheduleNextRunAt,omitempty"`
 }
 
 type RunStatus string
@@ -225,6 +242,20 @@ type RunLog struct {
 	Output     any       `json:"output,omitempty"`
 	DurationMs int       `json:"durationMs,omitempty"`
 	Ts         time.Time `json:"ts"`
+}
+
+// DeadLetterRun records a node that failed permanently -- either a
+// non-retryable error, or a retryable one that exhausted MaxRetries -- so a
+// dead-lettered run isn't just an opaque "failed" status with no way to find
+// it again. AttemptCount is every executeNode call made for this node
+// across the run, including the first.
+type DeadLetterRun struct {
+	ID           string    `json:"id"`
+	RunID        string    `json:"runId"`
+	NodeID       string    `json:"nodeId"`
+	Error        string    `json:"error"`
+	AttemptCount int       `json:"attemptCount"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 type AgentWallet struct {
