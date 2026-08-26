@@ -37,30 +37,49 @@ func LiveFetchINRToUSDForTest(ctx context.Context, url string) (float64, error) 
 	return fetchINRToUSDFromURL(ctx, url)
 }
 
-func fetchINRToUSDFromURL(ctx context.Context, url string) (float64, error) {
+// fetchRatesFromURL performs the GET both rate fetchers share: request, status
+// check, a bounded read, and the one response shape this upstream returns.
+//
+// The two callers keep their own validation and their own caching strategy --
+// those genuinely differ, and the comment below explains why they must stay
+// apart. Only this boilerplate was duplicated, which meant a change to the
+// timeout, size limit or parsing had to be made twice by hand.
+//
+// prefix keeps the callers' error messages distinct ("fx:" for the billing
+// path, "fx table:" for display), so an incident log-grep can still tell which
+// fetch failed.
+func fetchRatesFromURL(ctx context.Context, url, prefix string) (map[string]float64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, err
+		return nil, fmt.Errorf("%s: build request: %w", prefix, err)
 	}
 	resp, err := fxHTTPClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("fx: request failed: %w", err)
+		return nil, fmt.Errorf("%s: request failed: %w", prefix, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("fx: unexpected status %d", resp.StatusCode)
+		return nil, fmt.Errorf("%s: unexpected status %d", prefix, resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return 0, err
+		return nil, fmt.Errorf("%s: read response: %w", prefix, err)
 	}
 	var parsed struct {
 		Rates map[string]float64 `json:"rates"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return 0, fmt.Errorf("fx: parse response: %w", err)
+		return nil, fmt.Errorf("%s: parse response: %w", prefix, err)
 	}
-	rate, ok := parsed.Rates["USD"]
+	return parsed.Rates, nil
+}
+
+func fetchINRToUSDFromURL(ctx context.Context, url string) (float64, error) {
+	rates, err := fetchRatesFromURL(ctx, url, "fx")
+	if err != nil {
+		return 0, err
+	}
+	rate, ok := rates["USD"]
 	if !ok || rate <= 0 {
 		return 0, fmt.Errorf("fx: no USD rate in response")
 	}
@@ -220,38 +239,20 @@ func LiveFetchRateTableForTest(ctx context.Context, url string) (map[string]floa
 }
 
 func fetchRateTableFromURL(ctx context.Context, url string) (map[string]float64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	rates, err := fetchRatesFromURL(ctx, url, "fx table")
 	if err != nil {
-		return nil, fmt.Errorf("fx table: build request: %w", err)
-	}
-	resp, err := fxHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fx table: request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fx table: unexpected status %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("fx table: read response: %w", err)
-	}
-	var parsed struct {
-		Rates map[string]float64 `json:"rates"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("fx table: parse response: %w", err)
+		return nil, err
 	}
 	// USD must be exactly 1 in a USD-based response. If it isn't, the upstream
 	// changed base or inverted its rates, and every number derived from this
 	// table would be wrong in a way no per-currency bound would catch.
-	if usd, ok := parsed.Rates["USD"]; !ok || usd != 1 {
-		return nil, fmt.Errorf("fx table: response is not USD-based (USD=%v)", parsed.Rates["USD"])
+	if usd, ok := rates["USD"]; !ok || usd != 1 {
+		return nil, fmt.Errorf("fx table: response is not USD-based (USD=%v)", rates["USD"])
 	}
 	// Drop anything non-positive or non-finite rather than letting it reach a
 	// division and render NaN or Infinity on screen.
-	clean := make(map[string]float64, len(parsed.Rates))
-	for code, rate := range parsed.Rates {
+	clean := make(map[string]float64, len(rates))
+	for code, rate := range rates {
 		if rate > 0 && !math.IsInf(rate, 0) && !math.IsNaN(rate) {
 			clean[code] = rate
 		}
