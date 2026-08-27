@@ -1,5 +1,12 @@
 "use client";
-import { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useCallback,
+} from "react";
 import { WorkflowNode } from "@/lib/types";
 import { BrandLogo } from "./nodes/brandLogos";
 import { PALETTE_TWO_COL_MIN } from "./panelSizing";
@@ -297,17 +304,34 @@ export function PalettePanel({
   // that way costs a single reflow instead of a frame of squeezed rows.
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [measuredWidth, setMeasuredWidth] = useState<number | null>(null);
+
+  // A zero width is not a measurement, it is a hidden element. The rail keeps
+  // every pane mounted and toggles `display`, so the palette measures 0x0
+  // while its tab is inactive -- latching that would peg the list to one
+  // column for the rest of the session.
+  const syncWidth = useCallback(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const w = el.getBoundingClientRect().width;
+    if (w > 0) setMeasuredWidth((prev) => (prev === w ? prev : w));
+  }, []);
+
+  // Runs after every render, which is what catches display:none -> visible
+  // when the Build tab is selected. Cheap (one rect read) and self-limiting:
+  // it only sets state when the number actually changed.
+  useLayoutEffect(() => {
+    if (typeof width !== "number") syncWidth();
+  });
+
+  // And this catches the window being resized while the tab is already open.
   useEffect(() => {
     const el = rootRef.current;
     if (!el || typeof width === "number") return;
     if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width;
-      if (typeof w === "number") setMeasuredWidth(w);
-    });
+    const ro = new ResizeObserver(syncWidth);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [width]);
+  }, [width, syncWidth]);
 
   const tabDef = PALETTE_TABS.find((t) => t.id === tab)!;
   const items = tabDef.items() as unknown[];
