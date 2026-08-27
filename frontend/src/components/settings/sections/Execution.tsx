@@ -7,12 +7,11 @@ import {
   SettingRow,
   SettingsSection,
   amountInputStyle,
+  useSaveState,
   microsToUSD,
   usdToMicros,
 } from "@/components/settings/ui";
 import { useCurrency } from "@/lib/currency/store";
-
-type SaveState = "idle" | "saving" | "saved" | "error";
 
 // Mirror models.MaxSingleX402QuoteUSDMicros and models.X402ProbeFloorUSDMicros.
 // The server is authoritative and rejects anything outside this range; these
@@ -34,8 +33,7 @@ export function ExecutionSection({
   const [ceiling, setCeiling] = useState(
     stored != null ? microsToUSD(stored) : "1",
   );
-  const [state, setState] = useState<SaveState>("idle");
-  const [message, setMessage] = useState("");
+  const { state, message, fail, run } = useSaveState();
   const { format: formatMoney, isDefault: isUSD } = useCurrency();
 
   const submit = async (e: React.FormEvent) => {
@@ -46,36 +44,26 @@ export function ExecutionSection({
     if (limited) {
       const parsed = Number(ceiling);
       if (!Number.isFinite(parsed) || parsed <= 0) {
-        setState("error");
-        setMessage("Enter a limit greater than zero.");
+        fail("Enter a limit greater than zero.");
         return;
       }
       if (parsed < MIN_CEILING_USD) {
-        setState("error");
-        setMessage(
+        fail(
           `The lowest usable limit is $${MIN_CEILING_USD.toFixed(2)} — below that, paid tool calls are blocked outright rather than limited.`,
         );
         return;
       }
       if (parsed > PLATFORM_CEILING_USD) {
-        setState("error");
-        setMessage(
-          `The platform ceiling is $${PLATFORM_CEILING_USD} per call.`,
-        );
+        fail(`The platform ceiling is $${PLATFORM_CEILING_USD} per call.`);
         return;
       }
       maxCallSpendUsdMicros = usdToMicros(parsed);
     }
 
-    setState("saving");
-    try {
-      await onSave({ maxCallSpendUsdMicros });
-      setState("saved");
-      setMessage("Execution settings saved.");
-    } catch (err) {
-      setState("error");
-      setMessage(err instanceof Error ? err.message : "Could not save.");
-    }
+    await run(
+      () => onSave({ maxCallSpendUsdMicros }),
+      "Execution settings saved.",
+    );
   };
 
   return (

@@ -1,4 +1,5 @@
 "use client";
+import { useCallback, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 // Shared building blocks for the settings sections. Kept together so every
@@ -258,3 +259,50 @@ export const usdToMicros = (usd: number): number => Math.round(usd * 1e6);
  * apart. Both helpers divide identically, so they cannot disagree.
  */
 export const microsToUSDNumber = (micros: number): number => micros / 1e6;
+
+export type SaveState = "idle" | "saving" | "saved" | "error";
+
+/**
+ * The idle/saving/saved/error machine every settings form runs.
+ *
+ * It was retyped in five places — Account twice, Billing, Execution and
+ * Connections — each with its own state pair and its own try/catch. The
+ * rendering half was already shared (SaveButton, FormStatus); this is the
+ * missing half, so a future change (auto-clearing "saved", say) lands once.
+ *
+ * `run` reports the server's own message on failure rather than a generic
+ * string, because those messages carry real distinctions — "current password is
+ * incorrect" versus an OAuth-only account with no password to change.
+ */
+export function useSaveState(): {
+  state: SaveState;
+  message: string;
+  fail: (message: string) => void;
+  run: (action: () => Promise<void>, onSaved: string) => Promise<void>;
+} {
+  const [state, setState] = useState<SaveState>("idle");
+  const [message, setMessage] = useState("");
+
+  const fail = useCallback((m: string) => {
+    setState("error");
+    setMessage(m);
+  }, []);
+
+  const run = useCallback(
+    async (action: () => Promise<void>, onSaved: string) => {
+      setState("saving");
+      setMessage("");
+      try {
+        await action();
+        setState("saved");
+        setMessage(onSaved);
+      } catch (err) {
+        setState("error");
+        setMessage(err instanceof Error ? err.message : "Could not save.");
+      }
+    },
+    [],
+  );
+
+  return { state, message, fail, run };
+}

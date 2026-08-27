@@ -17,11 +17,10 @@ import {
   amountInputStyle,
   inputStyle,
   microsToUSD,
+  useSaveState,
   usdToMicros,
 } from "@/components/settings/ui";
 import { ghostBtnSm } from "@/components/ui";
-
-type SaveState = "idle" | "saving" | "saved" | "error";
 
 // Micros are the storage unit everywhere in this codebase; dollars exist only
 // for display. Rounding on the way in keeps a typed "12.3456789" from becoming
@@ -40,34 +39,29 @@ export function BillingSection({
   const [threshold, setThreshold] = useState(
     microsToUSD(settings.lowBalanceUsdMicros),
   );
-  const [state, setState] = useState<SaveState>("idle");
-  const [message, setMessage] = useState("");
-  const [currencyState, setCurrencyState] = useState<SaveState>("idle");
-  const [currencyMessage, setCurrencyMessage] = useState("");
+  const { state, message, fail, run } = useSaveState();
+  const {
+    state: currencyState,
+    message: currencyMessage,
+    run: runCurrency,
+  } = useSaveState();
 
   // Saved on change rather than behind a button: it is a single-choice display
   // preference with an immediately visible effect, so a "Save" step would just
   // be a second click before seeing what you picked.
   const changeCurrency = async (code: string) => {
     if (!isSupportedCurrency(code)) return;
-    setCurrencyState("saving");
-    try {
-      await onSave({ displayCurrency: code });
-      // Only after the server has stored it. useAuth caches the user from
-      // mount, so this is what makes the change visible without a reload.
-      applyDisplayCurrency(code);
-      setCurrencyState("saved");
-      setCurrencyMessage(
-        code === "USD"
-          ? "Showing amounts in US dollars."
-          : `Showing amounts in ${CURRENCY_LABELS[code]}.`,
-      );
-    } catch (err) {
-      setCurrencyState("error");
-      setCurrencyMessage(
-        err instanceof Error ? err.message : "Could not change currency.",
-      );
-    }
+    await runCurrency(
+      async () => {
+        await onSave({ displayCurrency: code });
+        // Only after the server has stored it, so a failed save never leaves
+        // the UI showing a currency the account does not have.
+        applyDisplayCurrency(code);
+      },
+      code === "USD"
+        ? "Showing amounts in US dollars."
+        : `Showing amounts in ${CURRENCY_LABELS[code]}.`,
+    );
   };
 
   // The store only holds a balance once something has fetched one, and it is
@@ -82,19 +76,13 @@ export function BillingSection({
     e.preventDefault();
     const parsed = Number(threshold);
     if (!Number.isFinite(parsed) || parsed < 0) {
-      setState("error");
-      setMessage("Enter a threshold of zero or more.");
+      fail("Enter a threshold of zero or more.");
       return;
     }
-    setState("saving");
-    try {
-      await onSave({ lowBalanceUsdMicros: usdToMicros(parsed) });
-      setState("saved");
-      setMessage("Low balance threshold saved.");
-    } catch (err) {
-      setState("error");
-      setMessage(err instanceof Error ? err.message : "Could not save.");
-    }
+    await run(
+      () => onSave({ lowBalanceUsdMicros: usdToMicros(parsed) }),
+      "Low balance threshold saved.",
+    );
   };
 
   return (

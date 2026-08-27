@@ -11,9 +11,8 @@ import {
   SettingRow,
   SettingsSection,
   inputStyle,
+  useSaveState,
 } from "@/components/settings/ui";
-
-type SaveState = "idle" | "saving" | "saved" | "error";
 
 // `user` is deliberately non-nullable: the form below seeds its state with
 // useState, which ignores later prop changes, so mounting with a half-loaded
@@ -29,27 +28,23 @@ export function AccountSection({
 }) {
   const [name, setName] = useState(user.name);
   const [org, setOrg] = useState(user.orgName);
-  const [profileState, setProfileState] = useState<SaveState>("idle");
-  const [profileMessage, setProfileMessage] = useState("");
+  const {
+    state: profileState,
+    message: profileMessage,
+    fail: failProfile,
+    run: runProfile,
+  } = useSaveState();
 
   const saveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
-      setProfileState("error");
-      setProfileMessage("Name can't be empty.");
+      failProfile("Name can't be empty.");
       return;
     }
-    setProfileState("saving");
-    try {
-      await onProfileSaved(name.trim(), org.trim());
-      setProfileState("saved");
-      setProfileMessage("Profile updated.");
-    } catch (err) {
-      setProfileState("error");
-      setProfileMessage(
-        err instanceof Error ? err.message : "Could not save your profile.",
-      );
-    }
+    await runProfile(
+      () => onProfileSaved(name.trim(), org.trim()),
+      "Profile updated.",
+    );
   };
 
   return (
@@ -180,8 +175,7 @@ function PasswordSection() {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [state, setState] = useState<SaveState>("idle");
-  const [message, setMessage] = useState("");
+  const { state, message, fail, run } = useSaveState();
 
   const { meetsMinimum } = scorePassword(next);
   const matches = next.length > 0 && next === confirm;
@@ -195,34 +189,24 @@ function PasswordSection() {
     // The button is disabled unless these hold; kept as a guard because form
     // submission can still be triggered by Enter in some browsers.
     if (!meetsMinimum) {
-      setState("error");
-      setMessage(`New password must be at least ${MIN_LENGTH} characters.`);
+      fail(`New password must be at least ${MIN_LENGTH} characters.`);
       return;
     }
     // Caught here rather than server-side: the backend has no reason to know
     // about a confirmation field, and a round-trip to say "they don't match"
     // is a worse experience than saying it immediately.
     if (next !== confirm) {
-      setState("error");
-      setMessage("The new passwords don't match.");
+      fail("The new passwords don't match.");
       return;
     }
-    setState("saving");
-    try {
+    // run() reports the server's own wording on failure, which distinguishes a
+    // wrong current password from an OAuth-only account that has no password.
+    await run(async () => {
       await auth.changePassword(current, next);
-      setState("saved");
-      setMessage("Password changed.");
       setCurrent("");
       setNext("");
       setConfirm("");
-    } catch (err) {
-      // Carries the server's own wording, which distinguishes a wrong current
-      // password from an OAuth-only account that has no password at all.
-      setState("error");
-      setMessage(
-        err instanceof Error ? err.message : "Could not change your password.",
-      );
-    }
+    }, "Password changed.");
   };
 
   return (
