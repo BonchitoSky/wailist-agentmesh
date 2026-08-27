@@ -64,9 +64,17 @@ var readOnlyBlocked = []struct {
 // Split out from the middleware so the rules can be tested without standing up
 // a router or a request chain.
 //
-// A trailing slash is normalised away first: chi routes "/workflows/" to the
-// same handler as "/workflows", so a rule that only matched the bare form
-// would be trivially sidestepped.
+// The trailing slash is normalised away first. To be precise about why, since
+// an earlier version of this comment got it wrong: chi does NOT currently
+// route "/workflows/" to the "/workflows" handler. With no StripSlashes or
+// RedirectSlashes registered in router.go, the trailing-slash form matches no
+// route at all and chi answers 404 -- before this middleware is consulted,
+// because a group-scoped middleware only runs for paths the router matched.
+// TestTrailingSlashNeverReachesTheGroup in router_test.go pins that.
+//
+// So the normalisation is defence in depth, not a live requirement: the day
+// somebody adds slash-handling middleware, these rules must still hold, and
+// four lines that fail safe are cheaper than the bypass they would leave.
 func blocksWrite(method, path string) bool {
 	if len(path) > 1 {
 		path = strings.TrimRight(path, "/")
