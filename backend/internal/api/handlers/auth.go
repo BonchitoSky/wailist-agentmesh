@@ -95,7 +95,10 @@ func (d *Deps) SignUp(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		Org      string `json:"org"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respond.Error(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
 
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
 	body.Name = strings.TrimSpace(body.Name)
@@ -154,7 +157,10 @@ func (d *Deps) SignIn(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respond.Error(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
 
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
 	if body.Email == "" || body.Password == "" {
@@ -245,7 +251,10 @@ func (d *Deps) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		Name    string `json:"name"`
 		OrgName string `json:"orgName"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respond.Error(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
 	body.Name = strings.TrimSpace(body.Name)
 	body.OrgName = strings.TrimSpace(body.OrgName)
 	if body.Name == "" {
@@ -281,7 +290,10 @@ func (d *Deps) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		CurrentPassword string `json:"currentPassword"`
 		NewPassword     string `json:"newPassword"`
 	}
-	json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respond.Error(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
 
 	if len(body.NewPassword) < 8 {
 		respond.Error(w, http.StatusBadRequest, "new password must be at least 8 characters")
