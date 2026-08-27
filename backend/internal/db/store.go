@@ -1259,7 +1259,7 @@ func (s *Store) GetUserSettings(ctx context.Context, userID string) (models.User
 // in SQL means a request only ever moves what it actually sent, and costs one
 // round trip rather than two.
 //
-// The column CHECK constraints (see migration 000020) are the real guard on
+// The column CHECK constraints (see migration 000022) are the real guard on
 // range validity; handler validation exists to return a useful 400 rather than
 // to be the only thing standing between a bad value and the table.
 func (s *Store) UpsertUserSettings(ctx context.Context, userID string, p models.UserSettingsPatch) (models.UserSettings, error) {
