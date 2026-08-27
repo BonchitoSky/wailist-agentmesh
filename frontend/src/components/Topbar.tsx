@@ -108,10 +108,7 @@ export function Topbar() {
         {/* Workspace and network are context: the first things to go when
             the row runs out of width (.am-topbar-context is hidden below
             768px). */}
-        <div
-          className="am-topbar-context"
-          style={{ display: "flex", alignItems: "center", gap: 8 }}
-        >
+        <div className="am-topbar-context">
           <button style={ghostBtnSm}>{orgName} ▾</button>
           <Pill mono dot tone="warm">
             {ALGORAND_NETWORK}

@@ -228,6 +228,13 @@
   padding: 0 12px;
 }
 
+/* Owned here, not inline, so the breakpoint below can actually override it. */
+.am-topbar-context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 /* One 56px row of brand + workspace + network + three nav links + avatar needs
    well over 375px, so on a phone the bar wraps: identity stays on the first
    row, navigation drops to a full-width second row where the links are wide,
@@ -252,7 +259,11 @@
     gap: 10px;
   }
   /* The workspace switcher and the network pill are context, not navigation.
-     They are the first things to go when the row runs out of width. */
+     They are the first things to go when the row runs out of width.
+     `display` is set on the class rather than inline in Topbar.tsx for a
+     reason worth stating: an inline `display: flex` outranks any stylesheet
+     rule, so this `none` silently never applied and the cluster stayed on
+     screen at every width. */
   .am-topbar-context {
     display: none;
   }
