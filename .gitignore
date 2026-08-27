@@ -54,6 +54,7 @@ frontend/next-env.d.ts
 # backend
 /backend/server
 /backend/walletgen
+/backend/x402pay
 /backend/*.env
 /backend/.env
 *.test
@@ -61,9 +62,8 @@ frontend/next-env.d.ts
 # test utilities (local dev only)
 /test-x402/
 
-# docs build artifacts
-/docs/whitepaper/*.docx
-/docs/whitepaper/*.py
+# git worktrees
+/.worktrees/
 
 # root-level node_modules
 /node_modules/
@@ -82,5 +82,3 @@ frontend/next-env.d.ts
 /Docs/
 # subagent-driven-development progress ledger (scratch, not part of the shipped project)
 /.superpowers/
-# subagent-driven-development plans/specs (scratch, not part of the shipped project)
-/docs/superpowers/
