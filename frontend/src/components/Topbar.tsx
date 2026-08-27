@@ -105,6 +105,9 @@ export function Topbar() {
           <Logo size={18} />
         </button>
         <Hairline vertical length={22} />
+        {/* Workspace and network are context: the first things to go when
+            the row runs out of width (.am-topbar-context is hidden below
+            768px). */}
         <div
           className="am-topbar-context"
           style={{ display: "flex", alignItems: "center", gap: 8 }}
@@ -113,14 +116,19 @@ export function Topbar() {
           <Pill mono dot tone="warm">
             {ALGORAND_NETWORK}
           </Pill>
-          {!can("workflow.editGraph", readOnly) && (
-            <span title="Editing happens in the AgentMesh desktop app.">
-              <Pill mono dot tone="warm">
-                viewing only
-              </Pill>
-            </span>
-          )}
         </div>
+        {/* Deliberately OUTSIDE that cluster. This pill is not context --
+            it is the explanation for why the create/deploy controls are
+            missing, and a phone is where it is needed most. Collapsing it
+            with the workspace switcher left a viewer on a narrow screen
+            with the controls gone and nothing saying why. */}
+        {!can("workflow.editGraph", readOnly) && (
+          <span title="Editing happens in the AgentMesh desktop app.">
+            <Pill mono dot tone="warm">
+              viewing only
+            </Pill>
+          </span>
+        )}
       </div>
       <div className="am-topbar-spacer" style={{ flex: 1 }} />
       {/* Navigation + account — the other group */}
