@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/subtle"
+	"log"
 	"net/http"
 	"os"
 	"regexp"
@@ -99,6 +100,18 @@ func blocksWrite(method, path string) bool {
 func NewReadOnlyMiddleware() func(http.Handler) http.Handler {
 	enabled := isTruthy(os.Getenv(readOnlyEnvVar))
 	editorKey := os.Getenv(editorKeyEnvVar)
+
+	// Logged because the failure mode is silent: a mistyped variable name
+	// leaves the mode OFF and nothing anywhere says so. An operator who set
+	// it and reads "disabled" here knows immediately that it did not take.
+	// (A typed config loader would be the real fix, but this repo has no
+	// config package -- auth.go and middleware.go read the environment the
+	// same way -- and introducing one is well outside this change.)
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	log.Printf("web read-only: %s (%s)", state, readOnlyEnvVar)
 
 	return func(next http.Handler) http.Handler {
 		if !enabled {
