@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useLayoutEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { WorkflowNode } from "@/lib/types";
 import { BrandLogo } from "./nodes/brandLogos";
 import { PALETTE_TWO_COL_MIN } from "./panelSizing";
@@ -292,6 +292,23 @@ export function PalettePanel({
   const [tab, setTab] = useState<TabId>("triggers");
   const [q, setQ] = useState("");
 
+  // Only consulted when `width` is not a number. Starts null, and one column
+  // is the pre-measurement default: narrow is the failing case, so erring
+  // that way costs a single reflow instead of a frame of squeezed rows.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [measuredWidth, setMeasuredWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof width === "number") return;
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (typeof w === "number") setMeasuredWidth(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [width]);
+
   const tabDef = PALETTE_TABS.find((t) => t.id === tab)!;
   const items = tabDef.items() as unknown[];
   const mapped = useMemo(
@@ -359,14 +376,24 @@ export function PalettePanel({
 
   // Reflow the item list into two columns once the panel is wide enough.
   //
-  // A non-numeric width means the panel is filling its container rather than
-  // being dragged to a size -- today that is only the bottom sheet, which
-  // spans the whole window. The palette is offered there solely on a
-  // computer (a handheld gets no palette at all), and no desktop browser
-  // window goes near PALETTE_TWO_COL_MIN, so two columns is always the right
-  // answer in that case and is worth more than a ResizeObserver here.
+  // A numeric width is authoritative -- the resizable desktop column knows
+  // exactly how wide it is, so it needs no measuring and never flashes.
+  //
+  // A non-numeric width means the panel is filling its container (the bottom
+  // sheet), and that has to be MEASURED rather than assumed. An earlier
+  // version hardcoded two columns here on the reasoning that no desktop
+  // window gets near PALETTE_TWO_COL_MIN -- which stopped being true once
+  // read-only became device-based: a laptop with a 400px-wide window is now
+  // an editor whose palette renders in the sheet at 400px, and two columns
+  // there squeezes every row.
   const cols =
-    typeof width === "number" ? (width >= PALETTE_TWO_COL_MIN ? 2 : 1) : 2;
+    typeof width === "number"
+      ? width >= PALETTE_TWO_COL_MIN
+        ? 2
+        : 1
+      : measuredWidth !== null && measuredWidth >= PALETTE_TWO_COL_MIN
+        ? 2
+        : 1;
 
   // FLIP: when the column count changes, glide each item from its old position
   // to its new one instead of letting the grid snap. Rects are captured every
@@ -408,6 +435,7 @@ export function PalettePanel({
 
   return (
     <div
+      ref={rootRef}
       style={{
         width,
         flexShrink: 0,
