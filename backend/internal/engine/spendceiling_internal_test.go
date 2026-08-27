@@ -131,3 +131,39 @@ func TestPreflightCheckEnforcesBalanceAtTheProbeFloor(t *testing.T) {
 		t.Fatalf("want an insufficient-credits error at the probe floor, got %v", err)
 	}
 }
+
+// The wiring test. Everything above calls preflightCheck directly, which proves
+// the guard works *when called* -- and for a long time nothing called it with a
+// real price, so the ceiling was green in tests while permitting a $1000 charge
+// against a $1 limit in production.
+//
+// This drives the same PaymentLedger.Reserve closure the real x402 payment path
+// uses, so it fails if the ceiling is ever unwired again, which a direct
+// preflightCheck test structurally cannot.
+func TestPaymentLedgerRefusesAChargeAboveTheUserCeiling(t *testing.T) {
+	r, wf := ceilingFixture(t, 100_000_000) // $100 balance, far above the charge
+	setCeiling(t, r, wf.UserID, 1_000_000)  // $1 per-call limit
+
+	ledger := r.newPaymentLedger(wf, models.Run{ID: fmt.Sprintf("ceiling-wiring-%d", time.Now().UnixNano())})
+
+	err := ledger.Reserve(context.Background(), 20_000_000) // $20 -- affordable, over the limit
+	if err == nil {
+		t.Fatal("want a $20 charge refused against a $1 per-call limit, got nil")
+	}
+	if !strings.Contains(err.Error(), "per-call limit") {
+		t.Fatalf("want the per-call-limit error, got %v", err)
+	}
+}
+
+// The other half: the ceiling must not block a charge it permits, or every paid
+// call fails for anyone who sets one.
+func TestPaymentLedgerAllowsAChargeUnderTheUserCeiling(t *testing.T) {
+	r, wf := ceilingFixture(t, 100_000_000)
+	setCeiling(t, r, wf.UserID, 20_000_000) // $20 limit
+
+	ledger := r.newPaymentLedger(wf, models.Run{ID: fmt.Sprintf("ceiling-ok-%d", time.Now().UnixNano())})
+
+	if err := ledger.Reserve(context.Background(), 1_000_000); err != nil { // $1
+		t.Fatalf("want a $1 charge allowed under a $20 limit, got %v", err)
+	}
+}
