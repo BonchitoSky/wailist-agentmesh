@@ -361,9 +361,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // chat turn need that signal: a failure here only raises a toast, and
   // without an answer the turn would sit on "working…" forever.
   //
-  // The deployed check lives here, not only in onRun: the chat panel calls
-  // startRun directly, so keeping the guard upstream silently dropped
-  // "Deploy first to run" for every message sent from the console.
+  // The guard lives here, not only in onRun: the chat panel calls startRun
+  // directly, so keeping it upstream silently dropped the explanation for
+  // every message sent from the console.
   const startRun = useCallback(
     async (input?: Record<string, unknown>): Promise<string | null> => {
       if (!workflow) return null;
