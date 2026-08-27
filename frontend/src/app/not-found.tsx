@@ -20,6 +20,10 @@ export default function NotFound() {
 
       {/* Main card panel */}
       <div className="reveal" style={cardStyle}>
+        {/* AgentMesh branding */}
+        <div style={brandingStyle}>
+          <Logo size={28} />
+        </div>
         {/* Animated disconnected network node graphic */}
         <div style={graphicContainerStyle}>
           <svg width="120" height="120" viewBox="0 0 120 120" fill="none" aria-hidden="true">
@@ -59,8 +63,8 @@ export default function NotFound() {
           </svg>
         </div>
 
-        {/* 404 status indicator */}
-        <div style={statusLabelStyle}>404 — Route Lost</div>
+        {/* 404 error code */}
+        <div style={errorCodeStyle}>404</div>
 
         {/* Heading */}
         <h1 style={headingStyle}>Connection Lost</h1>
@@ -79,11 +83,6 @@ export default function NotFound() {
             Return Home
           </Link>
         </div>
-      </div>
-      
-      {/* Branding watermark */}
-      <div style={footerStyle}>
-        <Logo size={14} />
       </div>
     </div>
   );
@@ -139,22 +138,23 @@ const cardStyle: React.CSSProperties = {
   alignItems: "center",
 };
 
+const brandingStyle: React.CSSProperties = {
+  marginBottom: "24px",
+};
+
 const graphicContainerStyle: React.CSSProperties = {
   marginBottom: "24px",
   animation: "float-y 6s ease-in-out infinite",
 };
 
-const statusLabelStyle: React.CSSProperties = {
+const errorCodeStyle: React.CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: "11px",
-  letterSpacing: "0.15em",
-  textTransform: "uppercase",
+  fontSize: "72px",
+  fontWeight: 700,
+  letterSpacing: "-0.04em",
+  lineHeight: 1,
   color: "var(--danger)",
-  background: "rgba(255, 92, 92, 0.1)",
-  border: "1px solid rgba(255, 92, 92, 0.2)",
-  borderRadius: "999px",
-  padding: "4px 12px",
-  marginBottom: "16px",
+  marginBottom: "8px",
 };
 
 const headingStyle: React.CSSProperties = {
@@ -211,8 +211,4 @@ const secondaryButtonStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const footerStyle: React.CSSProperties = {
-  marginTop: "48px",
-  opacity: 0.5,
-  zIndex: 1,
-};
+
