@@ -65,7 +65,12 @@ The whole cycle takes under 5 seconds. Algorand transaction fees are ~$0.0002, w
 | 5 LLM providers, 20+ models (Gemini, OpenAI, Anthropic, Groq, Mistral) | ✅ |
 | Agentic tool-calling loop (up to 15 iterations per run) | ✅ |
 | x402 paid API tool nodes with one-click discovery | ✅ |
+| x402 Bazaar — browse published paid APIs, add to canvas in one click | ✅ |
+| Standard HTTP tools + built-in web search | ✅ |
+| ~40 action connectors (Slack, Discord, Notion, GitHub, Stripe, …) | ✅ |
+| Webhook trigger — run a deployed workflow from an HTTP call | ✅ |
 | Algorand wallet per agent — deploy, fund, check balance | ✅ |
+| BYOK + platform-key billing, credit top-ups (INR / crypto), usage dashboard | ✅ |
 | Live streaming run logs | ✅ |
 | Email action node | ✅ |
 | GitHub + Google OAuth, email/password auth | ✅ |
@@ -75,12 +80,10 @@ The whole cycle takes under 5 seconds. Algorand transaction fees are ~$0.0002, w
 
 ## What's coming
 
-- **Standard HTTP tools** — call any API, not just x402 ones
-- **Webhook + schedule triggers** — run agents on a timer or HTTP event
+- **Schedule triggers** — run agents on a timer
 - **Memory nodes** — agents that remember across runs
 - **Run history** — browse and replay past runs
 - **Agent-to-agent calls** — deploy a workflow as an x402 endpoint, let other agents call and pay it
-- **x402 marketplace** — browse published paid APIs, add to canvas in one click
 - **On-chain run receipts** — immutable audit trail anchored on Algorand
 
 ---
@@ -93,4 +96,6 @@ Want to publish a paid API that AgentMesh agents can discover and pay for? See t
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) to get started.
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) to get started — it covers local setup, the API surface, the DB schema, and the test layout.
+
+**Hacktoberfest:** this repo is opted in. During October, merged or `hacktoberfest-accepted` PRs count toward your total. Look for issues labelled `good first issue` and `hacktoberfest`, and read the Hacktoberfest section of `CONTRIBUTING.md` first.
