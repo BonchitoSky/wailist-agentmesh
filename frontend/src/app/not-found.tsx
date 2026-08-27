@@ -1,9 +1,17 @@
 import Link from "next/link";
 import { Logo } from "@/components/ui";
 
+const NOT_FOUND_CSS = `
+.not-found-container {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+`;
+
 export default function NotFound() {
   return (
-    <div style={containerStyle}>
+    <div className="not-found-container" style={containerStyle}>
+      <style>{NOT_FOUND_CSS}</style>
       {/* Subtle glow background effect */}
       <div style={glowBgStyle} />
       
@@ -14,7 +22,7 @@ export default function NotFound() {
       <div className="reveal" style={cardStyle}>
         {/* Animated disconnected network node graphic */}
         <div style={graphicContainerStyle}>
-          <svg width="120" height="120" viewBox="0 0 120 120" fill="none">
+          <svg width="120" height="120" viewBox="0 0 120 120" fill="none" aria-hidden="true">
             {/* Glowing outer dashed indicator */}
             <circle
               cx="60"
@@ -86,7 +94,6 @@ const containerStyle: React.CSSProperties = {
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  minHeight: "100vh",
   background: "var(--bg)",
   color: "var(--fg)",
   fontFamily: "var(--font-sans)",
