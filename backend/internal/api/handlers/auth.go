@@ -199,13 +199,17 @@ func (d *Deps) SignOut(w http.ResponseWriter, r *http.Request) {
 // AuthUser type -- so that a stale cached response still type-checks -- which
 // meant nothing caught the gap: saving a profile silently reset the whole app's
 // display currency to USD and blanked "member since".
-func userResponse(user models.User, displayCurrency string) map[string]any {
+func userResponse(user models.User, settings models.UserSettings) map[string]any {
 	result := map[string]any{
 		"id":              user.ID,
 		"email":           user.Email,
 		"name":            user.Name,
 		"orgName":         user.OrgName,
-		"displayCurrency": displayCurrency,
+		"displayCurrency": settings.DisplayCurrency,
+		// Carried here so pages that never open Settings still warn at the
+		// user's own threshold. It costs nothing extra: the settings row is
+		// already read for displayCurrency.
+		"lowBalanceUsdMicros": settings.LowBalanceUSDMicros,
 		// Selected by GetUserByID. The settings page shows it as "member since";
 		// nothing else needs it.
 		"createdAt": user.CreatedAt,
@@ -216,16 +220,16 @@ func userResponse(user models.User, displayCurrency string) map[string]any {
 	return result
 }
 
-// displayCurrencyFor reads the account's display preference, degrading to the
+// settingsFor reads the account's settings row, degrading to the defaults
 // default instead of propagating: a settings read failing must never turn a
 // profile request into a sign-out. Costs one indexed primary-key lookup.
-func (d *Deps) displayCurrencyFor(r *http.Request, userID, logPrefix string) string {
+func (d *Deps) settingsFor(r *http.Request, userID, logPrefix string) models.UserSettings {
 	settings, err := d.Store.GetUserSettings(r.Context(), userID)
 	if err != nil {
-		log.Printf("%s: display currency: %v", logPrefix, err)
-		return models.DefaultCurrency
+		log.Printf("%s: user settings: %v", logPrefix, err)
+		return models.DefaultUserSettings()
 	}
-	return settings.DisplayCurrency
+	return settings
 }
 
 func (d *Deps) Me(w http.ResponseWriter, r *http.Request) {
@@ -238,7 +242,7 @@ func (d *Deps) Me(w http.ResponseWriter, r *http.Request) {
 	// Carried on /auth/me rather than fetched separately, because every page
 	// already calls this endpoint once and none of them should gain a second
 	// request for a preference that is USD for most accounts.
-	respond.JSON(w, http.StatusOK, userResponse(user, d.displayCurrencyFor(r, userID, "me")))
+	respond.JSON(w, http.StatusOK, userResponse(user, d.settingsFor(r, userID, "me")))
 }
 
 // UpdateProfile sets the signed-in user's display name and organization
@@ -268,7 +272,7 @@ func (d *Deps) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	respond.JSON(w, http.StatusOK, userResponse(user, d.displayCurrencyFor(r, userID, "update profile")))
+	respond.JSON(w, http.StatusOK, userResponse(user, d.settingsFor(r, userID, "update profile")))
 }
 
 // ChangePassword sets a new password for the signed-in user after verifying

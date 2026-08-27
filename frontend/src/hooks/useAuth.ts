@@ -1,6 +1,8 @@
 "use client";
 import { useCallback, useSyncExternalStore } from "react";
 import { auth, AuthUser } from "@/lib/api";
+import { setLowBalanceThresholdUSD } from "@/lib/credits/store";
+import { microsToUSDNumber } from "@/components/settings/ui";
 
 const UI_COOKIE = "agentmesh_ui";
 const TTL = 60 * 60 * 24 * 7; // 7 days -- matches backend JWT TTL
@@ -50,6 +52,13 @@ async function load(): Promise<void> {
   try {
     const u = await auth.me();
     setUICookie();
+    // Applied here rather than only from the settings page: the low-balance
+    // banner and the canvas indicator render on pages a user may never leave,
+    // and without this they warn off the store's built-in default instead of
+    // the threshold the account actually set.
+    if (typeof u.lowBalanceUsdMicros === "number") {
+      setLowBalanceThresholdUSD(microsToUSDNumber(u.lowBalanceUsdMicros));
+    }
     commit({ signedIn: true, loading: false, user: u });
   } catch {
     clearUICookie();

@@ -249,3 +249,12 @@ export function formatDateUTC(iso?: string): string {
 export const microsToUSD = (micros: number): string => String(micros / 1e6);
 
 export const usdToMicros = (usd: number): number => Math.round(usd * 1e6);
+
+/**
+ * The same conversion as microsToUSD, kept numeric.
+ *
+ * Callers that feed a number (the credit store's threshold) cannot use the
+ * string form, and open-coding `/ 1e6` at those sites is how the two drift
+ * apart. Both helpers divide identically, so they cannot disagree.
+ */
+export const microsToUSDNumber = (micros: number): number => micros / 1e6;

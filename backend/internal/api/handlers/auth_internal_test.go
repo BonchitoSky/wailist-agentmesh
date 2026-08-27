@@ -23,13 +23,14 @@ func TestUserResponseCarriesEveryFieldTheClientReadsBack(t *testing.T) {
 		Name:      "Ada",
 		OrgName:   "Acme",
 		CreatedAt: time.Unix(0, 0).UTC(),
-	}, "EUR")
+	}, models.UserSettings{DisplayCurrency: "EUR", LowBalanceUSDMicros: 5_000_000})
 
 	want := []string{
 		"createdAt",
 		"displayCurrency",
 		"email",
 		"id",
+		"lowBalanceUsdMicros",
 		"name",
 		"needsOnboarding",
 		"orgName",
@@ -54,11 +55,11 @@ func TestUserResponseCarriesEveryFieldTheClientReadsBack(t *testing.T) {
 // needsOnboarding is derived, not passed in: an OAuth account arrives with no
 // name and must be prompted, while a saved profile never should be.
 func TestUserResponseDerivesNeedsOnboardingFromTheName(t *testing.T) {
-	unnamed := userResponse(models.User{ID: "u1"}, models.DefaultCurrency)
+	unnamed := userResponse(models.User{ID: "u1"}, models.DefaultUserSettings())
 	if unnamed["needsOnboarding"] != true {
 		t.Error("want an account with no name to still need onboarding")
 	}
-	named := userResponse(models.User{ID: "u1", Name: "Ada"}, models.DefaultCurrency)
+	named := userResponse(models.User{ID: "u1", Name: "Ada"}, models.DefaultUserSettings())
 	if named["needsOnboarding"] != false {
 		t.Error("want a named account not to be prompted again")
 	}

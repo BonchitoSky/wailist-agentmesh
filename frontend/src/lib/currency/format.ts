@@ -67,17 +67,27 @@ export const CURRENCY_SYMBOLS: Record<Currency, string> = {
  * ¥12,355.69 for a currency with no subunit while the Intl-formatted figures
  * elsewhere on the same page correctly show ¥12,356.
  */
+// Intl.NumberFormat construction does locale-data lookup and is not free, and
+// these are called per render -- the spend-limit preview rebuilds on every
+// keystroke, the usage table on every sort. The set of currency codes is the
+// fixed shortlist, so caching by code is bounded.
+const fractionDigitsByCurrency = new Map<string, number>();
+
 export function currencyFractionDigits(currency: string): number {
+  const cached = fractionDigitsByCurrency.get(currency);
+  if (cached !== undefined) return cached;
+  let digits = 2;
   try {
-    return (
+    digits =
       new Intl.NumberFormat("en", {
         style: "currency",
         currency,
-      }).resolvedOptions().maximumFractionDigits ?? 2
-    );
+      }).resolvedOptions().maximumFractionDigits ?? 2;
   } catch {
-    return 2;
+    digits = 2;
   }
+  fractionDigitsByCurrency.set(currency, digits);
+  return digits;
 }
 
 export function isSupportedCurrency(code: string): code is Currency {

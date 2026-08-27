@@ -13,7 +13,7 @@ import { BillingSection } from "@/components/settings/sections/Billing";
 import { ExecutionSection } from "@/components/settings/sections/Execution";
 import { DeveloperSection } from "@/components/settings/sections/Developer";
 import { ConnectionsSection } from "@/components/settings/sections/Connections";
-import { panelStyle } from "@/components/settings/ui";
+import { microsToUSDNumber, panelStyle } from "@/components/settings/ui";
 
 const SETTINGS_CSS = `
 .set-grid { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 28px; align-items: start; }
@@ -81,7 +81,7 @@ export function SettingsPage() {
         // Keep the client-side credit store in step, so the low-balance banner
         // and the canvas indicator use the saved threshold immediately rather
         // than the built-in default until the next reload.
-        setLowBalanceThresholdUSD(s.lowBalanceUsdMicros / 1e6);
+        setLowBalanceThresholdUSD(microsToUSDNumber(s.lowBalanceUsdMicros));
       })
       .catch((e: unknown) =>
         setLoadError(
@@ -99,7 +99,7 @@ export function SettingsPage() {
     const saved = await settingsApi.update(patch);
     setSettings(saved);
     if (patch.lowBalanceUsdMicros !== undefined) {
-      setLowBalanceThresholdUSD(saved.lowBalanceUsdMicros / 1e6);
+      setLowBalanceThresholdUSD(microsToUSDNumber(saved.lowBalanceUsdMicros));
     }
   }, []);
 

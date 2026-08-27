@@ -33,6 +33,11 @@ export interface AuthUser {
   // no extra request. Optional so a response cached from before the field
   // existed falls back to the default rather than reading as undefined.
   displayCurrency?: string;
+  // The account's own low-balance threshold, carried on /auth/me so pages that
+  // never open Settings stop warning off the built-in default. Optional for the
+  // same reason the fields above are: a cached response predating it must still
+  // type-check.
+  lowBalanceUsdMicros?: number;
   // True for an OAuth account that has never set a name/org — Google and
   // GitHub only hand back a verified email, not an organization.
   needsOnboarding: boolean;
@@ -103,6 +108,7 @@ export const auth = {
       // currency in mock mode propagates exactly as it does in real mode
       // (where the server persists it and /auth/me reads it back).
       displayCurrency: MOCK_SETTINGS.displayCurrency,
+      lowBalanceUsdMicros: MOCK_SETTINGS.lowBalanceUsdMicros,
       needsOnboarding: false,
     };
   },
@@ -131,6 +137,7 @@ export const auth = {
       orgName,
       createdAt: "2026-01-01T00:00:00Z",
       displayCurrency: MOCK_SETTINGS.displayCurrency,
+      lowBalanceUsdMicros: MOCK_SETTINGS.lowBalanceUsdMicros,
       needsOnboarding: false,
     };
   },
