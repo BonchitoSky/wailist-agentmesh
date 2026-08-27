@@ -25,6 +25,7 @@ import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
 import { can } from "@/lib/readonly";
 import { ghostBtnSm, primaryBtnSm } from "@/components/ui/buttons";
 import { useIsCompact } from "@/hooks/useIsCompact";
+import { runBlockedMessage } from "./runBlocked";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import {
   PALETTE,
@@ -340,6 +341,18 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [workflow],
   );
 
+  // Null when a run can proceed. Naming the real obstacle matters most to a
+  // viewer, who cannot deploy and so cannot act on "deploy first" at all.
+  const runBlocked = useMemo(
+    () =>
+      runBlockedMessage({
+        deployed,
+        hasProviderNode,
+        canDeploy: can("workflow.deploy", readOnly),
+      }),
+    [deployed, hasProviderNode, readOnly],
+  );
+
   const buildMode =
     can("workflow.buildFromChat", readOnly) &&
     (!hasProviderNode || manualBuildMode);
@@ -354,8 +367,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const startRun = useCallback(
     async (input?: Record<string, unknown>): Promise<string | null> => {
       if (!workflow) return null;
-      if (!deployed) {
-        showToast("Deploy first to run");
+      if (runBlocked) {
+        showToast(runBlocked);
         return null;
       }
       try {
@@ -372,7 +385,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         return null;
       }
     },
-    [workflow, deployed, showToast],
+    [workflow, runBlocked, showToast],
   );
 
   const startBuild = useCallback(
@@ -411,8 +424,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   const onRun = useCallback(async () => {
     if (!workflow) return;
-    if (!deployed) {
-      showToast("Deploy first to run");
+    if (runBlocked) {
+      showToast(runBlocked);
       return;
     }
     if (running) {
@@ -431,7 +444,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       return;
     }
     await startRun();
-  }, [workflow, deployed, running, hasChatTrigger, startRun, showToast]);
+  }, [workflow, running, hasChatTrigger, startRun, showToast, runBlocked]);
 
   const onDragNodeStart = useCallback(
     (e: React.DragEvent, meta: Partial<WorkflowNode>) => {
