@@ -24,44 +24,15 @@ export default function NotFound() {
         <div style={brandingStyle}>
           <Logo size={28} />
         </div>
-        {/* Animated disconnected network node graphic */}
-        <div style={graphicContainerStyle}>
-          <svg width="120" height="120" viewBox="0 0 120 120" fill="none" aria-hidden="true">
-            {/* Glowing outer dashed indicator */}
-            <circle
-              cx="60"
-              cy="60"
-              r="45"
-              stroke="var(--accent)"
-              strokeWidth="1"
-              strokeDasharray="4 4"
-              style={{
-                opacity: 0.3,
-                animation: "glow-pulse 4s ease-in-out infinite",
-                transformOrigin: "center",
-              }}
-            />
-            {/* Inner boundary ring */}
-            <circle cx="60" cy="60" r="25" stroke="var(--border-strong)" strokeWidth="1" />
-            
-            {/* Disconnected central wallet hub */}
-            <circle cx="60" cy="60" r="10" fill="var(--bg-elev-3)" stroke="var(--danger)" strokeWidth="2" />
-            
-            {/* Detached peripheral nodes */}
-            <circle cx="25" cy="35" r="5" fill="var(--fg-dim)" />
-            <circle cx="95" cy="35" r="5" fill="var(--fg-dim)" />
-            <circle cx="60" cy="95" r="5" fill="var(--fg-dim)" />
-            
-            {/* Dotted broken connection lines */}
-            <line x1="25" y1="35" x2="60" y2="60" stroke="var(--border-strong)" strokeWidth="1.5" strokeDasharray="3 3" />
-            <line x1="95" y1="35" x2="60" y2="60" stroke="var(--border-strong)" strokeWidth="1.5" strokeDasharray="3 3" />
-            <line x1="60" y1="95" x2="60" y2="60" stroke="var(--border-strong)" strokeWidth="1.5" strokeDasharray="3 3" />
-            
-            {/* Internal caution sign */}
-            <path d="M57 52 L63 52 L61 58 Z" fill="var(--danger)" />
-            <circle cx="60" cy="62" r="0.8" fill="var(--danger)" />
-          </svg>
-        </div>
+        {/* AgentMesh logo mark */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/logo.png"
+          alt="AgentMesh"
+          width={120}
+          height={120}
+          style={logoMarkStyle}
+        />
 
         {/* 404 error code */}
         <div style={errorCodeStyle}>404</div>
@@ -142,9 +113,10 @@ const brandingStyle: React.CSSProperties = {
   marginBottom: "24px",
 };
 
-const graphicContainerStyle: React.CSSProperties = {
+const logoMarkStyle: React.CSSProperties = {
   marginBottom: "24px",
   animation: "float-y 6s ease-in-out infinite",
+  borderRadius: "22%",
 };
 
 const errorCodeStyle: React.CSSProperties = {
