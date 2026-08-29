@@ -649,9 +649,11 @@ body {
 }
 
 /* ── Canvas: narrow-screen notice ─────────────────────────────────────────
-   Visibility comes from `show-md`; this rule only supplies the surface. It
-   covers the editor rather than replacing it in the tree, so the change stays
-   a pure addition to CanvasPage's render. */
+   CanvasPage renders this in place of the editor tree below the breakpoint
+   (see the isNarrow check there) rather than overlaying it, so the graph, its
+   data fetch and the chat/SSE host never mount on a screen that can't use
+   them. `position: fixed` is a defensive leftover from when this was an
+   overlay -- harmless since nothing else is mounted alongside it now. */
 .canvas-narrow {
   position: fixed;
   inset: 0;
