@@ -47,7 +47,17 @@ jobs:
         run: go vet ./...
 
       - name: go test
-        run: go test ./...
+        # -p 1: every DB-touching package independently calls db.New() at
+        # TestMain/test-setup time, which runs golang-migrate's Up() against
+        # this one shared service-container Postgres. Built with -p >1
+        # (default, GOMAXPROCS), multiple package binaries hit that migrate
+        # step concurrently and can deadlock on golang-migrate's own
+        # pg_advisory_lock (SQLSTATE 40P01) -- confirmed non-deterministic
+        # by observing the same signature fail on unrelated master/feature
+        # branch runs, always inside a different package's migration
+        # bootstrap. -p 1 runs package binaries one at a time, serializing
+        # every db.New() call and removing the race outright.
+        run: go test -p 1 ./...
 
   frontend:
     name: frontend / lint, typecheck, build
