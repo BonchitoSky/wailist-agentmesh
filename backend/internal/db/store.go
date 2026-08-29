@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strconv"
 	"strings"
@@ -216,10 +217,33 @@ func unmarshalGraph(data []byte, w *models.Workflow) {
 
 // --- Run methods ---
 
-func (s *Store) CreateRun(ctx context.Context, workflowID, triggeredBy string, inputContext []byte) (models.Run, error) {
+// rowQuerier is the subset of *pgxpool.Pool and pgx.Tx that insertRun
+// needs, so it can run either as its own implicit single-statement
+// transaction (CreateRun, via s.pool) or as part of a caller-managed one
+// (CreateRunWithCooldown, via its tx).
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// insertRun does the actual runs INSERT+RETURNING+decode shared by
+// CreateRun and CreateRunWithCooldown -- pulled out so the two can't drift
+// (they used to duplicate this block verbatim) and so a fix here, like the
+// one below, only has to happen once.
+//
+// A failure decoding the returned input_context back into r.InputContext
+// is logged, not returned as a hard error: InputContext is typed `any`,
+// so this can't actually fail for the syntactically-valid JSON Postgres
+// already required to accept the row via `$3::jsonb` at INSERT time (a
+// real syntax error fails there, before this ever runs) -- but staying
+// silent about it would still violate this codebase's own "never swallow
+// an error silently" convention if that ever stops being true (e.g.
+// InputContext becoming a concrete struct type later), and the row itself
+// is already durably inserted at this point regardless, so there's
+// nothing to roll back over a decode issue.
+func insertRun(ctx context.Context, q rowQuerier, workflowID, triggeredBy string, inputContext []byte) (models.Run, error) {
 	var r models.Run
 	var ic []byte
-	err := s.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		INSERT INTO runs (workflow_id, triggered_by, status, input_context)
 		VALUES ($1, $2, 'running', $3::jsonb)
 		RETURNING id, workflow_id, triggered_by, status, started_at, finished_at, input_context
@@ -228,10 +252,138 @@ func (s *Store) CreateRun(ctx context.Context, workflowID, triggeredBy string, i
 		&r.StartedAt, &r.FinishedAt, &ic,
 	)
 	if err != nil {
-		return r, err
+		return models.Run{}, err
 	}
 	if ic != nil {
-		json.Unmarshal(ic, &r.InputContext)
+		if err := json.Unmarshal(ic, &r.InputContext); err != nil {
+			log.Printf("db: run %s: failed to decode stored input_context (%d bytes): %v", r.ID, len(ic), err)
+		}
+	}
+	return r, nil
+}
+
+func (s *Store) CreateRun(ctx context.Context, workflowID, triggeredBy string, inputContext []byte) (models.Run, error) {
+	return insertRun(ctx, s.pool, workflowID, triggeredBy, inputContext)
+}
+
+// advisoryLockNamespaceRunCooldown is the first key of the two-key
+// pg_advisory_xact_lock CreateRunWithCooldown takes. Any int32 works here --
+// what matters is that it puts this lock in Postgres's two-key advisory
+// lock space, which never overlaps the single-key space
+// LockOAuthCredentialForRefresh uses, so the two can never collide no
+// matter what workflowID/credential id hash to.
+const advisoryLockNamespaceRunCooldown = 1
+
+// ErrRunOnCooldown is returned by CreateRunWithCooldown when workflowID
+// started a run within the last cooldown window passed to it. RetryAfter
+// is how much longer the caller must wait.
+type ErrRunOnCooldown struct {
+	RetryAfter time.Duration
+}
+
+func (e *ErrRunOnCooldown) Error() string {
+	return fmt.Sprintf("workflow run cooldown active, retry after %s", e.RetryAfter.Round(time.Second))
+}
+
+// CreateRunWithCooldown is CreateRun plus an atomic, DB-backed minimum gap
+// between two run starts for the same workflow -- a blunt deterrent
+// against a leaked webhook URL or a bot hammering the public trigger
+// endpoint with no rate limit otherwise (handlers.TriggerRun/PublicTrigger
+// are the only callers).
+//
+// Deliberately DB-backed rather than an in-process map: (1) the check and
+// the insert happen in the same transaction, so a CreateRun failure below
+// this point rolls the whole thing back -- a caller that reasonably
+// retries right after a transient DB error never sees a phantom cooldown
+// for a run that never actually started; (2) it piggybacks on the
+// existing runs table instead of a separate unbounded map, so there is no
+// new storage to leak over a long-running process's lifetime; (3) since
+// Postgres is the one shared source of truth, this is correct regardless
+// of how many backend replicas are running, unlike an in-process lock
+// that only ever sees its own replica's traffic.
+//
+// pg_try_advisory_xact_lock (non-blocking), not the plain blocking
+// pg_advisory_xact_lock LockOAuthCredentialForRefresh uses below -- that
+// function WANTS a caller to wait for a concurrent refresh of the same
+// credential to finish. Here, waiting would be actively harmful: this repo
+// runs against the Supabase transaction pooler's small shared connection
+// budget, and a blocking lock means every request in a burst against the
+// same workflow (exactly the burst this cooldown exists to reject) queues
+// holding a pooled connection until the one ahead of it finishes -- turning
+// this anti-abuse check into a connection-pool-exhaustion vector that can
+// starve unrelated, legitimate requests across the whole app. A failed
+// try-lock is treated as "another request for this workflow is already
+// mid-check" and answered with the same cooldown response, so a burst still
+// gets rejected, it just never blocks a connection to do it.
+//
+// Uses the two-key form of the advisory lock (advisoryLockNamespaceRunCooldown,
+// hashtext(workflowID)) rather than a string-prefixed single key. Postgres
+// guarantees the two-key lock space never overlaps the single-key space
+// LockOAuthCredentialForRefresh uses below, so this new lock can never
+// collide with it regardless of hash values -- without needing to change
+// LockOAuthCredentialForRefresh's existing key formula (see its own doc
+// comment for why that matters: it's pre-existing, and changing its key
+// shape would desync old/new replicas mid-rollout).
+func (s *Store) CreateRunWithCooldown(ctx context.Context, workflowID, triggeredBy string, inputContext []byte, cooldown time.Duration) (models.Run, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return models.Run{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var locked bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1, hashtext($2))`, advisoryLockNamespaceRunCooldown, workflowID).Scan(&locked); err != nil {
+		return models.Run{}, fmt.Errorf("run cooldown: acquire advisory lock: %w", err)
+	}
+	if !locked {
+		// Best-effort: report the actual remaining cooldown, not the full
+		// duration. This read doesn't need (and doesn't take) the advisory
+		// lock -- it's a plain MVCC snapshot read on the already-held tx
+		// connection (not a fresh pool acquisition), purely to give
+		// the caller a more accurate Retry-After than "the whole window,"
+		// which could be up to `cooldown` longer than the real remaining
+		// wait if the lock holder's own check is almost done. Any error, or
+		// no rows yet, falls back to reporting the full cooldown -- correct
+		// (if imprecise) either way, since RetryAfter is a hint, not a
+		// correctness guarantee.
+		retryAfter := cooldown
+		var elapsedSecs float64
+		if err := tx.QueryRow(ctx, `
+			SELECT EXTRACT(EPOCH FROM (now() - started_at)) FROM runs
+			WHERE workflow_id = $1 ORDER BY started_at DESC LIMIT 1
+		`, workflowID).Scan(&elapsedSecs); err == nil {
+			if elapsed := time.Duration(elapsedSecs * float64(time.Second)); elapsed < cooldown {
+				retryAfter = cooldown - elapsed
+			}
+		}
+		return models.Run{}, &ErrRunOnCooldown{RetryAfter: retryAfter}
+	}
+
+	// EXTRACT(EPOCH FROM (now() - started_at)), not started_at scanned into
+	// Go and compared via time.Since: the elapsed duration must be computed
+	// against Postgres's own clock throughout, not the app server's --
+	// otherwise clock skew between hosts could make the cooldown window
+	// effectively longer or shorter than `cooldown` actually specifies.
+	var elapsedSecs float64
+	err = tx.QueryRow(ctx, `
+		SELECT EXTRACT(EPOCH FROM (now() - started_at)) FROM runs
+		WHERE workflow_id = $1 ORDER BY started_at DESC LIMIT 1
+	`, workflowID).Scan(&elapsedSecs)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return models.Run{}, fmt.Errorf("run cooldown: check last run: %w", err)
+	}
+	if err == nil {
+		if elapsed := time.Duration(elapsedSecs * float64(time.Second)); elapsed < cooldown {
+			return models.Run{}, &ErrRunOnCooldown{RetryAfter: cooldown - elapsed}
+		}
+	}
+
+	r, err := insertRun(ctx, tx, workflowID, triggeredBy, inputContext)
+	if err != nil {
+		return models.Run{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return models.Run{}, err
 	}
 	return r, nil
 }
@@ -1341,13 +1493,39 @@ func (s *Store) DeleteOAuthCredential(ctx context.Context, id string) error {
 // exchange for correctness under the pooler this project actually runs
 // behind.
 //
-// hashtext's 64-bit collision space makes two different credential UUIDs
-// hashing to the same lock key astronomically unlikely; a false-positive
-// collision would only ever cause two unrelated refreshes to serialize
-// behind each other, never a correctness issue.
+// hashtext() returns a 32-bit int4, so this has a 32-bit collision space --
+// not the 64-bit space pg_advisory_xact_lock's bigint argument might
+// suggest. A false-positive collision between two different credential
+// UUIDs would only ever cause two unrelated refreshes to serialize behind
+// each other, never a correctness issue, so this is an acceptable
+// consequence at this scale rather than a negligible one -- worth
+// revisiting (e.g. hashing into a wider key, or the two-key form) if the
+// number of distinct OAuth credentials ever refreshed concurrently grows
+// large enough for that to matter in practice. Collision against
+// CreateRunWithCooldown's unrelated lock isn't a concern either way: that
+// one lives in Postgres's separate two-key advisory lock space (see its
+// own doc comment), so it can't collide with this single-key one
+// regardless of either one's actual key width.
+//
+// Key formula deliberately left as plain hashtext(id) -- unchanged since
+// before CreateRunWithCooldown was introduced. Prefixing it (e.g.
+// hashtext('oauth_credential:' || id)) to "namespace" it would change what
+// every in-flight replica computes for the same credential id: during a
+// rolling deploy, an old-binary replica and a new-binary replica would
+// then use different keys for the same credential and no longer serialize
+// against each other -- exactly the race this lock exists to prevent, and
+// avoidable entirely by giving new lock users their own key space instead
+// of changing this pre-existing one's.
 //
 // release must be called (via defer) once the caller is done -- it commits
 // the underlying transaction, which is what actually releases the lock.
+//
+// Same Begin+pg_advisory_xact_lock shape as CreateRunWithCooldown,
+// deliberately not shared: this one blocks until the lock is free (a
+// caller here wants to wait for a concurrent refresh of the same
+// credential to finish), whereas CreateRunWithCooldown uses the
+// non-blocking pg_try_advisory_xact_lock specifically to avoid queuing
+// pooled connections under a burst -- see that function's doc comment.
 func (s *Store) LockOAuthCredentialForRefresh(ctx context.Context, id string) (release func(context.Context), err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

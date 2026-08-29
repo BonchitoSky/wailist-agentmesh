@@ -159,18 +159,6 @@ func (r *Runner) addRunBilling(runID string, amountUSDMicros int64) {
 // terminating process indefinitely.
 const ledgerCompensationTimeout = 10 * time.Second
 
-// runTotalSettleTimeout bounds settleRunTotal's own facilitator round trip
-// (sign + Verify + Settle -- three real network calls, not a single locked
-// UPDATE), so it deliberately doesn't reuse ledgerCompensationTimeout.
-// reserveAndFundRun's identical FundRunReserve call has no timeout of its
-// own beyond the run's own ctx; settleRunTotal needs one because it runs
-// from a defer after ctx may already be cancelled (context.WithoutCancel),
-// but it should still give the facilitator as much room as the equivalent
-// pre-fund settlement effectively gets, not the much tighter DB-write
-// budget -- an overly tight bound here would spuriously drop a perfectly
-// good settlement under nothing worse than ordinary facilitator latency.
-const runTotalSettleTimeout = 60 * time.Second
-
 // newPaymentLedger builds the reserve/commit/release closures a real
 // on-chain tool402 payment (either dialect, standalone or agent-attached)
 // uses to atomically decrement the user's balance at the moment a payment
@@ -381,7 +369,18 @@ func (r *Runner) settleRunTotal(ctx context.Context, wf models.Workflow, run mod
 		criticalAlert(wf, run, "run total settlement failed (run already finished, DB billing already correct -- this is a missing on-chain receipt only)", err, "amount", amount)
 		return
 	}
-	if _, err := r.store.RecordRunFunding(ctx, run.ID, txID, amount); err != nil {
+	// Detached with its own budget, like every other compensating write in
+	// this file. The settle above has already moved real money on-chain, but
+	// ctx here is bounded by SelfSettleRetryBudget -- which a worst-case
+	// retry sequence can consume in full, leaving this write no time at all
+	// and producing an on-chain payment with no DB record of it. Inheriting
+	// ctx only ever appeared to work because the budget used to be
+	// over-provisioned past its own worst case; that slack was accidental,
+	// not a guarantee, and is exactly what a compensating write must not
+	// depend on.
+	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ledgerCompensationTimeout)
+	defer cancel()
+	if _, err := r.store.RecordRunFunding(bctx, run.ID, txID, amount); err != nil {
 		criticalAlert(wf, run, "run total settled on-chain but RecordRunFunding failed", err, "txID", txID, "amount", amount)
 	}
 }
@@ -499,7 +498,18 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		return runFundResult{}, err
 	}
 
-	txID, err := nodes.FundRunReserve(ctx, fundCfg, run.ID, creditReserve)
+	// NOT detached from ctx (no WithoutCancel) -- FundRunReserve only
+	// shields the one narrow, actually-unsafe-to-interrupt moment (the
+	// Settle HTTP call itself) internally, via its own detached
+	// sub-context -- see selfSettleWallet1ToWallet2/attemptSelfSettle's doc
+	// comments. A StopWorkflow can still land promptly during signing,
+	// Verify, or between retry attempts; SelfSettleRetryBudget below is
+	// just a backstop ceiling against an unbounded hang, not what makes
+	// this call safe to cancel. fundCfg comes from selfSettleConfig() above,
+	// not rebuilt here.
+	fctx, fcancel := context.WithTimeout(ctx, nodes.SelfSettleRetryBudget)
+	txID, err := nodes.FundRunReserve(fctx, fundCfg, run.ID, creditReserve)
+	fcancel()
 	if err != nil {
 		if errors.Is(err, nodes.ErrSettlementIndeterminate) {
 			// The settle response was lost -- we don't know whether the
@@ -520,7 +530,23 @@ func (r *Runner) reserveAndFundRun(ctx context.Context, wf models.Workflow, run 
 		return runFundResult{}, fmt.Errorf("x402 run funding failed: %w", err)
 	}
 
-	funding, err := r.store.RecordRunFunding(ctx, run.ID, txID, creditReserve)
+	// Detached, but for a different reason than settleRunTotal's own
+	// RecordRunFunding call: this one never inherited the settle budget
+	// (fctx above is cancelled immediately after FundRunReserve returns, and
+	// this ran on the plain ctx), so it was never at risk of being starved
+	// by a worst-case retry sequence. What it WAS exposed to is
+	// cancellation: FundRunReserve has already moved real money on-chain by
+	// this point, so a StopWorkflow landing here would fail this audit write
+	// and send us into the branch below -- failing the run over a
+	// bookkeeping gap for a payment that genuinely happened. WithoutCancel
+	// makes the record survive that, matching every other compensating
+	// write in this file.
+	//
+	// recCtx, not a second fctx: reusing that name here would silently
+	// reassign the one declared above rather than introduce a new binding.
+	recCtx, recCancel := context.WithTimeout(context.WithoutCancel(ctx), ledgerCompensationTimeout)
+	defer recCancel()
+	funding, err := r.store.RecordRunFunding(recCtx, run.ID, txID, creditReserve)
 	if err != nil {
 		// Real money already moved on-chain — this is a bookkeeping failure,
 		// not a payment failure. Do NOT release the DB reservation (the
@@ -637,8 +663,8 @@ func (r *Runner) debitAgentFee(ctx context.Context, wf models.Workflow, run mode
 // Run in a goroutine. Replaces the previous pattern of calling Run directly.
 func (r *Runner) Start(wf models.Workflow, run models.Run) {
 	ctx, cancel := context.WithCancel(context.Background())
-	r.registry.register(wf.ID, cancel)
-	go r.Run(ctx, wf, run)
+	gen := r.registry.register(wf.ID, cancel)
+	go r.Run(ctx, wf, run, gen)
 }
 
 // Stop cancels the active run for the given workflow ID. Returns false if no
@@ -656,9 +682,9 @@ func (r *Runner) finishRun(wf models.Workflow, run models.Run, status models.Run
 }
 
 // Run executes a workflow. Call via Start rather than directly.
-func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run) {
+func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, gen uint64) {
 	defer r.broker.Close(run.ID)
-	defer r.registry.deregister(wf.ID)
+	defer r.registry.deregister(wf.ID, gen)
 
 	// Tracks this run's non-tool402 billable total (see addRunBilling) so it
 	// can be settled as one lump-sum x402 payment once the run is done.
@@ -668,11 +694,17 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run) {
 	// needing to know about it. context.WithoutCancel + a bounded timeout
 	// matches the same compensating-write convention used elsewhere in this
 	// file (e.g. reserveAndFundRun's Cleanup), so the settlement still runs
-	// even if Stop() already cancelled ctx.
+	// even if Stop() already cancelled ctx. Uses nodes.SelfSettleRetryBudget,
+	// not a locally-hardcoded timeout: settleRunTotal's underlying retry
+	// loop (selfSettleWallet1ToWallet2) can make up to 3 real sign+verify+settle
+	// attempts, same as FundRunReserve/SettlePlatformFee, and needs the same
+	// ceiling those get -- a tighter one here would spuriously cut off a
+	// later retry attempt under nothing worse than ordinary facilitator
+	// latency.
 	runTotal := new(int64)
 	r.runBilling.Store(run.ID, runTotal)
 	defer func() {
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runTotalSettleTimeout)
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nodes.SelfSettleRetryBudget)
 		defer cancel()
 		r.settleRunTotal(sctx, wf, run, runTotal)
 		r.runBilling.Delete(run.ID)
