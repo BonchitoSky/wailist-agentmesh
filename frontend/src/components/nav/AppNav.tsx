@@ -69,7 +69,7 @@ export function AppNav({
   const [open, setOpen] = useState(false);
   const sheetId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
 
   useScrollLock(open, scrollContainer);
 
@@ -85,11 +85,17 @@ export function AppNav({
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
 
-  // Focus leaving the navigation region closes it.
+  // Focus leaving the trigger/sheet closes it. Scoped to those two rather than
+  // the whole root: `actions` (e.g. the account menu trigger) renders inside
+  // the same root but is not part of this disclosure, so focus moving there
+  // must close the sheet rather than being treated as "still inside".
   useEffect(() => {
     if (!open) return;
     const onFocusIn = (e: FocusEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (sheetRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("focusin", onFocusIn);
     return () => document.removeEventListener("focusin", onFocusIn);
@@ -136,7 +142,6 @@ export function AppNav({
 
   return (
     <div
-      ref={rootRef}
       className={`appnav appnav--${variant}${open ? " appnav--open" : ""}`}
       data-open={open || undefined}
     >
@@ -172,7 +177,7 @@ export function AppNav({
           </button>
         </div>
 
-        <div id={sheetId} className="appnav__sheet">
+        <div ref={sheetRef} id={sheetId} className="appnav__sheet">
           <nav aria-label="Primary">
             {groupNavItems(items).map(({ group, items: groupItems }) => (
               <div key={group || "_"}>
