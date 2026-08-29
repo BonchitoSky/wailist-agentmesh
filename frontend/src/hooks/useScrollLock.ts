@@ -36,8 +36,14 @@ export function useScrollLock(
 
     const el = container?.current;
     const targets = el ? [el] : [document.documentElement, document.body];
+    // Capture overflowX/overflowY, not the `overflow` shorthand: a target that
+    // set them as separate inline props (rather than via the shorthand) may
+    // not serialize `.style.overflow` back as a two-value string, in which
+    // case reading only the shorthand comes back "" and the restore below
+    // would clear the original axes instead of putting them back.
     const prev = targets.map((t) => ({
-      overflow: t.style.overflow,
+      overflowX: t.style.overflowX,
+      overflowY: t.style.overflowY,
       paddingRight: t.style.paddingRight,
     }));
     // Only the document path uses this — see the cleanup.
@@ -50,7 +56,8 @@ export function useScrollLock(
       : window.innerWidth - document.documentElement.clientWidth;
 
     targets.forEach((t, i) => {
-      t.style.overflow = "hidden";
+      t.style.overflowX = "hidden";
+      t.style.overflowY = "hidden";
       // Compensate on the element that owned the scrollbar — the last target,
       // since <body> is what paints inside <html>'s gutter.
       if (gutter > 0 && i === targets.length - 1) {
@@ -61,7 +68,8 @@ export function useScrollLock(
 
     return () => {
       targets.forEach((t, i) => {
-        t.style.overflow = prev[i].overflow;
+        t.style.overflowX = prev[i].overflowX;
+        t.style.overflowY = prev[i].overflowY;
         t.style.paddingRight = prev[i].paddingRight;
       });
       // Deliberately not restoring `el.scrollTop`. An element keeps its offset
