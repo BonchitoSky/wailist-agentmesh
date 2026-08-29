@@ -669,13 +669,36 @@ func (r *Runner) Start(wf models.Workflow, run models.Run) {
 
 // StartResume is Start's counterpart for continuing a run that already has
 // some nodes logged as success (e.g. a dead-lettered run, retried by hand).
-// Same cancellation registration as Start; the only difference is Resume
-// loads prior node state before executing. force must be explicit to resume
-// a run with a payment-risk dead-letter row -- see Resume's doc comment.
-func (r *Runner) StartResume(wf models.Workflow, run models.Run, force bool) {
-	ctx, cancel := context.WithCancel(context.Background())
+// force must be explicit to resume a run with a payment-risk dead-letter
+// row -- see Resume's doc comment.
+//
+// The admission claim (store.MarkRunRunning) happens synchronously HERE,
+// before registry.register() -- deliberately not inside Resume() itself.
+// registry.register() unconditionally cancels whatever run is currently
+// registered for this workflow ID; if the claim happened after it (as it
+// used to), a losing concurrent StartResume call would already have
+// cancelled a legitimately in-flight (possibly mid-payment) resume before
+// ever finding out it lost the claim. Claiming first means a losing call
+// returns false here and never touches the registry at all -- the winner's
+// run is never cancelled out from under it. The claim itself is a plain
+// conditional UPDATE, not registry state, so it's also correct across
+// Railway's multiple replicas: two different processes calling this
+// concurrently both hit the same row, and Postgres's row lock lets exactly
+// one UPDATE succeed regardless of which process or in-process registry
+// either is running under.
+//
+// Returns false (no error) if the run wasn't in a resumable state -- the
+// caller must treat that as "already resumed elsewhere" or "already
+// finished", not start executing anything.
+func (r *Runner) StartResume(ctx context.Context, wf models.Workflow, run models.Run, force bool) (bool, error) {
+	claimed, err := r.store.MarkRunRunning(ctx, run.ID)
+	if err != nil || !claimed {
+		return false, err
+	}
+	rctx, cancel := context.WithCancel(context.Background())
 	gen := r.registry.register(wf.ID, cancel)
-	go r.Resume(ctx, wf, run, gen, force)
+	go r.Resume(rctx, wf, run, gen, force)
+	return true, nil
 }
 
 // Stop cancels the active run for the given workflow ID. Returns false if no
@@ -795,22 +818,10 @@ func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run,
 		return
 	}
 
-	// The run row is still sitting in whatever terminal status ended the
-	// prior attempt (failed/stopped) -- reset it to running so it reads
-	// correctly as in-progress while Resume executes, matching CreateRun's
-	// own initial status for a fresh run. This UPDATE is also Resume's only
-	// admission gate (see MarkRunRunning's doc comment): if it reports the
-	// run wasn't in a resumable state, another resume already claimed it (or
-	// it already finished) and this call must not execute anything.
-	ok, err := r.store.MarkRunRunning(ctx, run.ID)
-	if err != nil {
-		log.Printf("resume: marking run running failed, run=%s: %v", run.ID, err)
-		return
-	}
-	if !ok {
-		log.Printf("resume: run %s is not resumable (already running or finished) -- skipping duplicate resume", run.ID)
-		return
-	}
+	// The run row was already flipped to "running" by StartResume's
+	// MarkRunRunning claim before this goroutine was ever spawned -- that
+	// claim is Resume's actual admission gate (see StartResume's doc
+	// comment for why it has to happen there and not here).
 
 	go alert.Notify(context.Background(), alert.ChannelWorkflows, fmt.Sprintf("workflow %q run %s resumed", wf.Name, run.ID))
 

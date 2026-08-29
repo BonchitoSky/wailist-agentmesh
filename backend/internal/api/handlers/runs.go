@@ -192,6 +192,13 @@ func (d *Deps) GetRun(w http.ResponseWriter, r *http.Request) {
 // (see models.DeadLetterRun.PaymentRisk) -- checked here for a synchronous
 // 409 instead of the caller only finding out after the async resume fails,
 // and again inside Runner.Resume itself as the actual enforcement.
+//
+// The run.Status == running check below is a cheap, non-authoritative
+// fast path for the common case -- the real, race-safe admission decision
+// is StartResume's synchronous MarkRunRunning claim. Two concurrent
+// requests can both pass this read (neither has claimed yet); only one of
+// them will get claimed=true back from StartResume, and the loser gets a
+// 409 here without ever having started or cancelled anything.
 func (d *Deps) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runId")
 	ctx := r.Context()
@@ -229,7 +236,15 @@ func (d *Deps) ResumeRun(w http.ResponseWriter, r *http.Request) {
 
 	wf.Nodes = decryptNodes(wf.Nodes, d.EncryptionKey)
 	d.Broker.Create(run.ID)
-	d.Engine.StartResume(wf, run, force)
+	claimed, err := d.Engine.StartResume(ctx, wf, run, force)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !claimed {
+		respond.Error(w, http.StatusConflict, "run is already in progress or already finished")
+		return
+	}
 
 	respond.JSON(w, http.StatusAccepted, map[string]string{"runId": run.ID})
 }

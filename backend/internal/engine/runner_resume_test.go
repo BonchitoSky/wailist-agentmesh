@@ -2,7 +2,11 @@ package engine_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
@@ -59,11 +63,12 @@ func TestResumeSkipsAlreadySucceededNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Resume's admission gate (MarkRunRunning) only accepts a run out of
-	// "failed"/"stopped" -- CreateRun's own initial status is "running", so
-	// a real dead-lettered run must have already transitioned before Resume
-	// is ever called on it. Mirror that here rather than relying on the
-	// pre-transition "running" default.
+	// A real dead-lettered run has already transitioned to "failed" by the
+	// time anything calls Resume -- CreateRun's own initial status is
+	// "running". Mirror that realistic precondition here rather than
+	// relying on the pre-transition default (Resume itself no longer gates
+	// on this -- StartResume's MarkRunRunning claim does, one layer up, and
+	// this test calls Resume directly).
 	if err := store.FinishRun(ctx, run.ID, models.RunStatusFailed); err != nil {
 		t.Fatal(err)
 	}
@@ -165,4 +170,100 @@ func TestGetLatestNodeStatesReturnsMostRecentStatus(t *testing.T) {
 	if got.Output != "ok" {
 		t.Errorf("n1 output = %v, want \"ok\"", got.Output)
 	}
+}
+
+// TestConcurrentStartResumeNeverCancelsTheWinner covers a real reviewer
+// finding: registry.register() unconditionally cancels whatever run is
+// currently registered for a workflow ID. If a losing concurrent
+// StartResume call reached registry.register() before finding out it lost
+// the claim, it would cancel the winner's context mid-flight -- possibly
+// mid-payment. StartResume now does the atomic claim (MarkRunRunning)
+// BEFORE registry.register(), specifically so a losing call never reaches
+// the registry at all. This proves it end to end: the first call's http
+// node is genuinely blocked in flight when the second call is made, and
+// the first must still reach success afterward -- if the second call had
+// cancelled it, the blocked node's own ctx.Done() would fire and the run
+// would end up "stopped", not "success".
+func TestConcurrentStartResumeNeverCancelsTheWinner(t *testing.T) {
+	runner, store := newTestRunner(t)
+	ctx := context.Background()
+
+	release := make(chan struct{})
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		<-release
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	wf, err := store.CreateWorkflow(ctx, "Concurrent Resume Test", fundedTestUser(t, store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "n2", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "GET"},
+			{ID: "n3", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "n2", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "n2", To: "n3", Kind: models.EdgeKindFlow},
+		},
+	}
+	wf, _ = store.UpdateWorkflow(ctx, wf.ID, wf.Name, graph)
+
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, run.ID, models.RunStatusFailed); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed1, err := runner.StartResume(ctx, wf, run, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claimed1 {
+		t.Fatal("first StartResume call: claimed = false, want true")
+	}
+
+	// Wait for the first resume's http node to genuinely be in flight
+	// before racing the second call against it.
+	deadline := time.Now().Add(3 * time.Second)
+	for atomic.LoadInt32(&requests) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("server saw %d requests before the second StartResume call, want 1", got)
+	}
+
+	claimed2, err := runner.StartResume(ctx, wf, run, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed2 {
+		t.Fatal("second concurrent StartResume call: claimed = true, want false (run is already claimed)")
+	}
+
+	// Give a cancelled context time to actually propagate before checking --
+	// if the second call HAD cancelled the first (the bug this test
+	// guards against), the blocked node would see ctx.Done() right about now.
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		finalRun, err := store.GetRun(ctx, run.ID)
+		if err == nil && finalRun.Status == models.RunStatusSuccess {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	finalRun, _ := store.GetRun(ctx, run.ID)
+	t.Fatalf("run status = %s, want success -- the losing StartResume call may have cancelled the winner", finalRun.Status)
 }
