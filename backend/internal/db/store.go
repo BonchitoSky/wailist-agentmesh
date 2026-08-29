@@ -615,18 +615,33 @@ func (s *Store) GetLatestNodeStates(ctx context.Context, runID string) (map[stri
 // MarkRunRunning resets a run back to "running" with no finish time -- used
 // by Resume to undo the "failed"/"stopped" terminal state a prior attempt
 // left behind, so the run reads correctly as in-progress while it's retried.
-func (s *Store) MarkRunRunning(ctx context.Context, runID string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE runs SET status='running', finished_at=NULL WHERE id=$1`, runID)
-	return err
+//
+// The WHERE clause is Resume's only admission gate: two concurrent resume
+// calls for the same run (double-click, retried request) race this same
+// UPDATE, and Postgres's row-level lock lets exactly one of them observe the
+// pre-terminal status and flip it -- the loser's statement matches zero rows
+// and must not execute any node. The same clause rejects a resume on a run
+// that's already "running" or already "success", since neither is in the
+// IN-list. Returns (false, nil) rather than an error for "not resumable" --
+// that's an expected outcome, not a failure.
+func (s *Store) MarkRunRunning(ctx context.Context, runID string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE runs SET status='running', finished_at=NULL
+		WHERE id=$1 AND status IN ('failed','stopped')
+	`, runID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // --- DeadLetterRun methods ---
 
 func (s *Store) InsertDeadLetterRun(ctx context.Context, dl models.DeadLetterRun) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO dead_letter_runs (run_id, node_id, error, attempt_count)
-		VALUES ($1,$2,$3,$4)
-	`, dl.RunID, dl.NodeID, dl.Error, dl.AttemptCount)
+		INSERT INTO dead_letter_runs (run_id, node_id, error, attempt_count, payment_risk)
+		VALUES ($1,$2,$3,$4,$5)
+	`, dl.RunID, dl.NodeID, dl.Error, dl.AttemptCount, dl.PaymentRisk)
 	return err
 }
 
@@ -635,7 +650,7 @@ func (s *Store) InsertDeadLetterRun(ctx context.Context, dl models.DeadLetterRun
 // workflow can have more than one node fail in the same parallel level.
 func (s *Store) GetDeadLetterRuns(ctx context.Context, runID string) ([]models.DeadLetterRun, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, run_id, node_id, error, attempt_count, created_at
+		SELECT id, run_id, node_id, error, attempt_count, payment_risk, created_at
 		FROM dead_letter_runs WHERE run_id=$1 ORDER BY created_at
 	`, runID)
 	if err != nil {
@@ -645,7 +660,7 @@ func (s *Store) GetDeadLetterRuns(ctx context.Context, runID string) ([]models.D
 	var out []models.DeadLetterRun
 	for rows.Next() {
 		var dl models.DeadLetterRun
-		if err := rows.Scan(&dl.ID, &dl.RunID, &dl.NodeID, &dl.Error, &dl.AttemptCount, &dl.CreatedAt); err != nil {
+		if err := rows.Scan(&dl.ID, &dl.RunID, &dl.NodeID, &dl.Error, &dl.AttemptCount, &dl.PaymentRisk, &dl.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, dl)

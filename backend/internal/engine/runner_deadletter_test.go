@@ -2,12 +2,16 @@ package engine_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
 )
@@ -198,7 +202,7 @@ func TestResumeAfterDeadLetterSkipsSucceededUpstreamNode(t *testing.T) {
 	// n2 (calc) running again.
 	failN3.Store(false)
 	broker.Create(run.ID) // Resume calls broker.Close(run.ID) again on exit; needs a live stream to close.
-	runner.Resume(ctx, wf, run, 0)
+	runner.Resume(ctx, wf, run, 0, false)
 
 	finalRun, err := store.GetRun(ctx, run.ID)
 	if err != nil {
@@ -223,5 +227,130 @@ func TestResumeAfterDeadLetterSkipsSucceededUpstreamNode(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&n3Requests); got != 2 {
 		t.Errorf("n3 saw %d requests total, want 2 (1 failed + 1 succeeded on resume)", got)
+	}
+}
+
+// TestPaymentRiskDeadLetterRefusesResumeWithoutForce reproduces a real
+// *nodes.ErrBalanceBlocked failure (agent's own LLM turn completes and its
+// fee is charged, then its attached x402 call is blocked by the pre-call
+// floor guard) and verifies: the resulting dead-letter row is flagged
+// PaymentRisk, Resume refuses outright without force (no new LLM call, run
+// stays failed), and Resume proceeds -- attempting the node again -- once
+// force is passed.
+func TestPaymentRiskDeadLetterRefusesResumeWithoutForce(t *testing.T) {
+	runner, store := newTestRunner(t)
+	ctx := context.Background()
+	runner.SetPlatformKeys(map[string]string{"openai": "platform-secret"})
+
+	var x402Hits int32
+	x402Srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&x402Hits, 1)
+		w.Header().Set("X-Payment-Required", `{"price":"0.001","unit":"call","network":"algorand-testnet","recipient":"ALGO123"}`)
+		w.WriteHeader(http.StatusPaymentRequired)
+	}))
+	defer x402Srv.Close()
+
+	var llmHits int32
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&llmHits, 1)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{
+				"role": "assistant",
+				"tool_calls": []map[string]any{{
+					"id":       "call_1",
+					"type":     "function",
+					"function": map[string]any{"name": "paid_tool", "arguments": "{}"},
+				}},
+			}}},
+		})
+	}))
+	defer llmSrv.Close()
+
+	email := fmt.Sprintf("payment-risk-resume-test-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exactly enough for the agent's own economy-tier fee, below the
+	// attached tool402 call's pre-call floor guard -- same fixture as
+	// TestAgentBlocksAttachedX402CallWhenBalanceInsufficientForFee.
+	fundUser(t, store, user.ID, models.PlatformKeyEconomyFeeUSDMicros)
+
+	wf, err := store.CreateWorkflow(ctx, "Payment Risk Resume Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	nodes.SetOpenAIBaseURL(llmSrv.URL)
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "p1", Type: models.NodeTypeProvider, Template: "openai", KeyMode: "platform", Model: "gpt-4o-mini"},
+			{ID: "a1", Type: models.NodeTypeAgent},
+			{ID: "x1", Type: models.NodeTypeTool402, Name: "paid_tool", Endpoint: x402Srv.URL},
+			{ID: "n3", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "a1", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "a1", To: "n3", Kind: models.EdgeKindFlow},
+			{ID: "e3", From: "p1", To: "a1", Kind: models.EdgeKindAttach, ToPort: "model"},
+			{ID: "e4", From: "x1", To: "a1", Kind: models.EdgeKindAttach, ToPort: "tools"},
+		},
+	}
+	wf, _ = store.UpdateWorkflow(ctx, wf.ID, wf.Name, graph)
+
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := sse.NewBroker()
+	broker.Create(run.ID)
+
+	runner.Start(wf, run)
+	final := waitForRunDone(t, store, run.ID)
+	if final.Status != models.RunStatusFailed {
+		t.Fatalf("want failed got %s", final.Status)
+	}
+
+	deadLetters, err := store.GetDeadLetterRuns(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deadLetters) != 1 || deadLetters[0].NodeID != "a1" {
+		t.Fatalf("want exactly 1 dead-letter row for node a1, got %+v", deadLetters)
+	}
+	if !deadLetters[0].PaymentRisk {
+		t.Fatalf("want PaymentRisk=true on the dead-letter row (ErrBalanceBlocked means the agent's fee was already charged), got false")
+	}
+
+	llmHitsBeforeResume := atomic.LoadInt32(&llmHits)
+
+	// Without force: refused outright, no new LLM call, run stays failed.
+	broker.Create(run.ID) // Resume calls broker.Close(run.ID) on exit; needs a live stream to close.
+	runner.Resume(ctx, wf, run, 0, false)
+	if got := atomic.LoadInt32(&llmHits); got != llmHitsBeforeResume {
+		t.Fatalf("resume without force made %d new LLM calls, want 0 (must refuse before executing anything)", got-llmHitsBeforeResume)
+	}
+	refusedRun, err := store.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refusedRun.Status != models.RunStatusFailed {
+		t.Fatalf("run status after refused resume = %s, want still failed", refusedRun.Status)
+	}
+
+	// With force: actually attempts the node again. Balance is 0 after the
+	// first attempt's fee debit, so top up first -- the point of this
+	// assertion is that force lets execution reach the LLM at all (it isn't
+	// refused outright), not to re-litigate the insufficient-balance path
+	// already covered by TestAgentBlocksAttachedX402CallWhenBalanceInsufficientForFee.
+	fundUser(t, store, user.ID, models.PlatformKeyEconomyFeeUSDMicros)
+	broker.Create(run.ID)
+	runner.Resume(ctx, wf, run, 0, true)
+	if got := atomic.LoadInt32(&llmHits); got <= llmHitsBeforeResume {
+		t.Fatalf("resume with force made %d new LLM calls, want at least 1 (must actually attempt the node)", got-llmHitsBeforeResume)
 	}
 }

@@ -249,12 +249,21 @@ type RunLog struct {
 // dead-lettered run isn't just an opaque "failed" status with no way to find
 // it again. AttemptCount is every executeNode call made for this node
 // across the run, including the first.
+//
+// PaymentRisk marks a failure where real money may already have moved --
+// e.g. *nodes.ErrBalanceBlocked, where the agent's own LLM turn completed
+// and its flat fee was already debited before the attached call it then
+// tried ran into insufficient balance. Resume refuses to retry a
+// payment-risk row unless explicitly forced, since re-executing the node
+// would redo the LLM turn (and its billing) rather than just retrying the
+// part that actually failed.
 type DeadLetterRun struct {
 	ID           string    `json:"id"`
 	RunID        string    `json:"runId"`
 	NodeID       string    `json:"nodeId"`
 	Error        string    `json:"error"`
 	AttemptCount int       `json:"attemptCount"`
+	PaymentRisk  bool      `json:"paymentRisk"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
 

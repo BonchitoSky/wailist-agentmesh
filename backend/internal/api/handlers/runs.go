@@ -187,6 +187,11 @@ func (d *Deps) GetRun(w http.ResponseWriter, r *http.Request) {
 // ResumeRun continues a run that ended in "failed" or "stopped": nodes
 // already logged as success are skipped, everything else re-executes. See
 // engine.Runner.Resume for the skip contract.
+//
+// ?force=true is required when the run has a payment-risk dead-letter row
+// (see models.DeadLetterRun.PaymentRisk) -- checked here for a synchronous
+// 409 instead of the caller only finding out after the async resume fails,
+// and again inside Runner.Resume itself as the actual enforcement.
 func (d *Deps) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	runID := chi.URLParam(r, "runId")
 	ctx := r.Context()
@@ -207,9 +212,24 @@ func (d *Deps) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	force := r.URL.Query().Get("force") == "true"
+	if !force {
+		deadLetters, err := d.Store.GetDeadLetterRuns(ctx, runID)
+		if err != nil {
+			respond.Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, dl := range deadLetters {
+			if dl.PaymentRisk {
+				respond.Error(w, http.StatusConflict, "run has a payment-risk failure (node "+dl.NodeID+") -- resume with ?force=true to accept the risk of a double charge")
+				return
+			}
+		}
+	}
+
 	wf.Nodes = decryptNodes(wf.Nodes, d.EncryptionKey)
 	d.Broker.Create(run.ID)
-	d.Engine.StartResume(wf, run)
+	d.Engine.StartResume(wf, run, force)
 
 	respond.JSON(w, http.StatusAccepted, map[string]string{"runId": run.ID})
 }

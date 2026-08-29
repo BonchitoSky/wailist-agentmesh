@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/robfig/cron/v3"
 
+	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/respond"
 )
 
@@ -24,6 +25,14 @@ func (d *Deps) SetSchedule(w http.ResponseWriter, r *http.Request) {
 	wf, err := d.Store.GetWorkflow(ctx, id)
 	if err != nil || wf.UserID != userID {
 		respond.Error(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	// ClaimDueSchedules only ever claims status='deployed' workflows -- a
+	// schedule saved on a draft would silently never fire until the
+	// workflow happens to be deployed later, with nothing here to warn the
+	// caller that the nextRunAt it just got back is aspirational.
+	if wf.Status != models.WorkflowStatusDeployed {
+		respond.Error(w, http.StatusConflict, "deploy this workflow before scheduling it")
 		return
 	}
 

@@ -44,6 +44,15 @@ func (reg *runRegistry) register(workflowID string, cancel context.CancelFunc) u
 	return gen
 }
 
+// isActive reports whether workflowID currently has a registered in-flight
+// run, without cancelling or otherwise touching it.
+func (reg *runRegistry) isActive(workflowID string) bool {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	_, ok := reg.entries[workflowID]
+	return ok
+}
+
 func (reg *runRegistry) cancel(workflowID string) bool {
 	reg.mu.Lock()
 	defer reg.mu.Unlock()

@@ -7,9 +7,39 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/agentmesh/backend/internal/api/handlers"
 )
+
+func TestSetScheduleRejectsUndeployedWorkflow(t *testing.T) {
+	d := testDeps(t)
+
+	wf, err := d.Store.CreateWorkflow(t.Context(), "Schedule Draft Test", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	body, _ := json.Marshal(map[string]string{"cron": "0 9 * * *"})
+	req := httptest.NewRequest(http.MethodPut, "/workflows/"+wf.ID+"/schedule", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev"))
+	req = withURLParam(req, "id", wf.ID)
+	w := httptest.NewRecorder()
+	d.SetSchedule(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("want 409 for a draft (undeployed) workflow, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	got, err := d.Store.GetWorkflow(t.Context(), wf.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ScheduleCron != nil {
+		t.Errorf("schedule_cron = %v, want nil (a rejected schedule must never be persisted)", got.ScheduleCron)
+	}
+}
 
 func TestSetScheduleValidatesCronExpression(t *testing.T) {
 	d := testDeps(t)
@@ -19,6 +49,9 @@ func TestSetScheduleValidatesCronExpression(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+	if err := d.Store.SetWorkflowDeployed(t.Context(), wf.ID, "https://example.test/run", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
 
 	body, _ := json.Marshal(map[string]string{"cron": "not a cron expr"})
 	req := httptest.NewRequest(http.MethodPut, "/workflows/"+wf.ID+"/schedule", bytes.NewReader(body))
@@ -48,6 +81,9 @@ func TestSetAndClearScheduleRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+	if err := d.Store.SetWorkflowDeployed(t.Context(), wf.ID, "https://example.test/run", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
 
 	body, _ := json.Marshal(map[string]string{"cron": "0 9 * * *"})
 	req := httptest.NewRequest(http.MethodPut, "/workflows/"+wf.ID+"/schedule", bytes.NewReader(body))

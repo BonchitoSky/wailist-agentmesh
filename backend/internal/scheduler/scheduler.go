@@ -77,6 +77,15 @@ func (s *Scheduler) tick(ctx context.Context) {
 		return
 	}
 	for _, wf := range due {
+		// A workflow whose previous scheduled run is still executing (e.g.
+		// its cron interval is shorter than its own runtime) must not fire
+		// again here -- Runner.Start's registry always supersedes (cancels)
+		// any previous run for the same workflow ID, so starting a new one
+		// now would silently truncate the one still in flight.
+		if s.engine.IsRunning(wf.ID) {
+			log.Printf("scheduler: skipping workflow %s -- previous scheduled run still in progress", wf.ID)
+			continue
+		}
 		run, err := s.store.CreateRun(ctx, wf.ID, "schedule", []byte("{}"))
 		if err != nil {
 			log.Printf("scheduler: create run failed for workflow %s: %v", wf.ID, err)

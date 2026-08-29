@@ -59,10 +59,19 @@ func TestResumeSkipsAlreadySucceededNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Resume's admission gate (MarkRunRunning) only accepts a run out of
+	// "failed"/"stopped" -- CreateRun's own initial status is "running", so
+	// a real dead-lettered run must have already transitioned before Resume
+	// is ever called on it. Mirror that here rather than relying on the
+	// pre-transition "running" default.
+	if err := store.FinishRun(ctx, run.ID, models.RunStatusFailed); err != nil {
+		t.Fatal(err)
+	}
+
 	broker := sse.NewBroker()
 	broker.Create(run.ID)
 
-	runner.Resume(ctx, wf, run, 0)
+	runner.Resume(ctx, wf, run, 0, false)
 
 	finalRun, err := store.GetRun(ctx, run.ID)
 	if err != nil {

@@ -670,17 +670,28 @@ func (r *Runner) Start(wf models.Workflow, run models.Run) {
 // StartResume is Start's counterpart for continuing a run that already has
 // some nodes logged as success (e.g. a dead-lettered run, retried by hand).
 // Same cancellation registration as Start; the only difference is Resume
-// loads prior node state before executing.
-func (r *Runner) StartResume(wf models.Workflow, run models.Run) {
+// loads prior node state before executing. force must be explicit to resume
+// a run with a payment-risk dead-letter row -- see Resume's doc comment.
+func (r *Runner) StartResume(wf models.Workflow, run models.Run, force bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	gen := r.registry.register(wf.ID, cancel)
-	go r.Resume(ctx, wf, run, gen)
+	go r.Resume(ctx, wf, run, gen, force)
 }
 
 // Stop cancels the active run for the given workflow ID. Returns false if no
 // run was registered (i.e. the workflow is not currently running).
 func (r *Runner) Stop(workflowID string) bool {
 	return r.registry.cancel(workflowID)
+}
+
+// IsRunning reports whether workflowID currently has an in-flight run
+// registered, without affecting it. Unlike Start/StartResume -- which always
+// supersede (cancel) any previous run for the same workflow ID, since that's
+// the right behavior for a user re-triggering their own workflow -- the
+// scheduler uses this read-only check to skip firing a new scheduled run
+// over one still executing, rather than silently truncating it mid-level.
+func (r *Runner) IsRunning(workflowID string) bool {
+	return r.registry.isActive(workflowID)
 }
 
 // finishRun records the run's terminal status and fires a workflow-run audit-log
@@ -735,9 +746,32 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 // failed node that fully succeeded falls through immediately with nothing
 // left to do, which is what makes "resume" cheaper than "restart" for
 // workflows with real side-effecting steps earlier in the graph.
-func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run, gen uint64) {
+//
+// force must be true to resume a run that has any payment-risk dead-letter
+// row (see DeadLetterRun.PaymentRisk) -- otherwise this refuses outright.
+// Retrying one of those nodes would re-run its LLM turn and re-debit its
+// flat fee on top of the one already charged for the failed attempt, so the
+// default has to be "don't", with an operator's explicit force required to
+// accept that known double-charge risk.
+func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run, gen uint64, force bool) {
 	defer r.broker.Close(run.ID)
 	defer r.registry.deregister(wf.ID, gen)
+
+	if !force {
+		deadLetters, err := r.store.GetDeadLetterRuns(ctx, run.ID)
+		if err != nil {
+			log.Printf("resume: loading dead letters failed, run=%s: %v", run.ID, err)
+			r.finishRun(wf, run, models.RunStatusFailed)
+			return
+		}
+		for _, dl := range deadLetters {
+			if dl.PaymentRisk {
+				criticalAlert(wf, run, "resume refused: payment-risk dead-letter row present, force required", nil, "nodeId", dl.NodeID)
+				r.finishRun(wf, run, models.RunStatusFailed)
+				return
+			}
+		}
+	}
 
 	// Same run-total billing registration Run() does (see its own doc
 	// comment) -- a resumed run can still execute new billable non-tool402
@@ -764,9 +798,18 @@ func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run,
 	// The run row is still sitting in whatever terminal status ended the
 	// prior attempt (failed/stopped) -- reset it to running so it reads
 	// correctly as in-progress while Resume executes, matching CreateRun's
-	// own initial status for a fresh run.
-	if err := r.store.MarkRunRunning(ctx, run.ID); err != nil {
+	// own initial status for a fresh run. This UPDATE is also Resume's only
+	// admission gate (see MarkRunRunning's doc comment): if it reports the
+	// run wasn't in a resumable state, another resume already claimed it (or
+	// it already finished) and this call must not execute anything.
+	ok, err := r.store.MarkRunRunning(ctx, run.ID)
+	if err != nil {
 		log.Printf("resume: marking run running failed, run=%s: %v", run.ID, err)
+		return
+	}
+	if !ok {
+		log.Printf("resume: run %s is not resumable (already running or finished) -- skipping duplicate resume", run.ID)
+		return
 	}
 
 	go alert.Notify(context.Background(), alert.ChannelWorkflows, fmt.Sprintf("workflow %q run %s resumed", wf.Name, run.ID))
@@ -911,11 +954,22 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 					// dead-lettering -- the finishRun path below already
 					// reports it as "stopped", not "failed".
 					if ctx.Err() == nil {
+						// A *nodes.ErrBalanceBlocked failure means the agent's
+						// own LLM turn already completed and its flat fee was
+						// already debited (see debitAgentFee's call site in
+						// executeNode's agent branch) before the attached
+						// call it then tried ran into insufficient balance --
+						// real money already moved for this attempt. Flag it
+						// so Resume refuses to blindly retry (and re-bill)
+						// this node without an explicit force.
+						var blocked *nodes.ErrBalanceBlocked
+						paymentRisk := errors.As(execErr, &blocked)
 						r.store.InsertDeadLetterRun(context.Background(), models.DeadLetterRun{
 							RunID:        run.ID,
 							NodeID:       n.ID,
 							Error:        execErr.Error(),
 							AttemptCount: attempts,
+							PaymentRisk:  paymentRisk,
 						})
 					}
 					r.broker.Publish(run.ID, models.LogEvent{
