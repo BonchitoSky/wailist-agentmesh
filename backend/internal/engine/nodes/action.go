@@ -64,22 +64,48 @@ func ExecuteAction(ctx context.Context, node models.WorkflowNode, rc RunContexte
 		return sendWooCommerce(ctx, node, rc)
 	case "elevenlabs":
 		return sendElevenLabs(ctx, node, rc)
-	case "twilio":
-		return sendTwilio(ctx, node, rc)
 	case "stripe":
 		return sendStripe(ctx, node, rc)
+	case "twilio":
+		return sendTwilio(ctx, node, rc)
+	case "mattermost":
+		return sendMattermost(ctx, node, rc)
 	case "pagerduty":
 		return sendPagerDuty(ctx, node, rc)
 	case "zendesk":
 		return sendZendesk(ctx, node, rc)
+	case "monday":
+		return sendMonday(ctx, node, rc)
+	case "shopify":
+		// "shopify" keeps master's original order-note behavior. A workflow
+		// with a node already saved under this id (from before this PR, or
+		// from master) must keep hitting the same handler with no config
+		// change on the user's side -- repointing it to a different
+		// operation here would have every such node read shopifyStore/
+		// shopifyEmail (which it never had) and silently no-op via
+		// shopify_skipped_missing_config. The new customer-creation feature
+		// gets its own fresh id below instead.
+		return sendShopifyOrderNote(ctx, node, rc)
+	case "shopify_customer":
+		return sendShopify(ctx, node, rc)
+	case "pipedrive":
+		return sendPipedrive(ctx, node, rc)
+	case "db":
+		return sendPostgres(ctx, node, rc)
+	case "rss":
+		return fetchRSS(ctx, node, rc)
+	case "graphql":
+		return sendGraphQL(ctx, node, rc)
+	case "hackernews":
+		return fetchHackerNews(ctx, node, rc)
+	case "coingecko":
+		return fetchCoinGecko(ctx, node, rc)
 	case "intercom":
 		return sendIntercom(ctx, node, rc)
 	case "openweathermap":
 		return getOpenWeather(ctx, node, rc)
 	case "calendly":
 		return getCalendlyEvents(ctx, node, rc)
-	case "shopify":
-		return sendShopify(ctx, node, rc)
 	case "baserow":
 		return sendBaserow(ctx, node, rc)
 	default:
@@ -139,12 +165,12 @@ func sendEmail(ctx context.Context, node models.WorkflowNode, rc RunContexter) (
 		subject = "AgentMesh workflow result"
 	}
 	// Build body: {{ result }} / {{ result.field }} placeholders expand
-	// against the most recent output -- see expandTemplate.
+	// against the most recent output -- see resolveTemplate.
 	bodyText := node.EmailBody
 	if bodyText == "" {
 		bodyText = "Hi,\n\nHere is your result:\n\n" + rc.Message() + "\n\n— AgentMesh"
 	} else {
-		bodyText = expandTemplate(bodyText, rc)
+		bodyText = resolveTemplate(bodyText, rc)
 	}
 
 	switch provider {

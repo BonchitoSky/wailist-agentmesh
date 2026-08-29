@@ -15,6 +15,7 @@ This document is for developers who want to contribute to the AgentMesh platform
 - [Frontend architecture](#frontend-architecture)
 - [Backend architecture](#backend-architecture)
 - [Database schema](#database-schema)
+- [Hacktoberfest](#hacktoberfest)
 - [Making a contribution](#making-a-contribution)
 
 ---
@@ -66,19 +67,38 @@ agentmesh/
 │
 ├── backend/
 │   ├── cmd/server/         Entry point — sets up router, runs migrations, starts HTTP
+│   ├── cmd/walletgen/      Dev tool — generate an Algorand keypair
+│   ├── cmd/x402pay/        Dev tool — drive an x402 payment from the CLI
 │   └── internal/
 │       ├── api/
-│       │   ├── handlers/   One file per resource (auth, oauth, workflows, runs, deploy, tools, waitlist)
+│       │   ├── router.go   Route table
+│       │   ├── handlers/   One file per resource (auth, oauth, connector_oauth,
+│       │   │               oauth2creds, workflows, runs, deploy, tools, bazaar,
+│       │   │               payments, usage, secrets, leases, tendril_console,
+│       │   │               x402relay, waitlist)
 │       │   └── middleware.go  CORS, JWT auth, SSE token fallback
 │       ├── engine/
 │       │   ├── runner.go   Topological executor — parallel level execution
+│       │   ├── graph.go    Topological sort + attach-map
+│       │   ├── context.go  RunContext + per-run debit ledger
+│       │   ├── tendril_reaper.go  Releases leases whose funded window closed
 │       │   └── nodes/
-│       │       ├── provider.go   LLM callers + agentic function-calling loop
-│       │       ├── tool402.go    x402 payment flow
-│       │       ├── tool.go       HTTP tool + SSRF protection
-│       │       └── action.go     Email (Resend) + webhook actions
+│       │       ├── provider.go       LLM callers + agentic function-calling loop
+│       │       ├── tool402.go / walletpay.go / runfund.go  x402 payment + run-level funding
+│       │       ├── tool.go           HTTP tool + SSRF protection + websearch/calc/datetime
+│       │       ├── action.go + connectors_*.go + google.go  email / webhook / ~40 connectors
+│       │       ├── bazaar.go         Bazaar discovery extension
+│       │       ├── billing.go / tier.go  BYOK flat-fee billing
+│       │       └── tendril.go        Compute leasing
 │       ├── db/             PostgreSQL queries (pgx/v5) + migrations
 │       ├── models/         Shared types — WorkflowNode, ParamDef, AgentWallet, etc.
+│       ├── bazaar/         Mirrors GoPlausible's x402 catalog, filtered to payable Algorand endpoints
+│       ├── payments/       Cashfree (INR) + NOWPayments (crypto) clients
+│       ├── oauthcred/      Persisted, refreshable OAuth2 connections for workflow nodes
+│       ├── tendril/        Typed client for the Tendril compute registry
+│       ├── sshkeys/        Per-lease ed25519 keypair for a rented machine
+│       ├── alert/          Optional Discord-webhook audit log
+│       ├── x402/           Schema-exact v2 payment payload types
 │       ├── sse/            In-process pub/sub for streaming run logs
 │       └── wallet/         Algorand keypair generation, encryption, signing
 │
@@ -232,14 +252,14 @@ When a user clicks "Discover" on an x402 Tool node, the backend hits the endpoin
 
 ### LLM function-calling loop
 
-For Gemini and OpenAI, the agent runs a loop:
+All five providers — Gemini, OpenAI, Anthropic, Groq, Mistral — run the loop (Groq and Mistral over the OpenAI-compatible path):
 
 1. Call LLM with system prompt, user input, and function declarations built from `DiscoveredParams`
 2. If the LLM returns a `functionCall` → execute the tool, feed the result back as a function response
 3. Call LLM again with the updated conversation
-4. Repeat up to 15 iterations until the LLM returns a plain text response
+4. Repeat up to `maxToolIterations` (15) until the LLM returns a plain text response
 
-Anthropic is basic chat only (function-calling loop coming). Groq and Mistral use the OpenAI-compatible path.
+Keys are BYOK by default; a platform-key mode falls back to platform-held keys with metered, cost-plus usage.
 
 ### SSE streaming
 
@@ -385,6 +405,29 @@ These tests create and tear down their own schema, so they're safe to run agains
   }
   ```
 - Don't mock the database in unit tests that are meant to test DB logic — use a real test DB or skip
+
+---
+
+## Hacktoberfest
+
+This repo participates in **Hacktoberfest**. Pull requests opened against it during October count toward your Hacktoberfest total once a maintainer merges them, approves them, or labels them `hacktoberfest-accepted`.
+
+**What counts**
+
+- A PR that fixes a real bug, adds a genuinely useful feature, or improves docs/tests in a way we'd merge any month of the year.
+- Work tied to an issue labelled `hacktoberfest` or `good first issue`. Comment on the issue to claim it before you start so two people don't collide.
+
+**What gets your PR marked `spam` / `invalid` (and does not count)**
+
+- Whitespace-only diffs, README typo swaps with no substance, automated or templated PRs, duplicate PRs across many repos.
+- Anything that ignores the contribution rules below — untested changes, unrelated file churn, drive-by formatter runs.
+
+**Good starting points**
+
+- `provider_test.go` has a known build error — `ExecuteAgent`'s signature changed and the test wasn't updated. Small, self-contained, well-scoped.
+- Filter issues by the `good first issue` and `hacktoberfest` labels.
+
+Two low-effort PRs flagged as spam earn a Hacktoberfest disqualification for the whole event, so aim for one solid PR over several throwaway ones. If you're unsure whether an idea is substantial enough, open an issue and ask first.
 
 ---
 

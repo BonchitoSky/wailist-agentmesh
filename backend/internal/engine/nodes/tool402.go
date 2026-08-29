@@ -1474,21 +1474,32 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, cfg X4
 		// to the caller, already succeeded. cfg.Facilitator == nil (dev/test
 		// wiring that never configured one) makes this a silent no-op.
 		//
-		// Detached from ctx (WithoutCancel, own timeout) rather than run on
-		// it directly: by this point money has already moved and the user
-		// has already been billed the fee in credits, so a caller-initiated
-		// cancellation (a closed console tab, a StopWorkflow racing this
-		// exact instant) must not abort the one thing that would actually
-		// back that charge with real USDC -- same reasoning as every other
-		// post-settlement compensating action in this codebase (see
-		// runner.go's ledgerCompensationTimeout uses). 60s budget: up to 20s
-		// each for the facilitator's Verify and Settle calls
-		// (FacilitatorClient's own http.Client timeout), plus the signing
-		// call ahead of them making its own algod SuggestedParams round
-		// trip on this same context with no timeout of its own, plus
-		// headroom.
+		// Detached from ctx (context.WithoutCancel) -- unlike FundRunReserve,
+		// where a StopWorkflow landing mid-retry just means ReleaseReservedCredits
+		// undoes a reservation that was never committed, the two Commit calls
+		// above have ALREADY moved this fee into the caller's committed ledger
+		// total by the time we get here. A StopWorkflow racing this call must
+		// not be allowed to abort the retry sequence early (selfSettleWallet1ToWallet2's
+		// ctx.Err() check would do exactly that on a cancelable ctx): that would
+		// leave the fee permanently billed in the ledger with no on-chain
+		// settlement ever attempted again, not merely delayed. SelfSettleRetryBudget
+		// still bounds how long this can run.
+		//
+		// Runs synchronously (not backgrounded) even though it's best-effort:
+		// this blocks the agent's tool-calling loop for up to
+		// SelfSettleRetryBudget on a degraded facilitator, which is a real
+		// cost, but backgrounding it would mean either dropping
+		// PlatformFeeTxID/PlatformFeeExplorerURL from the tool result
+		// entirely (LogDrawer's receipt display and platformfee_test.go both
+		// depend on it being there synchronously on success) or bolting on
+		// a callback/polling path to fill it in later. Given the fee is
+		// already committed either way, the ceiling here bounds the
+		// downside to a fixed worst case rather than an unbounded hang, and
+		// the CRITICAL alert below is the actual backstop for the failure
+		// case -- worth revisiting if p95 tool-call latency under a
+		// degraded facilitator becomes a real product problem.
 		if cfg.Facilitator != nil {
-			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), SelfSettleRetryBudget)
 			feeTxID, feeErr := SettlePlatformFee(fctx, RunPreFundConfig{
 				USDCSigner:               usdcSigner,
 				PlatformSpendEncMnemonic: platformSpendEncMnemonic,

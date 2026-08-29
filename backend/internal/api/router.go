@@ -43,6 +43,8 @@ func NewRouter(d *handlers.Deps) http.Handler {
 	r.Get("/x402/relay/run-funding", d.X402RunFundingInfo)
 	// Same rationale, for nodes.SettlePlatformFee's PaymentRequirements.Resource.
 	r.Get("/x402/relay/platform-fee", d.X402PlatformFeeInfo)
+	// Same rationale, for nodes.SettleRunTotal's PaymentRequirements.Resource.
+	r.Get("/x402/relay/run-total", d.X402RunTotalInfo)
 
 	// Protected routes — JWT required
 	r.Group(func(r chi.Router) {
@@ -68,6 +70,7 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Get("/runs/{runId}/stream", d.StreamRun)
 
 		r.Post("/tools/x402/quote", d.X402Quote)
+		r.Get("/bazaar/resources", d.BazaarResources)
 
 		r.Post("/payments/cashfree/order", d.CreateCashfreeOrder)
 		r.Post("/payments/cashfree/verify", d.VerifyCashfreePayment)

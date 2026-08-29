@@ -26,6 +26,7 @@ export type NavItem = {
 /** Primary routes for the authed application shell. */
 export const APP_NAV_ITEMS: readonly NavItem[] = [
   { label: "Workflows", href: "/workflows" },
+  { label: "Bazaar", href: "/bazaar" },
   { label: "Usage", href: "/usage" },
   { label: "Credits", href: "/billing" },
 ];
