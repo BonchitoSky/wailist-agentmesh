@@ -1,7 +1,8 @@
 "use client";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { WorkflowNode, Workflow } from "@/lib/types";
+import { decodePendingNode } from "@/lib/bazaar";
 import {
   Toast,
   Logo,
@@ -47,7 +48,15 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const [toast, setToast] = useState<string | null>(null);
   const [saveLabel, setSaveLabel] = useState("");
   const [runId, setRunId] = useState<string | null>(null);
-  const justLoaded = useRef(true);
+  // A single boolean, not a counter: it can only suppress ONE upcoming
+  // autosave cycle at a time, regardless of which of the two trusted writes
+  // below (initial load, Bazaar auto-add) set it. Both origins collapse into
+  // this one "skip next autosave" signal deliberately — there's no current
+  // need to distinguish them or to suppress more than one cycle in a row. A
+  // future feature needing genuine "was this the initial page load" or
+  // "skip N cycles" semantics needs its own mechanism, not a reuse of this
+  // one.
+  const skipNextAutosave = useRef(true);
 
   // -- Resizable side panels ------------------------------------------------
   // Widths start at defaults (so SSR and the first client render match), then a
@@ -114,18 +123,35 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // a different workflow remounts this component and every piece of state
   // returns to its initial value (loading=true, selectedId=null, …).
   useEffect(() => {
+    // Guards against a stale response overwriting fresher state: React 18
+    // Strict Mode double-invokes this effect in dev (mount → cleanup →
+    // remount), firing two real GETs with nothing to cancel the first. If
+    // the first (meant to be discarded) resolves AFTER something else has
+    // already changed `workflow` in between — e.g. a Bazaar-added node —
+    // its unconditional setWorkflow silently wipes that change out. The
+    // same race can happen for real (not just in dev) if workflowId changes
+    // quickly. Confirmed live: this is exactly what made a Bazaar-added
+    // node "appear then vanish" a second later.
+    let cancelled = false;
     if (workflowId === "new") {
       workflowsApi
         .create("Untitled workflow")
-        .then((wf) => router.replace(`/workflows/${wf.id}`))
-        .catch(() => setLoading(false));
-      return;
+        .then((wf) => {
+          if (!cancelled) router.replace(`/workflows/${wf.id}`);
+        })
+        .catch(() => {
+          if (!cancelled) setLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
     }
 
     workflowsApi
       .get(workflowId)
       .then((wf) => {
-        justLoaded.current = true;
+        if (cancelled) return;
+        skipNextAutosave.current = true;
         setWorkflow(wf);
         // Deployment state comes from the workflow's own status. It used to
         // be inferred from an agent node having a wallet address, which no
@@ -136,8 +162,11 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         setLoading(false);
       })
       .catch(() => {
-        router.push("/workflows");
+        if (!cancelled) router.push("/workflows");
       });
+    return () => {
+      cancelled = true;
+    };
   }, [workflowId, router]);
 
   // Auto-save: debounce 1.5s after any change, skip on initial load.
@@ -182,8 +211,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   useEffect(() => {
     if (!workflow) return;
-    if (justLoaded.current) {
-      justLoaded.current = false;
+    if (skipNextAutosave.current) {
+      skipNextAutosave.current = false;
       return;
     }
     setSaveLabel("saving…");
@@ -402,6 +431,58 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     },
     [],
   );
+
+  // A node handed over from the Bazaar page (/workflows/{id}?add=…). The
+  // canvas otherwise only gains nodes by drag-and-drop, which cannot cross a
+  // page boundary — see encodePendingNode in lib/bazaar.ts.
+  const searchParams = useSearchParams();
+  const pendingAdd = searchParams.get("add");
+  // Tracks the specific `add` value already consumed, not just whether any
+  // add has ever happened -- CanvasPage doesn't remount between two Bazaar
+  // visits to the SAME workflow, so a plain boolean latch would silently
+  // drop every add after the first for that workflow's whole session.
+  // router.replace below clears the URL param immediately after consuming
+  // it, so pendingAdd returns to null before a genuinely new value can
+  // arrive -- this only needs to survive React's own re-render/Strict Mode
+  // double-invoke for the SAME value, not distinguish a history of values.
+  const consumedAdd = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingAdd || consumedAdd.current === pendingAdd || !workflow) return;
+    const meta = decodePendingNode(pendingAdd);
+    // Consume the param either way: a malformed value must not re-trigger on
+    // every render, and must not survive a refresh as a phantom pending node.
+    consumedAdd.current = pendingAdd;
+    router.replace(`/workflows/${workflow.id}`);
+    if (!meta) return;
+    // Drop it slightly off-centre so it never lands exactly on an existing
+    // node when several are added in a row. Wraps every 8 nodes instead of
+    // growing with workflow.nodes.length forever -- otherwise a workflow
+    // that already has many nodes places the next Bazaar add far outside
+    // the visible viewport with no pan-to-node to bring it back into view.
+    const offset = (workflow.nodes.length % 8) * 24;
+    const node = {
+      ...meta,
+      id: `n_${Date.now()}`,
+      x: 220 + offset,
+      y: 180 + offset,
+    } as WorkflowNode;
+    // Reuse the same skip-once mechanism the initial load uses: a Bazaar
+    // visit should never silently mutate a workflow the user didn't
+    // explicitly choose to save, but this auto-add DOES change `workflow`
+    // state, which the auto-save effect below would otherwise persist on its
+    // very next debounce cycle (~1.5s) — including onto an already-deployed
+    // workflow. Setting skipNextAutosave here makes the auto-save effect treat this
+    // change exactly like the initial load: skip once. The user's next
+    // INTENTIONAL edit (drag, wire, field change) triggers a real save
+    // normally.
+    skipNextAutosave.current = true;
+    // This is a one-shot sync from an external source (the URL) into React
+    // state, gated by consumedAdd so it can only fire once per mount — not
+    // the derived-state-cascade pattern this rule exists to catch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setWorkflow((wf) => (wf ? { ...wf, nodes: [...wf.nodes, node] } : wf));
+    showToast(`Added ${meta.name ?? "endpoint"} to the canvas`);
+  }, [pendingAdd, workflow, router, setWorkflow, showToast]);
 
   // Wrapper typed as non-null so child components don't need to change.
   // Safe because children only render after the null guard above.

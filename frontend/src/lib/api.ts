@@ -14,6 +14,8 @@ import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
 
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
+// Exported so other modules (e.g. lib/bazaar.ts) share this one definition
+// instead of re-deriving it and silently drifting out of sync.
 const _CONFIGURED = process.env.NEXT_PUBLIC_API_URL ?? "";
 export const BASE =
   _CONFIGURED && typeof window !== "undefined" ? "/api" : _CONFIGURED;
@@ -705,6 +707,8 @@ export const usage = {
 };
 
 // -- Helpers --------------------------------------------------------------
-function delay(ms: number) {
+// Exported for the same reason BASE is: lib/bazaar.ts needs the identical
+// mock-mode delay rather than a second copy that can drift out of sync.
+export function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
