@@ -636,7 +636,7 @@ function WorkflowRows({
   return (
     <Card style={{ padding: 0, overflowX: "auto" }}>
       <div
-        className="wf-thead hide-md"
+        className="hide-md"
         style={{
           display: "grid",
           gridTemplateColumns: "var(--wf-row-cols)",
@@ -721,7 +721,9 @@ function WorkflowRows({
               </div>
             </div>
           </div>
-          <StatusBadge status={wf.status} />
+          <span data-label="Status" style={{ display: "inline-flex" }}>
+            <StatusBadge status={wf.status} />
+          </span>
           <span
             data-label="Agents"
             style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}
