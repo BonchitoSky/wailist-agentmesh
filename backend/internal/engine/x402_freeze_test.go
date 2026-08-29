@@ -52,9 +52,18 @@ import (
 // Both are additive: new billable-template case, new settlement function,
 // new info handler. No existing amount/address/signing logic changed.
 // Digests below reflect the merged state.
+//
+// Updated 2026-08-30, rebasing PR #99 (run resume/retry/dead-letter/cron)
+// onto current master, which moved further while this PR was open --
+// master's PR #59 ("prevent bot-driven duplicate settlements + workflow run
+// cooldown") reworked runfund.go/tool402.go's settlement-idempotency guards.
+// Confirmed via `git log 7059903..feat/run-reliability -- nodes/runfund.go
+// nodes/tool402.go`: PR #59's commit is the ONLY history touching either
+// file on this branch -- PR #99's own commits never edit them. Clean merge
+// from master, not a local edit. Digests below reflect the merged state.
 var frozenX402Files = map[string]string{
-	"nodes/tool402.go":             "cf7b39ecf298b2cc427d3c4d40430bc2b7bcb460af73efb1246fd6583bc40055",
-	"nodes/runfund.go":             "cd92b318daaced1a0724f8051eeb399954a833c882b0b871bd76d460d79402b3",
+	"nodes/tool402.go":             "1efb396d103d5896e815318ba3b5c08adb188ca0cb4379a2d608c5aea75d51c4",
+	"nodes/runfund.go":             "792e2a3c96465545119cebfcb744d487b79b27e5df7b9842ec643a98dce7b782",
 	"nodes/walletpay.go":           "98bb3f7d0cb167f8a50d050e04720738c63c68b9fd570758fa5b9604338a4e37",
 	"nodes/tendril.go":             "b787a18f17bc80f593159e46a0c7fd7e543a9db44f55a451ed8f47102fb9132a",
 	"nodes/billing.go":             "08ee13b175aa43bea258ca263180054057aa4e29c2d9a170059dac0071836cb6",

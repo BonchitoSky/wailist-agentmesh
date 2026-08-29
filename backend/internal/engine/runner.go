@@ -748,7 +748,7 @@ func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run,
 	runTotal := new(int64)
 	r.runBilling.Store(run.ID, runTotal)
 	defer func() {
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), runTotalSettleTimeout)
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nodes.SelfSettleRetryBudget)
 		defer cancel()
 		r.settleRunTotal(sctx, wf, run, runTotal)
 		r.runBilling.Delete(run.ID)
