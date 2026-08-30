@@ -5,17 +5,14 @@ import React, { CSSProperties } from "react";
 export function Logo({ size = 18 }: { size?: number }) {
   return (
     <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-        <circle cx="5" cy="6" r="2.4" fill="var(--accent)" />
-        <circle cx="19" cy="6" r="2.4" fill="currentColor" />
-        <circle cx="12" cy="18" r="2.4" fill="currentColor" />
-        <path
-          d="M5 6 L19 6 M5 6 L12 18 M19 6 L12 18"
-          stroke="currentColor"
-          strokeWidth="1.2"
-          opacity="0.6"
-        />
-      </svg>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/logo.png"
+        alt=""
+        width={size}
+        height={size}
+        style={{ borderRadius: size * 0.22, flexShrink: 0 }}
+      />
       <span
         style={{
           fontFamily: "var(--font-sans)",
@@ -131,6 +128,10 @@ export function Card({ style, ...rest }: React.HTMLAttributes<HTMLDivElement>) {
 // Small ghost button used in topbars and row actions on the workflows and
 // usage pages. A style const (not a component) so callers can spread-extend
 // it: { ...ghostBtnSm, width: 28 }.
+// `whiteSpace: nowrap` + `flexShrink: 0` are load-bearing, not cosmetic: the
+// height is fixed, so a label allowed to wrap in a narrow flex row renders two
+// lines inside a 28px box and spills over the border. Buttons keep their
+// intrinsic width and let the row wrap instead.
 export const ghostBtnSm: CSSProperties = {
   height: 28,
   padding: "0 10px",
@@ -145,6 +146,8 @@ export const ghostBtnSm: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 
 // ── Tag ──────────────────────────────────────────────────────────────────
@@ -181,12 +184,17 @@ export function Tag({ children }: { children: React.ReactNode }) {
 export function Hairline({
   vertical = false,
   length = "100%",
+  className,
 }: {
   vertical?: boolean;
   length?: string | number;
+  // Lets callers attach a responsive utility (e.g. `hide-md`) to a separator
+  // whose neighbours drop out at a breakpoint.
+  className?: string;
 }) {
   return (
     <div
+      className={className}
       style={{
         background: "var(--border)",
         width: vertical ? 1 : length,

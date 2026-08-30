@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Logo } from "@/components/ui";
 
 const NOT_FOUND_CSS = `
 .not-found-container {
@@ -20,10 +19,6 @@ export default function NotFound() {
 
       {/* Main card panel */}
       <div className="reveal" style={cardStyle}>
-        {/* AgentMesh branding */}
-        <div style={brandingStyle}>
-          <Logo size={28} />
-        </div>
         {/* AgentMesh logo mark */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -38,11 +33,13 @@ export default function NotFound() {
         <div style={errorCodeStyle}>404</div>
 
         {/* Heading */}
-        <h1 style={headingStyle}>Connection Lost</h1>
-        
+        <h1 style={headingStyle}>Lost in the Mesh</h1>
+
         {/* Description */}
         <p style={descriptionStyle}>
-          The endpoint you are trying to reach doesn&apos;t exist or has moved. Your agent&apos;s wallet remains secure, but we couldn&apos;t resolve this route.
+          This route wandered off mid workflow and never checked back in.
+          Your wallet and credits are exactly where you left them, this URL
+          just isn&apos;t a real node.
         </p>
 
         {/* Action navigation links */}
@@ -107,10 +104,6 @@ const cardStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
-};
-
-const brandingStyle: React.CSSProperties = {
-  marginBottom: "24px",
 };
 
 const logoMarkStyle: React.CSSProperties = {
