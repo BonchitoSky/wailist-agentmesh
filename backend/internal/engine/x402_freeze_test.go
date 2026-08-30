@@ -96,6 +96,19 @@ import (
 //     both types already existed with identical behavior -- this only
 //     adds a way to detect them generically via errors.As against the
 //     interface instead of one errors.As per concrete type.
+//
+// Updated again 2026-08-31, merging master's 4304044 ("update x402
+// freeze-test digests for the run-cooldown merge") into this branch --
+// master re-hashed tool402.go/runfund.go for 5c92070's retry/backoff
+// rework (selfSettleWallet1ToWallet2's full-jitter backoff loop,
+// SettlePlatformFee's timeout switching to SelfSettleRetryBudget), which
+// this branch had already merged earlier (see the 2026-08-30 entry above)
+// with its own correct digests. runfund.go's digest was already identical
+// on both sides -- no change there. tool402.go's digest conflicted because
+// this branch's tool402.go carries BOTH master's retry rework AND this
+// PR's ErrPaymentAlreadyCommitted wrapping on top of it; the digest below
+// is freshly computed from that merged file, not copied from either side.
+// No amount/address/signing logic touched by the merge itself.
 var frozenX402Files = map[string]string{
 	"nodes/tool402.go":             "af54224f3e2afd23ce5fb1f434bc1ff912b12af47f21e6f941291ae136e90860",
 	"nodes/runfund.go":             "792e2a3c96465545119cebfcb744d487b79b27e5df7b9842ec643a98dce7b782",

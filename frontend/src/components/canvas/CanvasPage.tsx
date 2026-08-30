@@ -58,6 +58,24 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // one.
   const skipNextAutosave = useRef(true);
 
+  // Below the breakpoint the editor can't be operated (drag-and-drop canvas,
+  // mouse-resizable panels), so it must not be mounted at all there -- not just
+  // visually covered by the notice, which would leave the graph, its data fetch
+  // and the chat/SSE host running under a screen the reader is told plainly they
+  // can't use. Starts false (matching what the server -- and the client's own
+  // hydration pass -- both render with no way to know the viewport yet) and is
+  // corrected in the mount effect below, same as the panel widths above.
+  // Reading matchMedia here directly would disagree with the server on the
+  // very first client render and trip a hydration mismatch.
+  const [isNarrow, setIsNarrow] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const update = () => setIsNarrow(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
   // -- Resizable side panels ------------------------------------------------
   // Widths start at defaults (so SSR and the first client render match), then a
   // mount effect loads any persisted values. The row is measured via a ref so
@@ -123,6 +141,10 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // a different workflow remounts this component and every piece of state
   // returns to its initial value (loading=true, selectedId=null, …).
   useEffect(() => {
+    // Neither creating nor loading a workflow is worth doing on a screen that
+    // cannot render the editor anyway -- this re-runs once isNarrow flips.
+    if (isNarrow) return;
+
     // Guards against a stale response overwriting fresher state: React 18
     // Strict Mode double-invokes this effect in dev (mount → cleanup →
     // remount), firing two real GETs with nothing to cancel the first. If
@@ -167,7 +189,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [workflowId, router]);
+  }, [workflowId, router, isNarrow]);
 
   // Auto-save: debounce 1.5s after any change, skip on initial load.
   // pendingSave holds the graph the debounce timer is still sitting on, and
@@ -496,11 +518,30 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [setWorkflow],
   ) as React.Dispatch<React.SetStateAction<Workflow>>;
 
+  // Below the breakpoint, stop here: no fetch, no graph, no chat/SSE host.
+  // See the isNarrow declaration above for why this can't just be an overlay.
+  if (isNarrow) {
+    return (
+      <div style={{ height: "100dvh", background: "var(--bg)" }}>
+        <div className="canvas-narrow">
+          <p className="canvas-narrow__title">The editor needs a wider screen.</p>
+          <p className="canvas-narrow__body">
+            Building a workflow means dragging nodes across a canvas and
+            resizing side panels. That does not work on a phone yet.
+          </p>
+          <button onClick={() => router.push("/workflows")}>
+            ← Back to workflows
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (loading || !workflow) {
     return (
       <div
         style={{
-          height: "100vh",
+          height: "100dvh",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -518,7 +559,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   return (
     <div
       style={{
-        height: "100vh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -919,6 +960,8 @@ const ghostBtnSm: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 const btnStyle: React.CSSProperties = {
   height: 28,
@@ -934,6 +977,8 @@ const btnStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
 const primaryBtnStyle: React.CSSProperties = {
   height: 28,
@@ -949,4 +994,6 @@ const primaryBtnStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 4,
+  whiteSpace: "nowrap",
+  flexShrink: 0,
 };
