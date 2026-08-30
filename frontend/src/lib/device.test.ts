@@ -48,6 +48,37 @@ const DEVICES: Array<{
     handheld: true,
     why: "rung 2 -- platform, since mobile:false would mislead",
   },
+  // The planned native Android shell (Capacitor). Not measured -- no shell
+  // exists yet -- but listed because the classification is a decision, not an
+  // accident: the app is a viewer/controller by design, so landing in
+  // read-only mode is the wanted outcome. Both rows are signal-aliases of
+  // cases above; they earn their place by failing under this NAME if a future
+  // edit to the table ever promotes the native app to editor mode.
+  {
+    name: "Capacitor Android WebView (native app shell)",
+    signals: {
+      uaDataMobile: true,
+      uaDataPlatform: "Android",
+      pointerCoarse: true,
+      hoverNone: true,
+      maxTouchPoints: 5,
+    },
+    handheld: true,
+    why: "rung 1 -- a WebView is Chromium, so the mobile hint is there",
+  },
+  {
+    name: "Capacitor Android WebView, UA-CH withheld",
+    signals: {
+      // A shell that strips UA-CH, or a WebView that does not expose it, must
+      // not fall back to editor. This is why the classification is guaranteed
+      // rather than likely: three independent rungs all reach the same answer.
+      pointerCoarse: true,
+      hoverNone: true,
+      maxTouchPoints: 5,
+    },
+    handheld: true,
+    why: "rung 4 -- holds with no userAgentData at all",
+  },
   {
     name: "iPad, Safari (sends a Mac user agent)",
     signals: {

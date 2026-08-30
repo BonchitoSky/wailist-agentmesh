@@ -9,6 +9,13 @@
 // Explicitly NOT viewport width. A laptop window dragged narrow is still a
 // laptop: same keyboard, same mouse, same person. Width decides layout; it does
 // not decide capability.
+//
+// The planned native Android app is a Capacitor WebView, and it classifies as
+// a handheld here on purpose, not by accident: it is a viewer and a trigger
+// client by design, never a workflow editor, so read-only is the outcome that
+// was wanted. Nothing overrides this, and nothing should -- operating a
+// workflow (run, stop, chat) is not withheld from a viewer, which is all that
+// app needs. See lib/readonly.ts for what a viewer may still do.
 
 export interface DeviceSignals {
   /** navigator.userAgentData?.mobile -- undefined outside Chromium. */
