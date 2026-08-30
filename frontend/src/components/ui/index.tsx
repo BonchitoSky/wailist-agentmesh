@@ -5,17 +5,14 @@ import React, { CSSProperties } from "react";
 export function Logo({ size = 18 }: { size?: number }) {
   return (
     <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-        <circle cx="5" cy="6" r="2.4" fill="var(--accent)" />
-        <circle cx="19" cy="6" r="2.4" fill="currentColor" />
-        <circle cx="12" cy="18" r="2.4" fill="currentColor" />
-        <path
-          d="M5 6 L19 6 M5 6 L12 18 M19 6 L12 18"
-          stroke="currentColor"
-          strokeWidth="1.2"
-          opacity="0.6"
-        />
-      </svg>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/logo.png"
+        alt=""
+        width={size}
+        height={size}
+        style={{ borderRadius: size * 0.22, flexShrink: 0 }}
+      />
       <span
         style={{
           fontFamily: "var(--font-sans)",
