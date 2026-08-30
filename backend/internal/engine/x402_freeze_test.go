@@ -81,12 +81,27 @@ import (
 //     call, its ordering, and every amount/address/signing line are
 //     unchanged -- only the returned error's TYPE changed at these three
 //     already-post-Commit return statements.
+//
+// Updated again 2026-08-30, same PR: another review pass found
+// isAgentFeeOwedDespiteFailure/isPaymentRisk (runner.go) dispatched on a
+// hand-maintained list of concrete error types with nothing enforcing a
+// future payment-adjacent type gets added to it -- exactly the class of
+// gap that let ErrPaymentAlreadyCommitted (added above) need a separate
+// follow-up pass to wire in at all.
+//
+//   - billing.go: added AgentFeeOwedError, a marker interface (Error() +
+//     an AgentFeeOwed() no-op method), and implemented it on both
+//     *ErrBalanceBlocked and *ErrPaymentAlreadyCommitted. Purely additive:
+//     no existing field, amount, address, or signing line touched, and
+//     both types already existed with identical behavior -- this only
+//     adds a way to detect them generically via errors.As against the
+//     interface instead of one errors.As per concrete type.
 var frozenX402Files = map[string]string{
 	"nodes/tool402.go":             "af54224f3e2afd23ce5fb1f434bc1ff912b12af47f21e6f941291ae136e90860",
 	"nodes/runfund.go":             "792e2a3c96465545119cebfcb744d487b79b27e5df7b9842ec643a98dce7b782",
 	"nodes/walletpay.go":           "98bb3f7d0cb167f8a50d050e04720738c63c68b9fd570758fa5b9604338a4e37",
 	"nodes/tendril.go":             "b787a18f17bc80f593159e46a0c7fd7e543a9db44f55a451ed8f47102fb9132a",
-	"nodes/billing.go":             "82013dfc6f45996f65e2baaf4213eb0a9fd1afdaa4e6b8a8b3d4f670d70aff2c",
+	"nodes/billing.go":             "d6bc9e5931816840d99678f9015f7b186ae3069d54e28605aa618c367bf5beb9",
 	"nodes/tier.go":                "5718a3538e042c9d7f90b37f38b47d893644d6093f560d103ea9036c90ddc90b",
 	"../api/handlers/x402relay.go": "eacd56896816a213dd5658aa536c704db22362a5d787113cbf269d7fe7c1d858",
 	"../x402/facilitator.go":       "976d118ae200994728f96733dceca79bc90fcc2cc99e859c47d710477f9480ca",

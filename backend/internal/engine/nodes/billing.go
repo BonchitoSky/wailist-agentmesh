@@ -90,6 +90,23 @@ var ErrActionSkipped = errors.New("action skipped: missing required configuratio
 // for a real, received rejection -- the money may have already moved.
 var ErrSettlementIndeterminate = errors.New("x402: facilitator settle response lost, payment fate unknown")
 
+// AgentFeeOwedError is implemented by any error meaning the agent's own
+// LLM turn already completed -- so its flat fee is still owed -- before
+// something it then did failed with real money potentially already moved.
+// engine.isAgentFeeOwedDespiteFailure/isPaymentRisk dispatch on this
+// interface via errors.As rather than a hand-maintained list of concrete
+// types, specifically so a FUTURE payment-adjacent error occurring mid-
+// agent-turn only needs to implement this one method to be picked up
+// correctly -- without it, a new type would silently classify as "no
+// payment risk" until someone remembered to add a matching branch by hand
+// (exactly what happened here: ErrPaymentAlreadyCommitted was added after
+// ErrBalanceBlocked, in a separate pass, and had to be found and added to
+// the dispatch list manually).
+type AgentFeeOwedError interface {
+	error
+	AgentFeeOwed()
+}
+
 // ErrBalanceBlocked wraps a BalanceChecker failure so the agent loop can
 // hard-stop instead of feeding the failure back to the LLM as a retryable
 // tool-level error (which would just spin the loop until
@@ -106,6 +123,7 @@ type ErrBalanceBlocked struct {
 
 func (e *ErrBalanceBlocked) Error() string { return e.Err.Error() }
 func (e *ErrBalanceBlocked) Unwrap() error { return e.Err }
+func (e *ErrBalanceBlocked) AgentFeeOwed() {}
 
 // ErrPaymentAlreadyCommitted wraps a tool402 failure that happens AFTER a
 // real outbound x402 payment already signed, submitted, and got committed
@@ -124,3 +142,4 @@ type ErrPaymentAlreadyCommitted struct {
 
 func (e *ErrPaymentAlreadyCommitted) Error() string { return e.Err.Error() }
 func (e *ErrPaymentAlreadyCommitted) Unwrap() error { return e.Err }
+func (e *ErrPaymentAlreadyCommitted) AgentFeeOwed() {}

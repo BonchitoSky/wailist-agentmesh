@@ -256,6 +256,13 @@ type RunLog struct {
 	Output     any       `json:"output,omitempty"`
 	DurationMs int       `json:"durationMs,omitempty"`
 	Ts         time.Time `json:"ts"`
+	// ConfigHash is a hash of the node's functionally-relevant config at
+	// the moment this row reached LogStatusSuccess -- empty for every
+	// status other than success, and for any success row written before
+	// this field existed. Never sent to the client (see the "-" tag): it's
+	// an internal detail of Resume's skip-on-prior-success check (see
+	// engine.nodeConfigHash), not something a UI needs to render.
+	ConfigHash string `json:"-"`
 }
 
 // DeadLetterRun records a node that failed permanently -- either a

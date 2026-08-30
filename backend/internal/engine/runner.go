@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -247,18 +249,23 @@ func criticalAlert(wf models.Workflow, run models.Run, label string, err error, 
 // isAgentFeeOwedDespiteFailure reports whether err means the agent's own
 // LLM turn already completed -- so its flat fee is still owed -- before
 // the node's overall execution failed. True for a failure that happens
-// DURING that turn's tool-calling loop: an attached call blocked by
-// insufficient balance (*nodes.ErrBalanceBlocked) before it could run, or
-// one that already signed and sent a real payment before a downstream
-// failure (*nodes.ErrPaymentAlreadyCommitted). False for anything meaning
-// the turn itself never ran -- an LLM connectivity error, or the run-level
-// pre-fund step (reserveAndFundRun) failing before the agent's loop ever
-// started, which is a real payment-risk case too but not one where an LLM
-// turn happened to bill for.
+// DURING that turn's tool-calling loop, wherever it implements
+// nodes.AgentFeeOwedError (currently *nodes.ErrBalanceBlocked, an attached
+// call blocked by insufficient balance before it could run, and
+// *nodes.ErrPaymentAlreadyCommitted, one that already signed and sent a
+// real payment before a downstream failure) -- dispatched via errors.As
+// against that interface rather than a hand-maintained list of concrete
+// types, so a FUTURE payment-adjacent error occurring mid-agent-turn is
+// picked up correctly just by implementing the interface, not by also
+// remembering to add a branch here (see AgentFeeOwedError's own doc
+// comment in billing.go for why that's worth avoiding). False for
+// anything meaning the turn itself never ran -- an LLM connectivity error,
+// or the run-level pre-fund step (reserveAndFundRun) failing before the
+// agent's loop ever started, which is a real payment-risk case too but
+// not one where an LLM turn happened to bill for.
 func isAgentFeeOwedDespiteFailure(err error) bool {
-	var blocked *nodes.ErrBalanceBlocked
-	var committed *nodes.ErrPaymentAlreadyCommitted
-	return errors.As(err, &blocked) || errors.As(err, &committed)
+	var feeOwed nodes.AgentFeeOwedError
+	return errors.As(err, &feeOwed)
 }
 
 // isPaymentRisk reports whether err means real money may already have
@@ -270,6 +277,119 @@ func isAgentFeeOwedDespiteFailure(err error) bool {
 // response being lost before any node (agent or otherwise) even started.
 func isPaymentRisk(err error) bool {
 	return isAgentFeeOwedDespiteFailure(err) || errors.Is(err, nodes.ErrSettlementIndeterminate)
+}
+
+// nodeMayHaveRealSideEffect reports whether nodeType/template is a node
+// whose execution can move real money, or trigger some other real
+// external effect (an email, a Slack/webhook post, an agent's LLM call),
+// that must never be silently repeated. execute()'s skip-on-prior-success
+// check (below) uses this to decide whether a node's config-staleness
+// check even applies: for one of these types, an already-succeeded node
+// is skipped unconditionally on resume, regardless of whether its config
+// has changed since -- re-executing one under new config could otherwise
+// repeat a real payment/send under different settings without the kind of
+// explicit review this codebase's payment-risk `force` gate already
+// requires for a comparable decision elsewhere in this file. A user who
+// wants a payment-adjacent node's edited config to actually take effect
+// needs a fresh Run, not a Resume.
+//
+// Mirrors nodes.BillableFlatFee's own node-type/template cases (the same
+// types that move money or trigger a real external effect), plus
+// NodeTypeTool402 and NodeTypeTendril, which BillableFlatFee deliberately
+// excludes for its own (billing-mechanism) reasons documented on it, but
+// which absolutely must not be re-executed here either -- both charge
+// real money at runtime.
+func nodeMayHaveRealSideEffect(nodeType models.NodeType, template string) bool {
+	return nodes.BillableFlatFee(nodeType, template) ||
+		nodeType == models.NodeTypeTool402 ||
+		nodeType == models.NodeTypeTendril
+}
+
+// nodeConfigHash returns a stable hash of node's functionally-relevant
+// configuration, used by execute()'s skip-on-prior-success check (above)
+// to detect a config edit made between a node's prior success and a
+// later Resume of the same run -- without this, that check reused a
+// node's stale prior output unconditionally, even when its config had
+// since changed to something that would produce different output or call
+// a different endpoint entirely (confirmed as a real gap in review: an
+// upstream node silently re-fed downstream steps its OLD output after
+// being edited, with no error).
+//
+// Deliberately hashes a hand-picked SUBSET of WorkflowNode's fields, not
+// the whole struct marshaled as-is, excluding:
+//   - ID, X, Y, Name, Label, Icon, Description: identity/canvas-position/
+//     cosmetic fields that never affect what running the node does
+//   - APIKey, EmailAPIKey, Secrets: independently encrypted at rest with
+//     a fresh nonce on every save (see encryptNodes/maskNodes/decryptNodes
+//     in handlers/workflows.go) -- their CIPHERTEXT changes on every
+//     ordinary autosave even when the underlying plaintext doesn't, so
+//     including them would make this hash change on every save regardless
+//     of any real edit, defeating the whole point of it
+//   - MaxRetries, RetryBackoffMs: retry POLICY, not what the node DOES --
+//     irrelevant to whether its output would differ
+//
+// Every field that actually determines what a node calls or computes is
+// included. json.Marshal on a struct with fixed field order (not a map)
+// is deterministic, and Go's encoding/json already sorts map keys
+// (ParamDefaults/Config) alphabetically, so this hash is stable across
+// repeated calls for identical input regardless of in-memory map
+// iteration order.
+func nodeConfigHash(n models.WorkflowNode) string {
+	relevant := struct {
+		Type             models.NodeType
+		Template         string
+		SystemPrompt     string
+		Wallet           string
+		Balance          string
+		Model            string
+		KeyMode          string
+		URL              string
+		Method           string
+		Endpoint         string
+		Price            string
+		Unit             string
+		Provider         string
+		Source           string
+		EmailTo          string
+		EmailFrom        string
+		EmailSubject     string
+		EmailBody        string
+		EmailProvider    string
+		DiscoveredParams []models.ParamDef
+		ParamDefaults    map[string]string
+		CustomParams     []models.CustomParam
+		BodyMode         string
+		BodyTemplate     string
+		Config           map[string]string
+		TendrilAction    string
+		TendrilNodeID    string
+		TendrilHours     string
+		TendrilAmount    string
+	}{
+		Type: n.Type, Template: n.Template, SystemPrompt: n.SystemPrompt,
+		Wallet: n.Wallet, Balance: n.Balance, Model: n.Model, KeyMode: n.KeyMode,
+		URL: n.URL, Method: n.Method, Endpoint: n.Endpoint, Price: n.Price,
+		Unit: n.Unit, Provider: n.Provider, Source: n.Source,
+		EmailTo: n.EmailTo, EmailFrom: n.EmailFrom, EmailSubject: n.EmailSubject,
+		EmailBody: n.EmailBody, EmailProvider: n.EmailProvider,
+		DiscoveredParams: n.DiscoveredParams, ParamDefaults: n.ParamDefaults,
+		CustomParams: n.CustomParams, BodyMode: n.BodyMode, BodyTemplate: n.BodyTemplate,
+		Config: n.Config, TendrilAction: n.TendrilAction, TendrilNodeID: n.TendrilNodeID,
+		TendrilHours: n.TendrilHours, TendrilAmount: n.TendrilAmount,
+	}
+	b, err := json.Marshal(relevant)
+	if err != nil {
+		// Every field above is a string, a slice of a plain struct, or a
+		// map[string]string -- json.Marshal cannot fail on this shape in
+		// practice. If it somehow did, "" is the SAFE direction: the skip
+		// check above treats an empty ConfigHash as "no signal, assume
+		// unchanged" (matching a legacy pre-migration row), never as
+		// "definitely changed" -- an unexpected marshal failure must not
+		// itself force every node in every run to needlessly re-execute.
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // newRunLevelLedger builds an in-memory credit pool for a single run,
@@ -949,7 +1069,7 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 			NodeType: models.NodeTypeTrigger,
 			Status:   models.LogStatusRunning,
 		}); insErr == nil {
-			r.store.UpdateRunLog(context.Background(), entry.ID, models.LogStatusFailed, outJSON, 0)
+			r.store.UpdateRunLog(context.Background(), entry.ID, models.LogStatusFailed, outJSON, 0, "")
 		}
 		r.broker.Publish(run.ID, models.LogEvent{
 			NodeType: models.NodeTypeTrigger,
@@ -1018,9 +1138,32 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 				// attempt (real payments/debits included) — reuse its logged
 				// output rather than re-executing and risking a double
 				// side-effect. seed is nil for a fresh Run.
+				//
+				// For a node type with a real side effect (nodeMayHaveRealSideEffect),
+				// this is unconditional -- skip regardless of whether the
+				// node's config has since changed, exactly matching this
+				// codebase's existing fail-closed stance on anything
+				// payment-adjacent: re-executing one of these under a
+				// changed config could repeat a real payment, email, or
+				// connector send, which is a worse outcome than reusing
+				// stale (but already-paid-for) output. A user who wants a
+				// payment-adjacent node's new config to actually take
+				// effect needs a fresh Run, not a Resume.
+				//
+				// For every other node type (pure computation: Tool
+				// "calc"/"datetime", Trigger, End), prior.ConfigHash must
+				// also match the node's CURRENT config -- see
+				// nodeConfigHash's own doc comment for exactly which
+				// fields that covers and why. An empty prior.ConfigHash
+				// (a success logged before this check existed) is treated
+				// as a match, preserving the always-skip behavior every
+				// run resumed before this shipped already relied on.
 				if prior, ok := seed[n.ID]; ok && prior.Status == models.LogStatusSuccess {
-					rc.Set(n.ID, prior.Output)
-					return
+					if nodeMayHaveRealSideEffect(n.Type, n.Template) ||
+						prior.ConfigHash == "" || prior.ConfigHash == nodeConfigHash(n) {
+						rc.Set(n.ID, prior.Output)
+						return
+					}
 				}
 
 				start := time.Now()
@@ -1076,7 +1219,7 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 				if execErr != nil {
 					atomic.StoreInt32(&failed, 1)
 					outJSON, _ := json.Marshal(execErr.Error())
-					r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusFailed, outJSON, dur)
+					r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusFailed, outJSON, dur, "")
 					// A run cancelled mid-node (Stop) surfaces as execErr too,
 					// but that's not a permanent node failure worth
 					// dead-lettering -- the finishRun path below already
@@ -1123,7 +1266,7 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 
 				rc.Set(n.ID, result)
 				outJSON, _ := json.Marshal(result)
-				r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusSuccess, outJSON, dur)
+				r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusSuccess, outJSON, dur, nodeConfigHash(n))
 				// This node just succeeded -- any dead-letter row an EARLIER
 				// attempt at it left behind (this run reached here via
 				// Resume) no longer reflects this node's current state, and
@@ -1171,7 +1314,15 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 								NodeType:  models.NodeTypeTool402,
 								Status:    models.LogStatusRunning,
 							}); err == nil {
-								r.store.UpdateRunLog(context.Background(), entry.ID, models.LogStatusSuccess, payJSON, 0)
+								// "" for configHash: this synthetic row is keyed by
+								// the ATTACHED tool402 node's ID, not the agent
+								// node actually running as a topology step --
+								// execute()'s own skip-on-prior-success check
+								// never looks this row up (attached tools are
+								// excluded from that loop entirely, see
+								// agentToolIDs above), so no hash is meaningful
+								// here; it's purely an audit record.
+								r.store.UpdateRunLog(context.Background(), entry.ID, models.LogStatusSuccess, payJSON, 0, "")
 							}
 							r.broker.Publish(run.ID, ev)
 						}

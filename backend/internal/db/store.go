@@ -36,28 +36,56 @@ func (s *Store) Close() {
 
 // --- Workflow methods ---
 
-func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models.Workflow, error) {
-	id := uuid.New().String()
-	emptyGraph := `{"nodes":[],"edges":[]}`
+// workflowColumns is the single source of truth for every query in this
+// file that reads a full `workflows` row -- CreateWorkflow, GetWorkflow,
+// ListWorkflows, UpdateWorkflow, ClaimDueSchedules, and FindSystemWorkflow
+// all select and scan this exact list via scanWorkflowRow below, instead of
+// each hand-writing its own copy. That hand-writing is exactly what let
+// FindSystemWorkflow silently fall behind when schedule_cron/
+// schedule_next_run_at were added to the others in an earlier pass: five
+// independent copies meant a new column had to be remembered at five call
+// sites, and one was missed. A future column now only needs to be added
+// here and in scanWorkflowRow's Scan call, once, for every caller to pick
+// it up automatically.
+const workflowColumns = `id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at, schedule_cron, schedule_next_run_at`
+
+// rowScanner is satisfied by both pgx.Row (QueryRow) and *pgx.Rows
+// (Query's per-row iteration) -- scanWorkflowRow works with either, so a
+// single-row lookup and a multi-row list can share the same scan logic.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanWorkflowRow scans one row shaped like workflowColumns into a
+// models.Workflow, handling the nullable run_endpoint column and the
+// graph JSON unmarshal every caller needs identically.
+func scanWorkflowRow(row rowScanner) (models.Workflow, error) {
 	var w models.Workflow
 	var graphJSON []byte
 	var runEndpoint *string
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO workflows (id, user_id, name, status, graph)
-		VALUES ($1, $2, $3, 'draft', $4::jsonb)
-		RETURNING id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
-	`, id, userID, name, emptyGraph).Scan(
+	if err := row.Scan(
 		&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
 		&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-	)
-	if err != nil {
-		return w, err
+		&w.ScheduleCron, &w.ScheduleNextRunAt,
+	); err != nil {
+		return models.Workflow{}, err
 	}
 	if runEndpoint != nil {
 		w.RunEndpoint = *runEndpoint
 	}
 	unmarshalGraph(graphJSON, &w)
 	return w, nil
+}
+
+func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models.Workflow, error) {
+	id := uuid.New().String()
+	emptyGraph := `{"nodes":[],"edges":[]}`
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO workflows (id, user_id, name, status, graph)
+		VALUES ($1, $2, $3, 'draft', $4::jsonb)
+		RETURNING `+workflowColumns+`
+	`, id, userID, name, emptyGraph)
+	return scanWorkflowRow(row)
 }
 
 // FindSystemWorkflow is GetOrCreateSystemWorkflow's read-only half: looks
@@ -75,28 +103,17 @@ func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models
 // Tendril, the instant they open ANY of their own workflows.
 func (s *Store) FindSystemWorkflow(ctx context.Context, userID, name string) (w models.Workflow, found bool, err error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
-		       schedule_cron, schedule_next_run_at
+		SELECT `+workflowColumns+`
 		FROM workflows WHERE user_id = $1 AND name = $2 ORDER BY created_at ASC LIMIT 1
 	`, userID, name)
 	if err != nil {
 		return models.Workflow{}, false, err
 	}
 	for rows.Next() {
-		var graphJSON []byte
-		var runEndpoint *string
-		if err := rows.Scan(
-			&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
-			&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-			&w.ScheduleCron, &w.ScheduleNextRunAt,
-		); err != nil {
+		if w, err = scanWorkflowRow(rows); err != nil {
 			rows.Close()
 			return models.Workflow{}, false, err
 		}
-		if runEndpoint != nil {
-			w.RunEndpoint = *runEndpoint
-		}
-		unmarshalGraph(graphJSON, &w)
 		found = true
 	}
 	rows.Close()
@@ -124,26 +141,8 @@ func (s *Store) GetOrCreateSystemWorkflow(ctx context.Context, userID, name stri
 }
 
 func (s *Store) GetWorkflow(ctx context.Context, id string) (models.Workflow, error) {
-	var w models.Workflow
-	var graphJSON []byte
-	var runEndpoint *string
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
-		       schedule_cron, schedule_next_run_at
-		FROM workflows WHERE id = $1
-	`, id).Scan(
-		&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
-		&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-		&w.ScheduleCron, &w.ScheduleNextRunAt,
-	)
-	if err != nil {
-		return w, err
-	}
-	if runEndpoint != nil {
-		w.RunEndpoint = *runEndpoint
-	}
-	unmarshalGraph(graphJSON, &w)
-	return w, nil
+	row := s.pool.QueryRow(ctx, `SELECT `+workflowColumns+` FROM workflows WHERE id = $1`, id)
+	return scanWorkflowRow(row)
 }
 
 // SetWorkflowSchedule enables (or updates) this workflow's cron schedule.
@@ -197,8 +196,7 @@ func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time, nextRun fu
 	defer tx.Rollback(ctx)
 
 	rows, err := tx.Query(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
-		       schedule_cron, schedule_next_run_at
+		SELECT `+workflowColumns+`
 		FROM workflows
 		WHERE status = 'deployed' AND schedule_cron IS NOT NULL AND schedule_next_run_at <= $1
 		FOR UPDATE SKIP LOCKED
@@ -206,23 +204,14 @@ func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time, nextRun fu
 	if err != nil {
 		return nil, err
 	}
-	type claimed struct {
-		wf    models.Workflow
-		graph []byte
-		runEP *string
-	}
-	var batch []claimed
+	var batch []models.Workflow
 	for rows.Next() {
-		var c claimed
-		if err := rows.Scan(
-			&c.wf.ID, &c.wf.UserID, &c.wf.Name, &c.wf.Status, &c.graph,
-			&c.wf.DeployedAt, &c.runEP, &c.wf.CreatedAt, &c.wf.UpdatedAt,
-			&c.wf.ScheduleCron, &c.wf.ScheduleNextRunAt,
-		); err != nil {
+		w, err := scanWorkflowRow(rows)
+		if err != nil {
 			rows.Close()
 			return nil, err
 		}
-		batch = append(batch, c)
+		batch = append(batch, w)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -230,12 +219,7 @@ func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time, nextRun fu
 	}
 
 	out := make([]models.Workflow, 0, len(batch))
-	for _, c := range batch {
-		w := c.wf
-		if c.runEP != nil {
-			w.RunEndpoint = *c.runEP
-		}
-		unmarshalGraph(c.graph, &w)
+	for _, w := range batch {
 
 		// Anchored on the row's own due time (w.ScheduleNextRunAt), NOT
 		// `now` (the sweep time) -- a scheduler that's down or delayed past
@@ -300,8 +284,7 @@ func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time, nextRun fu
 
 func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Workflow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
-		       schedule_cron, schedule_next_run_at
+		SELECT `+workflowColumns+`
 		FROM workflows WHERE user_id = $1 ORDER BY updated_at DESC
 	`, userID)
 	if err != nil {
@@ -310,20 +293,10 @@ func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Work
 	defer rows.Close()
 	var wfs []models.Workflow
 	for rows.Next() {
-		var w models.Workflow
-		var graphJSON []byte
-		var runEndpoint *string
-		if err := rows.Scan(
-			&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
-			&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-			&w.ScheduleCron, &w.ScheduleNextRunAt,
-		); err != nil {
+		w, err := scanWorkflowRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		if runEndpoint != nil {
-			w.RunEndpoint = *runEndpoint
-		}
-		unmarshalGraph(graphJSON, &w)
 		wfs = append(wfs, w)
 	}
 	return wfs, rows.Err()
@@ -331,27 +304,12 @@ func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Work
 
 func (s *Store) UpdateWorkflow(ctx context.Context, id, name string, graph models.WorkflowGraph) (models.Workflow, error) {
 	graphJSON, _ := json.Marshal(graph)
-	var w models.Workflow
-	var gJSON []byte
-	var runEndpoint *string
-	err := s.pool.QueryRow(ctx, `
+	row := s.pool.QueryRow(ctx, `
 		UPDATE workflows SET name=$2, graph=$3::jsonb, updated_at=NOW()
 		WHERE id=$1
-		RETURNING id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
-		          schedule_cron, schedule_next_run_at
-	`, id, name, string(graphJSON)).Scan(
-		&w.ID, &w.UserID, &w.Name, &w.Status, &gJSON,
-		&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-		&w.ScheduleCron, &w.ScheduleNextRunAt,
-	)
-	if err != nil {
-		return w, err
-	}
-	if runEndpoint != nil {
-		w.RunEndpoint = *runEndpoint
-	}
-	unmarshalGraph(gJSON, &w)
-	return w, nil
+		RETURNING `+workflowColumns+`
+	`, id, name, string(graphJSON))
+	return scanWorkflowRow(row)
 }
 
 func (s *Store) DeleteWorkflow(ctx context.Context, id string) error {
@@ -601,10 +559,13 @@ func (s *Store) InsertRunLog(ctx context.Context, l models.RunLog) (models.RunLo
 	return out, nil
 }
 
-func (s *Store) UpdateRunLog(ctx context.Context, id string, status models.LogStatus, outputJSON []byte, durationMs int) error {
+// configHash is only meaningful (and only ever read back) for a
+// LogStatusSuccess row -- see GetLatestNodeStates and RunLog.ConfigHash's
+// own doc comment. Callers updating any other status pass "".
+func (s *Store) UpdateRunLog(ctx context.Context, id string, status models.LogStatus, outputJSON []byte, durationMs int, configHash string) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE run_logs SET status=$2, output=$3::jsonb, duration_ms=$4 WHERE id=$1
-	`, id, string(status), string(outputJSON), durationMs)
+		UPDATE run_logs SET status=$2, output=$3::jsonb, duration_ms=$4, node_config_hash=$5 WHERE id=$1
+	`, id, string(status), string(outputJSON), durationMs, configHash)
 	return err
 }
 
@@ -645,7 +606,7 @@ func (s *Store) GetRunLogs(ctx context.Context, runID string) ([]models.RunLog, 
 // on a prior attempt.
 func (s *Store) GetLatestNodeStates(ctx context.Context, runID string) (map[string]models.RunLog, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT DISTINCT ON (node_id) node_id, status, output
+		SELECT DISTINCT ON (node_id) node_id, status, output, node_config_hash
 		FROM run_logs WHERE run_id=$1
 		ORDER BY node_id, ts DESC
 	`, runID)
@@ -657,7 +618,7 @@ func (s *Store) GetLatestNodeStates(ctx context.Context, runID string) (map[stri
 	for rows.Next() {
 		var l models.RunLog
 		var outJSON []byte
-		if err := rows.Scan(&l.NodeID, &l.Status, &outJSON); err != nil {
+		if err := rows.Scan(&l.NodeID, &l.Status, &outJSON, &l.ConfigHash); err != nil {
 			return nil, err
 		}
 		if outJSON != nil {

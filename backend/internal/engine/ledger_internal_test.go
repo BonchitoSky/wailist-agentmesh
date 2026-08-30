@@ -736,3 +736,35 @@ func TestIsPaymentRiskClassifiesEveryMoneyAlreadyMovedError(t *testing.T) {
 		})
 	}
 }
+
+// hypotheticalFutureAgentFeeOwedError stands in for a payment-adjacent
+// error type that doesn't exist yet -- e.g. a future Tendril-lease-charged
+// failure occurring mid-agent-turn -- to prove
+// isAgentFeeOwedDespiteFailure/isPaymentRisk actually dispatch on the
+// nodes.AgentFeeOwedError INTERFACE, not a hand-maintained list of the two
+// concrete types that happen to exist today. A type genuinely new to this
+// test file, implementing nothing but the interface, must still classify
+// as true here with zero changes to runner.go's classification functions.
+type hypotheticalFutureAgentFeeOwedError struct{ msg string }
+
+func (e *hypotheticalFutureAgentFeeOwedError) Error() string { return e.msg }
+func (e *hypotheticalFutureAgentFeeOwedError) AgentFeeOwed() {}
+
+var _ nodes.AgentFeeOwedError = (*hypotheticalFutureAgentFeeOwedError)(nil)
+
+func TestIsPaymentRiskRecognizesAnyFutureAgentFeeOwedImplementation(t *testing.T) {
+	err := &hypotheticalFutureAgentFeeOwedError{msg: "a future payment-adjacent failure this test file invented"}
+	if !isAgentFeeOwedDespiteFailure(err) {
+		t.Error("isAgentFeeOwedDespiteFailure must recognize ANY type implementing nodes.AgentFeeOwedError, not just the two that exist today -- got false for a novel implementation")
+	}
+	if !isPaymentRisk(err) {
+		t.Error("isPaymentRisk must recognize ANY type implementing nodes.AgentFeeOwedError -- got false for a novel implementation")
+	}
+	// Wrapped (e.g. via fmt.Errorf("...: %w", err)) must still classify --
+	// errors.As walks Unwrap(), matching how these errors actually reach
+	// runner.go's dead-letter classification in practice.
+	wrapped := fmt.Errorf("node execution failed: %w", err)
+	if !isPaymentRisk(wrapped) {
+		t.Error("isPaymentRisk must see through fmt.Errorf(\"...: %w\", err) wrapping to a novel AgentFeeOwedError implementation")
+	}
+}

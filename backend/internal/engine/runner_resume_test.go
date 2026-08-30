@@ -59,7 +59,7 @@ func TestResumeSkipsAlreadySucceededNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdateRunLog(ctx, seedEntry.ID, models.LogStatusSuccess, []byte("9999"), 5); err != nil {
+	if err := store.UpdateRunLog(ctx, seedEntry.ID, models.LogStatusSuccess, []byte("9999"), 5, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -142,7 +142,7 @@ func TestGetLatestNodeStatesReturnsMostRecentStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdateRunLog(ctx, first.ID, models.LogStatusFailed, []byte(`"boom"`), 1); err != nil {
+	if err := store.UpdateRunLog(ctx, first.ID, models.LogStatusFailed, []byte(`"boom"`), 1, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -152,7 +152,7 @@ func TestGetLatestNodeStatesReturnsMostRecentStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdateRunLog(ctx, second.ID, models.LogStatusSuccess, []byte(`"ok"`), 1); err != nil {
+	if err := store.UpdateRunLog(ctx, second.ID, models.LogStatusSuccess, []byte(`"ok"`), 1, ""); err != nil {
 		t.Fatal(err)
 	}
 
