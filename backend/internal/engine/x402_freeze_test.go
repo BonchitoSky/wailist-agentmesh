@@ -61,12 +61,32 @@ import (
 // nodes/tool402.go`: PR #59's commit is the ONLY history touching either
 // file on this branch -- PR #99's own commits never edit them. Clean merge
 // from master, not a local edit. Digests below reflect the merged state.
+//
+// Updated again 2026-08-30, same PR: a code review pass found the
+// dead-letter PaymentRisk classification (runner.go's isPaymentRisk) missed
+// two failure shapes that also mean real money already moved -- a tool402
+// call that signed and sent a real outbound payment before the target
+// rejected it or the request itself failed at the transport level.
+//
+//   - billing.go: added ErrPaymentAlreadyCommitted, a new sentinel error
+//     type (same shape as the existing ErrBalanceBlocked) wrapping a
+//     failure that happens strictly AFTER the ledger Commit call for a
+//     signed payment. No amount/address/signing logic touched.
+//   - tool402.go: the two return sites in executeTool402RunLevel and the
+//     one in executeTool402V2Relay that already returned a plain error
+//     AFTER their preceding Commit call now wrap that same error in
+//     ErrPaymentAlreadyCommitted before returning it, so a caller (the
+//     dead-letter classification) can tell it apart from a failure that
+//     happened before any payment was signed. Every Commit/Reserve/Release
+//     call, its ordering, and every amount/address/signing line are
+//     unchanged -- only the returned error's TYPE changed at these three
+//     already-post-Commit return statements.
 var frozenX402Files = map[string]string{
-	"nodes/tool402.go":             "1efb396d103d5896e815318ba3b5c08adb188ca0cb4379a2d608c5aea75d51c4",
+	"nodes/tool402.go":             "af54224f3e2afd23ce5fb1f434bc1ff912b12af47f21e6f941291ae136e90860",
 	"nodes/runfund.go":             "792e2a3c96465545119cebfcb744d487b79b27e5df7b9842ec643a98dce7b782",
 	"nodes/walletpay.go":           "98bb3f7d0cb167f8a50d050e04720738c63c68b9fd570758fa5b9604338a4e37",
 	"nodes/tendril.go":             "b787a18f17bc80f593159e46a0c7fd7e543a9db44f55a451ed8f47102fb9132a",
-	"nodes/billing.go":             "08ee13b175aa43bea258ca263180054057aa4e29c2d9a170059dac0071836cb6",
+	"nodes/billing.go":             "82013dfc6f45996f65e2baaf4213eb0a9fd1afdaa4e6b8a8b3d4f670d70aff2c",
 	"nodes/tier.go":                "5718a3538e042c9d7f90b37f38b47d893644d6093f560d103ea9036c90ddc90b",
 	"../api/handlers/x402relay.go": "eacd56896816a213dd5658aa536c704db22362a5d787113cbf269d7fe7c1d858",
 	"../x402/facilitator.go":       "976d118ae200994728f96733dceca79bc90fcc2cc99e859c47d710477f9480ca",

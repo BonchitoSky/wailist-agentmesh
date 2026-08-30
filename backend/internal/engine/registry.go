@@ -44,6 +44,28 @@ func (reg *runRegistry) register(workflowID string, cancel context.CancelFunc) u
 	return gen
 }
 
+// registerIfAbsent is register's non-superseding counterpart: it only
+// registers (and returns ok=true) when workflowID has no existing entry.
+// If one already exists, it returns immediately without touching it --
+// unlike register, which always cancels whatever's there. Used by a caller
+// (the scheduler) that must never cancel someone else's run just because
+// its own check-then-act window raced a registration landing in between;
+// register's unconditional-supersede behavior is correct for a user
+// deliberately re-triggering their own workflow, but wrong for an
+// automated scheduler tick that merely wants to fire if nothing else is
+// already in flight.
+func (reg *runRegistry) registerIfAbsent(workflowID string, cancel context.CancelFunc) (uint64, bool) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	if _, ok := reg.entries[workflowID]; ok {
+		return 0, false
+	}
+	reg.nextGen++
+	gen := reg.nextGen
+	reg.entries[workflowID] = registryEntry{cancel: cancel, gen: gen}
+	return gen, true
+}
+
 // isActive reports whether workflowID currently has a registered in-flight
 // run, without cancelling or otherwise touching it.
 func (reg *runRegistry) isActive(workflowID string) bool {

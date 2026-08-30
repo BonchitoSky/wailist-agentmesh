@@ -244,15 +244,32 @@ func criticalAlert(wf models.Workflow, run models.Run, label string, err error, 
 	go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 }
 
-// isBalanceBlocked reports whether err is (or wraps) *nodes.ErrBalanceBlocked
-// -- the agent's own LLM turn completed and its flat fee was already
-// debited before an attached call it then tried ran into insufficient
-// balance. Shared by the agent-fee debit gate and the dead-letter
-// PaymentRisk classification below so the two can't drift out of sync on
-// what counts as "money already moved."
-func isBalanceBlocked(err error) bool {
+// isAgentFeeOwedDespiteFailure reports whether err means the agent's own
+// LLM turn already completed -- so its flat fee is still owed -- before
+// the node's overall execution failed. True for a failure that happens
+// DURING that turn's tool-calling loop: an attached call blocked by
+// insufficient balance (*nodes.ErrBalanceBlocked) before it could run, or
+// one that already signed and sent a real payment before a downstream
+// failure (*nodes.ErrPaymentAlreadyCommitted). False for anything meaning
+// the turn itself never ran -- an LLM connectivity error, or the run-level
+// pre-fund step (reserveAndFundRun) failing before the agent's loop ever
+// started, which is a real payment-risk case too but not one where an LLM
+// turn happened to bill for.
+func isAgentFeeOwedDespiteFailure(err error) bool {
 	var blocked *nodes.ErrBalanceBlocked
-	return errors.As(err, &blocked)
+	var committed *nodes.ErrPaymentAlreadyCommitted
+	return errors.As(err, &blocked) || errors.As(err, &committed)
+}
+
+// isPaymentRisk reports whether err means real money may already have
+// moved for this node's attempt, regardless of whether an agent's LLM turn
+// was involved -- used to flag a dead-letter row (DeadLetterRun.PaymentRisk)
+// so Resume refuses to silently retry (and potentially re-pay) it without
+// an explicit force. Broader than isAgentFeeOwedDespiteFailure: also true
+// for nodes.ErrSettlementIndeterminate, the run-level pre-fund settle
+// response being lost before any node (agent or otherwise) even started.
+func isPaymentRisk(err error) bool {
+	return isAgentFeeOwedDespiteFailure(err) || errors.Is(err, nodes.ErrSettlementIndeterminate)
 }
 
 // newRunLevelLedger builds an in-memory credit pool for a single run,
@@ -672,10 +689,50 @@ func (r *Runner) debitAgentFee(ctx context.Context, wf models.Workflow, run mode
 
 // Start creates a cancellable context for the run, registers it, and launches
 // Run in a goroutine. Replaces the previous pattern of calling Run directly.
+//
+// register() unconditionally cancels any run already registered for
+// wf.ID -- correct here, since Start is only ever called for a user (or a
+// webhook) deliberately triggering their own workflow, which should
+// supersede whatever else was running. The scheduler must NOT get this
+// behavior -- see StartIfNotRunning below.
 func (r *Runner) Start(wf models.Workflow, run models.Run) {
 	ctx, cancel := context.WithCancel(context.Background())
 	gen := r.registry.register(wf.ID, cancel)
 	go r.Run(ctx, wf, run, gen)
+}
+
+// StartIfNotRunning is Start's non-superseding counterpart, for the
+// scheduler only. Its own overlap guard (Scheduler.tick's IsRunning +
+// HasRunningRun checks) is check-then-act: read shared state, decide, then
+// call this. That leaves a window between the read and this call where a
+// manual trigger or resume for the same workflow could register in
+// between -- if this used Start's register() (unconditional supersede),
+// closing that window would mean silently cancelling a run the user just
+// started, possibly mid-payment, which is exactly the class of bug
+// StartResume's own claim-before-register ordering exists to prevent for
+// resume. registerIfAbsent makes the FINAL registration step itself
+// atomic and non-destructive: if anything is already registered for wf.ID
+// by the time this runs -- including one that raced in during the
+// scheduler's own check-then-act window -- this refuses (false) instead
+// of cancelling it. Returns false without starting anything in that case;
+// the caller (scheduler) must not have already committed anything
+// unrecoverable (e.g. a run row) that this leaves orphaned.
+//
+// r.broker.Create(run.ID) happens here, only on the success path, for the
+// same two reasons as StartResume's identical ordering: doing it in the
+// caller before this call would leak a hub for a run that turns out to
+// never execute (registerIfAbsent refused), and doing it in the caller
+// AFTER this call would race the goroutine below actually publishing.
+func (r *Runner) StartIfNotRunning(wf models.Workflow, run models.Run) bool {
+	ctx, cancel := context.WithCancel(context.Background())
+	gen, ok := r.registry.registerIfAbsent(wf.ID, cancel)
+	if !ok {
+		cancel()
+		return false
+	}
+	r.broker.Create(run.ID)
+	go r.Run(ctx, wf, run, gen)
+	return true
 }
 
 // StartResume is Start's counterpart for continuing a run that already has
@@ -701,11 +758,24 @@ func (r *Runner) Start(wf models.Workflow, run models.Run) {
 // Returns false (no error) if the run wasn't in a resumable state -- the
 // caller must treat that as "already resumed elsewhere" or "already
 // finished", not start executing anything.
+//
+// r.broker.Create(run.ID) happens HERE, synchronously, after the claim
+// succeeds -- not in the handler before calling this. Broker.Create
+// unconditionally overwrites any existing hub for run.ID with a fresh,
+// empty one (no compare-and-swap); if the caller created it beforehand,
+// two concurrent resume requests for the same run.ID would race that
+// overwrite, and whichever hub a client's GET /stream subscribed to could
+// end up orphaned -- silently never receiving events -- regardless of
+// which request actually won the claim below. Creating it only after the
+// claim succeeds means only the sole winner ever creates a hub for this
+// resume attempt, and it does so before the goroutine below can publish
+// anything into it.
 func (r *Runner) StartResume(ctx context.Context, wf models.Workflow, run models.Run, force bool) (bool, error) {
 	claimed, err := r.store.MarkRunRunning(ctx, run.ID)
 	if err != nil || !claimed {
 		return false, err
 	}
+	r.broker.Create(run.ID)
 	rctx, cancel := context.WithCancel(context.Background())
 	gen := r.registry.register(wf.ID, cancel)
 	go r.Resume(rctx, wf, run, gen, force)
@@ -968,6 +1038,17 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 							timer.Stop()
 						}
 					}
+					// Rechecked immediately on waking, before looping back to
+					// executeNode -- ctx can be cancelled (Stop) or `failed`
+					// can flip (a sibling in this level failed) at any point
+					// during the sleep above, and the loop's own condition at
+					// the top only catches that on its NEXT iteration's
+					// result, one live outbound call too late. Breaking here
+					// instead means a doomed or cancelled run never makes
+					// that extra call.
+					if ctx.Err() != nil || atomic.LoadInt32(&failed) != 0 {
+						break
+					}
 				}
 				dur := int(time.Since(start).Milliseconds())
 
@@ -980,15 +1061,17 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 					// dead-lettering -- the finishRun path below already
 					// reports it as "stopped", not "failed".
 					if ctx.Err() == nil {
-						// A *nodes.ErrBalanceBlocked failure means the agent's
-						// own LLM turn already completed and its flat fee was
-						// already debited (see debitAgentFee's call site in
-						// executeNode's agent branch) before the attached
-						// call it then tried ran into insufficient balance --
-						// real money already moved for this attempt. Flag it
-						// so Resume refuses to blindly retry (and re-bill)
-						// this node without an explicit force.
-						paymentRisk := isBalanceBlocked(execErr)
+						// isPaymentRisk covers every shape of "real money may
+						// already have moved for this attempt": an attached
+						// call blocked by insufficient balance after the
+						// agent's own LLM turn (and its fee) already
+						// completed, an attached tool402 call that signed and
+						// sent a real payment before a downstream failure, or
+						// the run-level pre-fund settle response getting lost
+						// before any node started. Flag it so Resume refuses
+						// to blindly retry (and potentially re-pay) this node
+						// without an explicit force.
+						paymentRisk := isPaymentRisk(execErr)
 						if dlErr := r.store.InsertDeadLetterRun(context.Background(), models.DeadLetterRun{
 							RunID:        run.ID,
 							NodeID:       n.ID,
@@ -1173,13 +1256,15 @@ func (r *Runner) executeNode(
 		}
 		result, err := nodes.ExecuteAgent(ctx, node, attach, aw, r.walletSvc, rc, checkBalance, r.platformKeys, relayCfg)
 		if err != nil {
-			// A *nodes.ErrBalanceBlocked failure means the agent's own LLM
-			// turn already completed and only ran into insufficient balance
-			// when it tried an attached call — the agent's own flat fee is
+			// isAgentFeeOwedDespiteFailure means the agent's own LLM turn
+			// already completed -- either an attached call was blocked by
+			// insufficient balance before it could run, or an attached
+			// tool402 call signed and sent a real payment before a
+			// downstream failure -- either way the agent's own flat fee is
 			// still owed. Any other error (e.g. LLM connectivity failure)
 			// means the agent turn itself never completed, so nothing is
 			// billed, matching the pre-existing behavior for those failures.
-			if isBalanceBlocked(err) {
+			if isAgentFeeOwedDespiteFailure(err) {
 				r.debitAgentFee(ctx, wf, run, node.ID, agentFeeUSDMicros, platformMode, resolvedModel, 0, 0)
 			}
 			return nil, err

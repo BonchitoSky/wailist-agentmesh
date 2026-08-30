@@ -694,3 +694,45 @@ func TestReserveAndFundRunDegradesGracefullyWithNilFacilitator(t *testing.T) {
 		t.Fatalf("want balance untouched at 1000000 (degraded before ReserveCredits), got %d", balance)
 	}
 }
+
+// TestIsPaymentRiskClassifiesEveryMoneyAlreadyMovedError is a regression
+// test for a review finding: the dead-letter PaymentRisk classification
+// used to check only *nodes.ErrBalanceBlocked, missing two other error
+// shapes that also mean real money may already have moved for this
+// attempt -- nodes.ErrSettlementIndeterminate (the run-level pre-fund
+// settle response lost before any node started) and the newer
+// *nodes.ErrPaymentAlreadyCommitted (a tool402 call that signed and sent a
+// real payment before a downstream failure). Exercised directly against
+// the classification functions rather than through a full run: building an
+// end-to-end fixture for each of these three failure shapes (agent balance
+// block, run-level pre-fund indeterminate settle, standalone tool402
+// post-payment rejection) would mostly re-test wiring these functions
+// don't touch; what actually changed is the classification logic itself.
+func TestIsPaymentRiskClassifiesEveryMoneyAlreadyMovedError(t *testing.T) {
+	balanceBlocked := &nodes.ErrBalanceBlocked{Err: errors.New("insufficient balance")}
+	settlementIndeterminate := fmt.Errorf("x402 run funding: settlement indeterminate: %w", nodes.ErrSettlementIndeterminate)
+	paymentAlreadyCommitted := &nodes.ErrPaymentAlreadyCommitted{Err: errors.New("target rejected the paid request")}
+	unrelated := errors.New("LLM connectivity error")
+
+	cases := []struct {
+		name             string
+		err              error
+		wantAgentFeeOwed bool
+		wantPaymentRisk  bool
+	}{
+		{"ErrBalanceBlocked", balanceBlocked, true, true},
+		{"ErrPaymentAlreadyCommitted", paymentAlreadyCommitted, true, true},
+		{"ErrSettlementIndeterminate", settlementIndeterminate, false, true},
+		{"unrelated error", unrelated, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isAgentFeeOwedDespiteFailure(tc.err); got != tc.wantAgentFeeOwed {
+				t.Errorf("isAgentFeeOwedDespiteFailure(%v) = %v, want %v", tc.err, got, tc.wantAgentFeeOwed)
+			}
+			if got := isPaymentRisk(tc.err); got != tc.wantPaymentRisk {
+				t.Errorf("isPaymentRisk(%v) = %v, want %v", tc.err, got, tc.wantPaymentRisk)
+			}
+		})
+	}
+}

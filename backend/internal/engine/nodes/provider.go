@@ -526,6 +526,18 @@ func callGemini(ctx context.Context, agent models.WorkflowNode, provider models.
 				if errors.As(execErr, &blocked) {
 					return nil, execErr
 				}
+				// KNOWN GAP: any other tool error -- including
+				// *ErrPaymentAlreadyCommitted, a tool402 call that signed
+				// and sent a real payment before the target rejected it or
+				// the request failed -- falls through below and gets fed
+				// back to the LLM as a soft "error: ..." string, discarding
+				// its type. If the loop later fails anyway (maxToolIterations,
+				// an LLM API error), the error runner.go's dead-letter
+				// classification sees carries no trace of the earlier
+				// payment. Closing this needs a payment-risk flag threaded
+				// through this whole loop (and its OpenAI-compatible/
+				// Anthropic counterparts), not just a wrapped error type at
+				// the origin -- not done here.
 			}
 			resultStr := ""
 			if execErr != nil {
@@ -708,6 +720,11 @@ func callOpenAICompat(ctx context.Context, agent models.WorkflowNode, provider m
 				if errors.As(toolErr, &blocked) {
 					return nil, toolErr
 				}
+				// See the identical KNOWN GAP note in the Gemini loop above
+				// -- any other tool error, *ErrPaymentAlreadyCommitted
+				// included, gets fed back to the LLM as a string below and
+				// loses its type if the loop later fails for an unrelated
+				// reason.
 			}
 			resultStr := ""
 			if toolErr != nil {

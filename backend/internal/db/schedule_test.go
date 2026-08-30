@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/agentmesh/backend/internal/models"
 )
 
 // TestClaimDueSchedulesClaimsAndAdvances verifies the core scheduler
@@ -164,5 +166,66 @@ func TestClaimDueSchedulesClearsInvalidExpression(t *testing.T) {
 	}
 	if got.ScheduleCron != nil {
 		t.Errorf("schedule_cron = %v, want cleared (nil) after an unparseable expression", got.ScheduleCron)
+	}
+}
+
+// TestListWorkflowsAndUpdateWorkflowReportScheduleFields is a regression
+// test for a review finding: ListWorkflows' SELECT and UpdateWorkflow's
+// RETURNING clause both omitted schedule_cron/schedule_next_run_at, so
+// GET /workflows always reported a null schedule even for a workflow with
+// one actively set, and the response immediately after any PUT
+// /workflows/{id} did too -- inconsistent with GetWorkflow, which always
+// populated them correctly.
+func TestListWorkflowsAndUpdateWorkflowReportScheduleFields(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	email := fmt.Sprintf("schedule-list-update-test-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, err := store.CreateWorkflow(ctx, "Schedule List Update Test", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetWorkflowDeployed(ctx, wf.ID, "https://example.com/run", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	nextRun := time.Now().Add(24 * time.Hour)
+	if err := store.SetWorkflowSchedule(ctx, wf.ID, "0 9 * * *", nextRun); err != nil {
+		t.Fatal(err)
+	}
+
+	wfs, err := store.ListWorkflows(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, w := range wfs {
+		if w.ID != wf.ID {
+			continue
+		}
+		found = true
+		if w.ScheduleCron == nil || *w.ScheduleCron != "0 9 * * *" {
+			t.Errorf("ListWorkflows: schedule_cron = %v, want \"0 9 * * *\"", w.ScheduleCron)
+		}
+		if w.ScheduleNextRunAt == nil {
+			t.Error("ListWorkflows: schedule_next_run_at is nil, want the set time")
+		}
+	}
+	if !found {
+		t.Fatalf("workflow %s not found in ListWorkflows result", wf.ID)
+	}
+
+	updated, err := store.UpdateWorkflow(ctx, wf.ID, "Schedule List Update Test (renamed)", models.WorkflowGraph{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ScheduleCron == nil || *updated.ScheduleCron != "0 9 * * *" {
+		t.Errorf("UpdateWorkflow response: schedule_cron = %v, want \"0 9 * * *\" (must survive an unrelated save)", updated.ScheduleCron)
+	}
+	if updated.ScheduleNextRunAt == nil {
+		t.Error("UpdateWorkflow response: schedule_next_run_at is nil, want the set time to survive an unrelated save")
 	}
 }

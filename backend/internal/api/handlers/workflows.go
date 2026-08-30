@@ -178,6 +178,13 @@ func (d *Deps) BuildWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Not currently exploitable -- BuildGraph's field-setter only allows
+	// string-typed node fields, so MaxRetries/RetryBackoffMs stay at their
+	// zero value on this path today -- but this save must go through the
+	// same clamp UpdateWorkflow's own HTTP handler applies, so a future
+	// change that lets the chat-driven builder set these fields (or a raw
+	// JSON passthrough bug) can't silently bypass the retry-storm cap.
+	clampRetryFields(result.Graph.Nodes)
 	encryptedNodes := encryptNodes(result.Graph.Nodes, d.EncryptionKey, existing.Nodes)
 	encryptedNodes = ensureWebhookSecrets(encryptedNodes, d.EncryptionKey)
 	graph := models.WorkflowGraph{Nodes: encryptedNodes, Edges: result.Graph.Edges}

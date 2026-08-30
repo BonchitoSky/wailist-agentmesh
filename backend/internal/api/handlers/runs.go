@@ -239,7 +239,12 @@ func (d *Deps) ResumeRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	wf.Nodes = decryptNodes(wf.Nodes, d.EncryptionKey)
-	d.Broker.Create(run.ID)
+	// StartResume creates the broker hub itself, synchronously, only once
+	// its admission claim actually succeeds -- see its doc comment. Not
+	// done here: two concurrent resume requests for the same run.ID both
+	// calling Broker.Create before either claim resolves could overwrite
+	// each other's hub and orphan a client already subscribed via GET
+	// /runs/:id/stream, regardless of which request wins the claim.
 	claimed, err := d.Engine.StartResume(ctx, wf, run, force)
 	if err != nil {
 		respond.Error(w, http.StatusInternalServerError, err.Error())

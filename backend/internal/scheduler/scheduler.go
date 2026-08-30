@@ -16,6 +16,7 @@ import (
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine"
+	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/sse"
 )
 
@@ -110,7 +111,24 @@ func (s *Scheduler) tick(ctx context.Context) {
 			continue
 		}
 		wf.Nodes = handlers.DecryptNodes(wf.Nodes, s.encryptionKey)
-		s.broker.Create(run.ID)
-		s.engine.Start(wf, run)
+		// StartIfNotRunning, not Start: Start's registry unconditionally
+		// cancels any run already registered for wf.ID, which is correct
+		// for a user deliberately re-triggering their own workflow but
+		// wrong here -- the IsRunning/HasRunningRun checks above are
+		// check-then-act, so a manual trigger or resume for this same
+		// workflow could have registered in the window between those
+		// checks and this call. Using Start here would silently cancel
+		// that run, possibly mid-payment, out from under the user.
+		// StartIfNotRunning makes the actual registration atomic and
+		// non-destructive instead: it refuses rather than superseding, and
+		// creates the broker hub itself only once it actually wins (see
+		// its own doc comment) -- not done here, since a hub created for a
+		// run that turns out to never execute would just leak forever.
+		if !s.engine.StartIfNotRunning(wf, run) {
+			log.Printf("scheduler: workflow %s registered a run between the overlap check and start -- marking this redundant run row failed instead of executing it", wf.ID)
+			if err := s.store.FinishRun(context.Background(), run.ID, models.RunStatusFailed); err != nil {
+				log.Printf("scheduler: marking redundant run %s failed also failed: %v", run.ID, err)
+			}
+		}
 	}
 }

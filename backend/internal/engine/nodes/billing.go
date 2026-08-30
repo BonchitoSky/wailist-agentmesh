@@ -106,3 +106,21 @@ type ErrBalanceBlocked struct {
 
 func (e *ErrBalanceBlocked) Error() string { return e.Err.Error() }
 func (e *ErrBalanceBlocked) Unwrap() error { return e.Err }
+
+// ErrPaymentAlreadyCommitted wraps a tool402 failure that happens AFTER a
+// real outbound x402 payment already signed, submitted, and got committed
+// to the ledger (see PayTargetFromWallet2/Wallet2PayResult.Signed and the
+// relay path's identical shape) -- the target then rejected the paid
+// request, or the target request itself failed at the transport level.
+// Either way the money already left Wallet 2; nothing here is safe to
+// silently retry from scratch, since a retry would pay again for the same
+// call rather than just recovering the one part that actually failed.
+// Callers (the dead-letter PaymentRisk classification in runner.go) use
+// errors.As to distinguish this from a tool402 failure that happened
+// before any payment was signed, which is safe to retry freely.
+type ErrPaymentAlreadyCommitted struct {
+	Err error
+}
+
+func (e *ErrPaymentAlreadyCommitted) Error() string { return e.Err.Error() }
+func (e *ErrPaymentAlreadyCommitted) Unwrap() error { return e.Err }

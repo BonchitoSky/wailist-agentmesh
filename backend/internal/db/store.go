@@ -248,7 +248,8 @@ func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time, nextRun fu
 
 func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Workflow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
+		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
+		       schedule_cron, schedule_next_run_at
 		FROM workflows WHERE user_id = $1 ORDER BY updated_at DESC
 	`, userID)
 	if err != nil {
@@ -263,6 +264,7 @@ func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Work
 		if err := rows.Scan(
 			&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
 			&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
+			&w.ScheduleCron, &w.ScheduleNextRunAt,
 		); err != nil {
 			return nil, err
 		}
@@ -283,10 +285,12 @@ func (s *Store) UpdateWorkflow(ctx context.Context, id, name string, graph model
 	err := s.pool.QueryRow(ctx, `
 		UPDATE workflows SET name=$2, graph=$3::jsonb, updated_at=NOW()
 		WHERE id=$1
-		RETURNING id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
+		RETURNING id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
+		          schedule_cron, schedule_next_run_at
 	`, id, name, string(graphJSON)).Scan(
 		&w.ID, &w.UserID, &w.Name, &w.Status, &gJSON,
 		&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
+		&w.ScheduleCron, &w.ScheduleNextRunAt,
 	)
 	if err != nil {
 		return w, err
