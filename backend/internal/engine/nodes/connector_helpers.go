@@ -104,15 +104,47 @@ func postJSON(ctx context.Context, target string, extraHeaders map[string]string
 // redacted URL. Callers own reading and closing resp.Body — use this for
 // callers that need the raw response (doAndCheck wraps it for the common
 // sentinel-on-success case).
+//
+// A transport failure on req is wrapped Retryable when req.Method is
+// idempotent (GET/HEAD/PUT/DELETE/OPTIONS) -- the exact same
+// isIdempotentHTTPMethod reasoning callHTTP (tool.go) already applies to a
+// plain HTTP Tool node's own transport failures: nothing non-repeatable
+// can have happened server-side for one of these methods, so retrying is
+// safe. This is every connector's shared low-level HTTP call, so gating on
+// the request's own method here (rather than per-connector) automatically
+// makes every current and future GET-based connector (RSS, OpenWeatherMap,
+// Calendly, Telegram getUpdates, Google Drive downloads, ...) retryable
+// without touching each one, while every POST-based send (Slack, Jira,
+// Gmail, ...) stays correctly non-retryable -- a retry after an ambiguous
+// POST failure could double-send a message/ticket/email, which is exactly
+// what marking it Retryable would risk.
 func doValidatedRequest(req *http.Request, serviceName string) (*http.Response, error) {
 	if err := urlValidator(req.URL.String()); err != nil {
 		return nil, err
 	}
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s: request to %s failed: %w", serviceName, redactedURL(req.URL), unwrapURLError(err))
+		wrapped := fmt.Errorf("%s: request to %s failed: %w", serviceName, redactedURL(req.URL), unwrapURLError(err))
+		if isIdempotentHTTPMethod(req.Method) {
+			return nil, Retryable(wrapped)
+		}
+		return nil, wrapped
 	}
 	return resp, nil
+}
+
+// retryableIfIdempotent wraps err Retryable when method is idempotent,
+// mirroring doValidatedRequest's own transport-failure reasoning above for
+// the 5xx-with-a-response case: a >=500 status on a GET/HEAD/PUT/DELETE/
+// OPTIONS request is safe to retry the same way a dropped connection is,
+// while the identical status on a POST is not, since the server may have
+// already acted on it. Shared by getJSON/getRaw/doAndCheck below so their
+// >=500 branches can't drift from doValidatedRequest's own gating.
+func retryableIfIdempotent(err error, method string) error {
+	if isIdempotentHTTPMethod(method) {
+		return Retryable(err)
+	}
+	return err
 }
 
 // readErrorBody reads a bounded excerpt of a non-2xx response body for the
@@ -134,7 +166,14 @@ func doAndCheck(req *http.Request, sentinel, serviceName string) (any, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		apiErr := fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		// >=500 only, matching callHTTP's (tool.go) own distinction: a 4xx
+		// is a client error, retrying sends the identical broken request
+		// again, never retryable regardless of method.
+		if resp.StatusCode >= 500 {
+			return nil, retryableIfIdempotent(apiErr, req.Method)
+		}
+		return nil, apiErr
 	}
 	io.Copy(io.Discard, resp.Body)
 	return sentinel, nil
@@ -152,7 +191,11 @@ func getJSON(req *http.Request, serviceName string) (any, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		apiErr := fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		if resp.StatusCode >= 500 {
+			return nil, retryableIfIdempotent(apiErr, req.Method)
+		}
+		return nil, apiErr
 	}
 	b, err := readBounded(resp.Body, httpResponseLimit)
 	if err != nil {
@@ -304,7 +347,11 @@ func getRaw(ctx context.Context, target string, extraHeaders map[string]string, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		apiErr := fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		if resp.StatusCode >= 500 {
+			return nil, retryableIfIdempotent(apiErr, req.Method)
+		}
+		return nil, apiErr
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
 }

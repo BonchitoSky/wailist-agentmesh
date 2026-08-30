@@ -272,3 +272,107 @@ func TestFindSystemWorkflowReportsScheduleFields(t *testing.T) {
 		t.Error("FindSystemWorkflow: schedule_next_run_at is nil, want the set time")
 	}
 }
+
+// TestClaimDueSchedulesAnchorsNextRunOnDueTimeNotSweepTime is a regression
+// test for a review finding: ClaimDueSchedules used to call
+// nextRun(cronExpr, now) -- the SWEEP time -- rather than the row's own
+// due time. A scheduler tick landing long after a schedule's due time (a
+// restart, a slow prior tick, downtime) would silently skip every
+// occurrence between the due time and now, jumping straight to whatever
+// comes after "right now" and shifting the cron's cadence off its original
+// anchor. Anchoring on the due time instead means a badly-delayed tick
+// still advances one occurrence at a time from where the schedule actually
+// was -- confirmed here by checking nextRun receives the workflow's own
+// schedule_next_run_at, not the (much later) `now` passed to
+// ClaimDueSchedules.
+func TestClaimDueSchedulesAnchorsNextRunOnDueTimeNotSweepTime(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	email := fmt.Sprintf("schedule-anchor-test-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf, err := store.CreateWorkflow(ctx, "Schedule Anchor Test WF", user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This test deliberately leaves schedule_next_run_at still in the past
+	// relative to real wall-clock time (see dueAt below, and nextRun's
+	// +1-hour advance from ~110 minutes ago) -- without cleanup, this
+	// workflow stays "due" forever after and gets silently re-claimed by
+	// any later test in this package that does its own broad
+	// ClaimDueSchedules(ctx, time.Now(), ...) sweep, inflating its claimed
+	// count (confirmed: this exact leak broke
+	// TestClaimDueSchedulesClaimsAndAdvances before this cleanup was added).
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+	if err := store.SetWorkflowDeployed(ctx, wf.ID, "https://example.com/run", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The schedule was due nearly 2 hours ago -- simulating a scheduler
+	// that was down or badly delayed, sweeping now instead of anywhere
+	// close to when this was actually due.
+	dueAt := time.Now().Add(-110 * time.Minute).Truncate(time.Second)
+	if err := store.SetWorkflowSchedule(ctx, wf.ID, "0 9 * * *", dueAt); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stands in for a real cron expression's Next(): always advances by
+	// exactly one hour from whatever `after` it's given, so the catch-up
+	// loop's per-step anchor is directly observable and its result stays
+	// predictable.
+	var firstAfter time.Time
+	var calls int
+	nextRun := func(cronExpr string, after time.Time) (time.Time, error) {
+		calls++
+		if calls == 1 {
+			firstAfter = after
+		}
+		return after.Add(time.Hour), nil
+	}
+
+	sweepTime := time.Now()
+	due, err := store.ClaimDueSchedules(ctx, sweepTime, nextRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 || due[0].ID != wf.ID {
+		t.Fatalf("claimed %d workflows, want exactly [%s]", len(due), wf.ID)
+	}
+
+	// The FIRST step of the catch-up loop must anchor on the row's own due
+	// time, not the (110-minutes-later) sweep time -- confirming the fix
+	// itself, independent of how many catch-up steps it then takes.
+	if diff := firstAfter.Sub(dueAt); diff > time.Second || diff < -time.Second {
+		t.Fatalf("nextRun's first `after` = %v, want the row's own due time %v (diff %v) -- must not start from the much-later sweep time %v", firstAfter, dueAt, diff, sweepTime)
+	}
+	// dueAt was ~110 minutes ago; stepping by whole hours from there needs
+	// exactly 2 steps to clear sweepTime (dueAt+1h is still ~50 min in the
+	// past, dueAt+2h is ~10 min in the future) -- pins the loop's actual
+	// stopping behavior, not just that it eventually stops somewhere.
+	if calls != 2 {
+		t.Fatalf("nextRun called %d times, want exactly 2 (one step still short of sweepTime, one that clears it)", calls)
+	}
+
+	got, err := store.GetWorkflow(ctx, wf.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ScheduleNextRunAt == nil {
+		t.Fatal("schedule_next_run_at is nil after claiming")
+	}
+	// The persisted result must actually be in the future relative to the
+	// sweep -- otherwise this row stays "due" and gets re-claimed on the
+	// very next tick, double-firing for an ordinary delay instead of
+	// genuine catch-up (the regression this test guards against).
+	if !got.ScheduleNextRunAt.After(sweepTime) {
+		t.Fatalf("schedule_next_run_at = %v, want strictly after the sweep time %v (must clear `now`, not just advance one step past the stale due time)", got.ScheduleNextRunAt, sweepTime)
+	}
+	// Anchored on dueAt's own clock alignment (whole hours from it), not
+	// re-based off sweepTime's arbitrary second/sub-second offset.
+	if diff := got.ScheduleNextRunAt.Sub(dueAt); diff.Round(time.Second) != 2*time.Hour {
+		t.Fatalf("schedule_next_run_at is %v after dueAt, want exactly 2h (anchored on the due time's own cadence)", diff)
+	}
+}

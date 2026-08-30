@@ -165,6 +165,18 @@ func (s *Store) ClearWorkflowSchedule(ctx context.Context, workflowID string) er
 	return err
 }
 
+// maxScheduleCatchUpIterations bounds ClaimDueSchedules' per-workflow
+// catch-up loop (walking forward one occurrence at a time from a
+// schedule's own due time until the result clears `now`) -- generous
+// enough to catch up even a once-a-minute cron across roughly two months
+// of scheduler downtime in one call (a few hundred thousand pure in-memory
+// iterations, no I/O per step), while still bounding against a
+// non-advancing nextRun implementation looping forever. Exhausting it
+// without clearing `now` isn't treated as an error: the row is left at
+// whatever the loop last computed and simply gets caught up further on
+// each subsequent tick, same as it always would across ticks anyway.
+const maxScheduleCatchUpIterations = 500_000
+
 // ClaimDueSchedules finds every deployed workflow whose schedule is due at
 // or before `now`, advances each one's schedule_next_run_at (via nextRun,
 // caller-supplied so this package carries no cron-parsing dependency) in
@@ -225,8 +237,46 @@ func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time, nextRun fu
 		}
 		unmarshalGraph(c.graph, &w)
 
-		next, err := nextRun(*w.ScheduleCron, now)
-		if err != nil {
+		// Anchored on the row's own due time (w.ScheduleNextRunAt), NOT
+		// `now` (the sweep time) -- a scheduler that's down or delayed past
+		// a due firing must resume counting from where the schedule
+		// actually was, not silently skip every occurrence between the due
+		// time and whenever the tick happens to land, which would shift
+		// the cron's cadence off its original anchor (e.g. an hourly cron
+		// due at 14:00, swept at 15:47, must keep landing on the :00
+		// boundary -- nextRun(cron, 15:47) would instead jump to whatever
+		// second `now` happens to be, off that anchor forever after).
+		//
+		// A single nextRun(cron, dueTime) call isn't enough on its own,
+		// though: for a schedule whose own period is <= the scheduler's
+		// poll interval (e.g. an every-minute cron on a 1-minute poll),
+		// ordinary tick jitter can mean stepping forward exactly one
+		// period from dueTime STILL lands at or before `now` -- not a
+		// long-outage scenario, just routine timing, and left as a single
+		// call this would leave the row due again for an immediate second
+		// tick (confirmed live: TestTickFiresDueScheduleAndAdvancesIt's
+		// second-tick-must-not-double-fire assertion broke on exactly
+		// this). So this walks forward one occurrence at a time from the
+		// original due time -- preserving the anchor -- until the result
+		// is actually past `now`, catching up every missed occurrence to
+		// the correct future time in this single call while still firing
+		// only once this tick (matching the existing one-row-per-tick
+		// contract: `due` returns each workflow at most once regardless of
+		// how many occurrences it missed).
+		next := *w.ScheduleNextRunAt
+		var err error
+		invalidExpr := false
+		for i := 0; i < maxScheduleCatchUpIterations; i++ {
+			next, err = nextRun(*w.ScheduleCron, next)
+			if err != nil {
+				invalidExpr = true
+				break
+			}
+			if next.After(now) {
+				break
+			}
+		}
+		if invalidExpr {
 			// A schedule that no longer parses (edited into an invalid
 			// expression some other way) must not wedge the sweep forever
 			// re-claiming the same broken row every tick -- clear it and
