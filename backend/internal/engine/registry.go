@@ -31,6 +31,20 @@ func newRunRegistry() *runRegistry {
 	return &runRegistry{entries: make(map[string]registryEntry)}
 }
 
+// insertLocked allocates the next generation token and stores a fresh
+// entry for workflowID, overwriting whatever was there. Callers must hold
+// reg.mu already -- shared by register and registerIfAbsent below so a
+// future change to how an entry is constructed (a new registryEntry
+// field, a different gen-allocation scheme) only needs updating in one
+// place instead of two call sites that could otherwise silently drift
+// apart.
+func (reg *runRegistry) insertLocked(workflowID string, cancel context.CancelFunc) uint64 {
+	reg.nextGen++
+	gen := reg.nextGen
+	reg.entries[workflowID] = registryEntry{cancel: cancel, gen: gen}
+	return gen
+}
+
 // register returns a generation token the caller must pass to deregister.
 func (reg *runRegistry) register(workflowID string, cancel context.CancelFunc) uint64 {
 	reg.mu.Lock()
@@ -38,10 +52,7 @@ func (reg *runRegistry) register(workflowID string, cancel context.CancelFunc) u
 	if old, ok := reg.entries[workflowID]; ok {
 		old.cancel()
 	}
-	reg.nextGen++
-	gen := reg.nextGen
-	reg.entries[workflowID] = registryEntry{cancel: cancel, gen: gen}
-	return gen
+	return reg.insertLocked(workflowID, cancel)
 }
 
 // registerIfAbsent is register's non-superseding counterpart: it only
@@ -60,10 +71,7 @@ func (reg *runRegistry) registerIfAbsent(workflowID string, cancel context.Cance
 	if _, ok := reg.entries[workflowID]; ok {
 		return 0, false
 	}
-	reg.nextGen++
-	gen := reg.nextGen
-	reg.entries[workflowID] = registryEntry{cancel: cancel, gen: gen}
-	return gen, true
+	return reg.insertLocked(workflowID, cancel), true
 }
 
 // isActive reports whether workflowID currently has a registered in-flight

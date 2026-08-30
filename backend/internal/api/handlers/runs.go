@@ -236,6 +236,22 @@ func (d *Deps) ResumeRun(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		// A fast, synchronous version of Runner.Resume's own "node stuck
+		// mid-execution" check (see its doc comment there for why this is
+		// refused rather than guessed) -- gives the caller an immediate
+		// 409 instead of only finding out after StartResume's async
+		// goroutine already refused it.
+		states, err := d.Store.GetLatestNodeStates(ctx, runID)
+		if err != nil {
+			respond.Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for nodeID, l := range states {
+			if l.Status == models.LogStatusRunning {
+				respond.Error(w, http.StatusConflict, "node "+nodeID+" was mid-execution when this run crashed -- its side effect's fate is unknown; resume with ?force=true to accept the risk of repeating it")
+				return
+			}
+		}
 	}
 
 	wf.Nodes = decryptNodes(wf.Nodes, d.EncryptionKey)

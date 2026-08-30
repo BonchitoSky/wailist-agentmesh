@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -149,7 +150,7 @@ func TestResumeSkipsSideEffectNodeEvenWhenConfigChanged(t *testing.T) {
 	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
 
 	n2Old := models.WorkflowNode{ID: "n2", Type: models.NodeTypeAction, Template: "webhook", URL: "https://old.example.com/hook"}
-	if !nodeMayHaveRealSideEffect(n2Old.Type, n2Old.Template) {
+	if !nodeMayHaveRealSideEffect(n2Old.Type, n2Old.Template, n2Old.Method) {
 		t.Fatal("test fixture assumption broken: NodeTypeAction must count as a real-side-effect type")
 	}
 	graphOld := models.WorkflowGraph{
@@ -223,5 +224,89 @@ func TestResumeSkipsSideEffectNodeEvenWhenConfigChanged(t *testing.T) {
 	}
 	if n2Count != 1 {
 		t.Fatalf("n2 has %d run_logs rows, want exactly 1 (the seed) -- a side-effect node must never re-execute on resume, config change or not", n2Count)
+	}
+}
+
+// nodeConfigHashExcludedFields lists every models.WorkflowNode field
+// nodeConfigHash deliberately leaves OUT of its hash, with the reason --
+// see nodeConfigHash's own doc comment for the full explanation of each
+// category. Kept here, not just implicit in nodeConfigHash's hand-copied
+// field list, specifically so TestNodeConfigHashAccountsForEveryField
+// below can enforce that EVERY WorkflowNode field is accounted for one
+// way or the other, catching the exact class of gap a review flagged:
+// nodeConfigHash's allowlist has no compiler or test-enforced link to
+// WorkflowNode's actual field list, so a future field added to one
+// without the other fails silently -- a config edit to it would never be
+// detected as a change, and Resume would keep reusing stale output
+// forever with no error.
+var nodeConfigHashExcludedFields = map[string]string{
+	"ID":                "identity, not config",
+	"X":                 "canvas position, cosmetic",
+	"Y":                 "canvas position, cosmetic",
+	"Name":              "cosmetic label",
+	"Label":             "cosmetic label",
+	"Icon":              "cosmetic",
+	"Description":       "cosmetic",
+	"APIKey":            "encrypted at rest with a fresh nonce per save -- ciphertext changes every save regardless of plaintext",
+	"EmailAPIKey":       "encrypted at rest with a fresh nonce per save -- ciphertext changes every save regardless of plaintext",
+	"Secrets":           "encrypted at rest with a fresh nonce per save -- ciphertext changes every save regardless of plaintext",
+	"TendrilLeaseToken": "never persisted (json:\"-\"), always zero-value when loaded from the DB",
+	"MaxRetries":        "retry POLICY, not what the node does",
+	"RetryBackoffMs":    "retry POLICY, not what the node does",
+}
+
+// TestNodeConfigHashAccountsForEveryField is a regression test for a
+// review finding: nodeConfigHash hashes a hand-picked subset of
+// WorkflowNode's fields with nothing enforcing that list stays in sync
+// with the struct. Reflects over every field models.WorkflowNode actually
+// has and fails loudly if one is neither in nodeConfigHash's own included
+// set (confirmed by asserting changing it changes the hash) nor in
+// nodeConfigHashExcludedFields above -- so a future field added to
+// WorkflowNode without a matching decision here breaks this test instead
+// of silently never being checked for staleness.
+func TestNodeConfigHashAccountsForEveryField(t *testing.T) {
+	base := models.WorkflowNode{ID: "n1", Type: models.NodeTypeTool, Template: "http"}
+	baseHash := nodeConfigHash(base)
+
+	nodeType := reflect.TypeOf(models.WorkflowNode{})
+	for i := 0; i < nodeType.NumField(); i++ {
+		field := nodeType.Field(i)
+		name := field.Name
+		if reason, excluded := nodeConfigHashExcludedFields[name]; excluded {
+			t.Logf("%s: excluded from nodeConfigHash (%s)", name, reason)
+			continue
+		}
+
+		// Not excluded -- prove it's actually INCLUDED by changing it and
+		// confirming the hash changes. Uses reflection to set a
+		// distinguishable non-zero value generically across every
+		// remaining field's type (string, float64, map[string]string,
+		// []models.ParamDef, []models.CustomParam, models.NodeType) rather
+		// than hand-writing one assertion per field.
+		modified := base
+		mv := reflect.ValueOf(&modified).Elem().FieldByName(name)
+		switch mv.Kind() {
+		case reflect.String:
+			mv.SetString("changed-value-for-" + name)
+		case reflect.Float64:
+			mv.SetFloat(12345)
+		case reflect.Map:
+			mv.Set(reflect.ValueOf(map[string]string{"k": "v"}))
+		case reflect.Slice:
+			switch name {
+			case "DiscoveredParams":
+				mv.Set(reflect.ValueOf([]models.ParamDef{{Name: "p"}}))
+			case "CustomParams":
+				mv.Set(reflect.ValueOf([]models.CustomParam{{Name: "p"}}))
+			default:
+				t.Fatalf("field %s: unhandled slice type %s -- add a case for it here, then decide whether nodeConfigHash should include or exclude it", name, field.Type)
+			}
+		default:
+			t.Fatalf("field %s: unhandled kind %s -- add a case for it here, then decide whether nodeConfigHash should include or exclude it", name, mv.Kind())
+		}
+
+		if got := nodeConfigHash(modified); got == baseHash {
+			t.Errorf("field %s: changing it did not change nodeConfigHash's result -- it's missing from the hashed field list, so an edit to it will never be detected as a config change on Resume", name)
+		}
 	}
 }

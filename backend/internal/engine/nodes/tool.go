@@ -214,6 +214,15 @@ func isIdempotentHTTPMethod(method string) bool {
 	return idempotentHTTPMethods[method]
 }
 
+// IsIdempotentHTTPMethod exports isIdempotentHTTPMethod for callers outside
+// this package -- currently engine.nodeMayHaveRealSideEffect, which needs
+// the identical GET/HEAD/PUT/DELETE/OPTIONS classification to decide
+// whether an "http" Tool node's config-staleness check is safe to apply
+// (see its own doc comment).
+func IsIdempotentHTTPMethod(method string) bool {
+	return isIdempotentHTTPMethod(method)
+}
+
 func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	if err := urlValidator(node.URL); err != nil {
 		return nil, err

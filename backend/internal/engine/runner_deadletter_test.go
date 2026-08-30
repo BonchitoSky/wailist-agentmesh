@@ -435,3 +435,83 @@ func TestDeadLetterRowClearedOnceNodeLaterSucceeds(t *testing.T) {
 		t.Fatalf("want 0 dead-letter rows once n3 succeeded, got %+v -- a stale row here would permanently require force to resume this run again, even for an unrelated later failure", deadLettersAfterResume)
 	}
 }
+
+// TestResumeRefusesNodeStuckRunningWithoutForce is a regression test for a
+// review finding: a node whose LATEST logged state is "running" -- a prior
+// attempt started it and the process crashed before ever writing a
+// terminal status -- used to fall through Resume's skip-on-success check
+// (running != success) straight into unconditional re-execution, same as
+// any ordinary failed node. Whether that node's real side effect (a
+// payment, an email, a webhook post) actually fired before the crash is
+// genuinely unknown, so Resume must refuse outright without force, the
+// same fail-closed stance already taken for a payment-risk dead-letter
+// row.
+func TestResumeRefusesNodeStuckRunningWithoutForce(t *testing.T) {
+	runner, store := newTestRunner(t)
+	ctx := context.Background()
+
+	var n2Hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&n2Hits, 1)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	wf, err := store.CreateWorkflow(ctx, "Resume Stuck Running Test", fundedTestUser(t, store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "n2", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "GET"},
+			{ID: "n3", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "n2", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "n2", To: "n3", Kind: models.EdgeKindFlow},
+		},
+	}
+	wf, _ = store.UpdateWorkflow(ctx, wf.ID, wf.Name, graph)
+
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a crash mid-node: n2's row was inserted (LogStatusRunning)
+	// but the process died before ever writing a terminal status -- no
+	// UpdateRunLog call at all, exactly what a real crash would leave
+	// behind.
+	if _, err := store.InsertRunLog(ctx, models.RunLog{RunID: run.ID, NodeID: "n2", NodeType: models.NodeTypeTool, Status: models.LogStatusRunning}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, run.ID, models.RunStatusFailed); err != nil {
+		t.Fatal(err)
+	}
+
+	broker := sse.NewBroker()
+
+	// Without force: refused outright, n2 never actually invoked again.
+	broker.Create(run.ID)
+	runner.Resume(ctx, wf, run, 0, false)
+	if got := atomic.LoadInt32(&n2Hits); got != 0 {
+		t.Fatalf("resume without force made %d requests to n2, want 0 (must refuse before executing anything)", got)
+	}
+	refusedRun, err := store.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refusedRun.Status != models.RunStatusFailed {
+		t.Fatalf("run status after refused resume = %s, want failed", refusedRun.Status)
+	}
+
+	// With force: actually attempts the node again.
+	broker.Create(run.ID)
+	runner.Resume(ctx, wf, run, 0, true)
+	if got := atomic.LoadInt32(&n2Hits); got == 0 {
+		t.Fatal("resume with force made 0 requests to n2, want at least 1 (must actually attempt the stuck node)")
+	}
+}

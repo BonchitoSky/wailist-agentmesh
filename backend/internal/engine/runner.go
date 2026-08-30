@@ -279,19 +279,19 @@ func isPaymentRisk(err error) bool {
 	return isAgentFeeOwedDespiteFailure(err) || errors.Is(err, nodes.ErrSettlementIndeterminate)
 }
 
-// nodeMayHaveRealSideEffect reports whether nodeType/template is a node
-// whose execution can move real money, or trigger some other real
-// external effect (an email, a Slack/webhook post, an agent's LLM call),
-// that must never be silently repeated. execute()'s skip-on-prior-success
-// check (below) uses this to decide whether a node's config-staleness
-// check even applies: for one of these types, an already-succeeded node
-// is skipped unconditionally on resume, regardless of whether its config
-// has changed since -- re-executing one under new config could otherwise
-// repeat a real payment/send under different settings without the kind of
-// explicit review this codebase's payment-risk `force` gate already
-// requires for a comparable decision elsewhere in this file. A user who
-// wants a payment-adjacent node's edited config to actually take effect
-// needs a fresh Run, not a Resume.
+// nodeMayHaveRealSideEffect reports whether a node with this type/
+// template/method is one whose execution can move real money, or trigger
+// some other real external effect (an email, a Slack/webhook POST, an
+// agent's LLM call), that must never be silently repeated.
+// execute()'s skip-on-prior-success check (below) uses this to decide
+// whether a node's config-staleness check even applies: for one of these,
+// an already-succeeded node is skipped unconditionally on resume,
+// regardless of whether its config has changed since -- re-executing one
+// under new config could otherwise repeat a real payment/send under
+// different settings without the kind of explicit review this codebase's
+// payment-risk `force` gate already requires for a comparable decision
+// elsewhere in this file. A user who wants a payment-adjacent node's
+// edited config to actually take effect needs a fresh Run, not a Resume.
 //
 // Mirrors nodes.BillableFlatFee's own node-type/template cases (the same
 // types that move money or trigger a real external effect), plus
@@ -299,7 +299,23 @@ func isPaymentRisk(err error) bool {
 // excludes for its own (billing-mechanism) reasons documented on it, but
 // which absolutely must not be re-executed here either -- both charge
 // real money at runtime.
-func nodeMayHaveRealSideEffect(nodeType models.NodeType, template string) bool {
+//
+// A NodeTypeTool node is billable (hence flagged by BillableFlatFee) for
+// exactly two templates, "http" and "websearch", but that's a BILLING
+// distinction, not a SIDE-EFFECT one -- confirmed as a real gap in
+// review: an "http" GET node (or "websearch", a read-only paid search
+// call) is idempotent, so re-executing it under a corrected URL doesn't
+// repeat any real external effect, it just runs the CORRECTED request
+// that should have run the first time -- exactly what config-staleness
+// detection exists to let happen. Only re-executing a genuinely
+// non-idempotent "http" method (POST/PATCH) risks repeating a real write
+// under new config, so "http" is exempted here ONLY when method is
+// non-idempotent; "websearch" (no method of its own, always a read) is
+// never exempted on that basis alone.
+func nodeMayHaveRealSideEffect(nodeType models.NodeType, template, method string) bool {
+	if nodeType == models.NodeTypeTool && template == "http" {
+		return !nodes.IsIdempotentHTTPMethod(method)
+	}
 	return nodes.BillableFlatFee(nodeType, template) ||
 		nodeType == models.NodeTypeTool402 ||
 		nodeType == models.NodeTypeTendril
@@ -912,7 +928,24 @@ func (r *Runner) StartResume(ctx context.Context, wf models.Workflow, run models
 	gen, ok := r.registry.registerIfAbsent(wf.ID, cancel)
 	if !ok {
 		cancel()
-		if revertErr := r.store.FinishRun(context.Background(), run.ID, models.RunStatusFailed); revertErr != nil {
+		// Revert to run's OWN status as the caller passed it in -- NOT a
+		// hardcoded RunStatusFailed. MarkRunRunning only ever claims a row
+		// already sitting at 'failed' or 'stopped' (its own WHERE clause),
+		// so run.Status here already carries whichever of those two it
+		// actually was before this call flipped it to 'running'. Hardcoding
+		// Failed would silently relabel a user-initiated Stop as a
+		// Failed run just because an unrelated concurrent run raced in.
+		revertStatus := run.Status
+		if revertStatus != models.RunStatusFailed && revertStatus != models.RunStatusStopped {
+			// Defensive: MarkRunRunning's own WHERE clause guarantees this
+			// never happens (it only claims rows already 'failed' or
+			// 'stopped'), but fail toward the safer, more visible label if
+			// it somehow did rather than silently reverting to something
+			// that isn't even a valid terminal status this run row started
+			// from.
+			revertStatus = models.RunStatusFailed
+		}
+		if revertErr := r.store.FinishRun(context.Background(), run.ID, revertStatus); revertErr != nil {
 			log.Printf("resume: workflow %s already has a run in flight, AND reverting run %s's claim failed: %v", wf.ID, run.ID, revertErr)
 		}
 		return false, nil
@@ -1040,6 +1073,31 @@ func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run,
 		return
 	}
 
+	if !force {
+		// A node whose LATEST logged state is still "running" means a
+		// prior attempt started executing it and the process crashed (or
+		// was killed) before ever writing a terminal status -- neither
+		// "success" (skip, safe) nor "failed" (re-execute, already the
+		// accepted risk for a plain failure). Whether that node's real
+		// side effect (a payment, an email, a webhook post) actually fired
+		// before the crash is genuinely unknown -- the exact same
+		// "fate unknown" ambiguity ErrSettlementIndeterminate exists to
+		// name elsewhere in this file, and the same fail-closed answer
+		// applies: refuse rather than guess. Execution below treats
+		// anything not LogStatusSuccess as not-yet-done and re-executes
+		// it, so left unguarded this would silently re-fire that same
+		// side effect a second time. force=true is the operator
+		// explicitly accepting that risk, same as the payment-risk gate
+		// above.
+		for nodeID, l := range states {
+			if l.Status == models.LogStatusRunning {
+				criticalAlert(wf, run, "resume refused: node stuck mid-execution from a prior crash, force required", nil, "nodeId", nodeID)
+				r.finishRun(wf, run, models.RunStatusFailed)
+				return
+			}
+		}
+	}
+
 	// The run row was already flipped to "running" by StartResume's
 	// MarkRunRunning claim before this goroutine was ever spawned -- that
 	// claim is Resume's actual admission gate (see StartResume's doc
@@ -1159,7 +1217,7 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 				// as a match, preserving the always-skip behavior every
 				// run resumed before this shipped already relied on.
 				if prior, ok := seed[n.ID]; ok && prior.Status == models.LogStatusSuccess {
-					if nodeMayHaveRealSideEffect(n.Type, n.Template) ||
+					if nodeMayHaveRealSideEffect(n.Type, n.Template, n.Method) ||
 						prior.ConfigHash == "" || prior.ConfigHash == nodeConfigHash(n) {
 						rc.Set(n.ID, prior.Output)
 						return

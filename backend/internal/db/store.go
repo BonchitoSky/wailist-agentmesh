@@ -604,6 +604,13 @@ func (s *Store) GetRunLogs(ctx context.Context, runID string) ([]models.RunLog, 
 // for a run, keyed by node ID. Runner.Resume uses this to skip re-executing
 // (and re-billing/re-paying) any node that already reached a terminal state
 // on a prior attempt.
+//
+// Supported by migration 000028's idx_run_logs_run_id_node_id_ts index --
+// this DISTINCT ON/ORDER BY shape matches it exactly (run_id, node_id, ts
+// DESC), so Postgres can satisfy it with an index scan instead of sorting
+// every row for the run in memory, which otherwise gets more expensive the
+// more times a run has been retried/resumed and the more rows per node it
+// accumulates.
 func (s *Store) GetLatestNodeStates(ctx context.Context, runID string) (map[string]models.RunLog, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT DISTINCT ON (node_id) node_id, status, output, node_config_hash
