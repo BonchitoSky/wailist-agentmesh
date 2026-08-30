@@ -1,0 +1,70 @@
+// Asking for background location, and what to do when the answer is no.
+//
+// Android's "Always allow" is the most-refused permission on the platform, and
+// apps that ask cold get refused far more often than apps that explain first.
+// The system dialog is also a one-shot in practice: a user who picks "Don't
+// allow" cannot be asked again from inside the app, only sent to Settings. So
+// the order here is deliberate -- explain, then ask -- and it is not just
+// politeness, it is the difference between the feature working and not.
+//
+// Google Play reviews background-location use specifically, and asks to see
+// the disclosure. The copy below is written to be shown, not to be a comment.
+import BackgroundGeolocation from "@transistorsoft/capacitor-background-geolocation";
+
+export type PermissionState = "granted" | "denied" | "denied-permanently";
+
+// What the user is told BEFORE Android's dialog appears. Plain about what is
+// collected, when, and what is kept -- the server stores only the derived
+// enter/leave event, never a location history, and saying so is both true and
+// the strongest argument for granting.
+export const DISCLOSURE = {
+  title: "Run workflows when you arrive or leave",
+  body:
+    "AgentMesh can start a workflow when you cross the edge of a place you " +
+    "choose. To do that, Android needs to let it check your location even " +
+    "when the app is closed.\n\n" +
+    "Your location is used only to work out whether you crossed that edge. " +
+    "We record that you entered or left -- not where you have been. There is " +
+    "no location history to look through, ours or yours.\n\n" +
+    "You can turn this off at any time, and everything else in the app keeps " +
+    "working without it.",
+  grant: "Choose location access",
+  decline: "Not now",
+} as const;
+
+// Requests background location. Call ONLY after the disclosure above has been
+// shown and the user has chosen to continue -- asking first and explaining
+// afterwards is the pattern that gets refused.
+export async function requestBackgroundLocation(): Promise<PermissionState> {
+  const status = await BackgroundGeolocation.requestPermission();
+
+  // The plugin reports Android's three-way answer. "Always" is the only one
+  // that supports a geofence while the app is closed; "When in use" is not
+  // enough, and treating it as enough would produce a trigger that silently
+  // stops firing the moment the phone is pocketed.
+  if (status === BackgroundGeolocation.AUTHORIZATION_STATUS_ALWAYS) {
+    return "granted";
+  }
+  if (status === BackgroundGeolocation.AUTHORIZATION_STATUS_DENIED) {
+    return "denied-permanently";
+  }
+  return "denied";
+}
+
+// What the app says once permission is refused.
+//
+// It does not nag. A refusal is an answer, and re-prompting on every launch is
+// how an app gets uninstalled. The geofence feature simply shows as off, with
+// one honest route to Settings for anyone who changes their mind.
+export const DENIED_COPY = {
+  title: "Location triggers are off",
+  body:
+    "AgentMesh will not start workflows when you arrive or leave. Everything " +
+    "else -- viewing, running and chatting with your workflows -- works as " +
+    "normal.",
+  action: "Open Settings",
+} as const;
+
+export async function openSettings(): Promise<void> {
+  await BackgroundGeolocation.showSettings("APPLICATION_DETAILS");
+}
