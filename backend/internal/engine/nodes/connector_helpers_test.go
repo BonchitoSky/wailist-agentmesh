@@ -174,6 +174,94 @@ func TestGetJSON_ErrorStatusReturnsError(t *testing.T) {
 	}
 }
 
+// TestGetJSON_5xxOnGETIsRetryable is a regression test for a review
+// finding: MaxRetries/RetryBackoffMs (the node-level retry config from PR
+// #99) silently no-op'd for every connector except the plain HTTP Tool
+// node, since nothing else ever wrapped its errors nodes.Retryable. Every
+// connector that reads data (GET) now flows through getJSON, whose >=500
+// branch wraps Retryable when the request's own method is idempotent --
+// mirroring callHTTP's (tool.go) identical reasoning for a GET-based Tool
+// node's own transport/5xx failures.
+func TestGetJSON_5xxOnGETIsRetryable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal error"))
+	}))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	_, err := nodes.GetJSONForTest(req, "TestSvc")
+	if err == nil {
+		t.Fatal("want error for 500 response")
+	}
+	if !nodes.IsRetryable(err) {
+		t.Errorf("want a 500 on a GET request to be Retryable, got non-retryable: %v", err)
+	}
+}
+
+// TestGetJSON_4xxOnGETIsNotRetryable confirms the 4xx/5xx distinction
+// callHTTP already draws still holds through getJSON: a 4xx is a client
+// error (the exact same broken request would fail again identically), so
+// it must never be Retryable regardless of the request's method.
+func TestGetJSON_4xxOnGETIsNotRetryable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("forbidden"))
+	}))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL, nil)
+	_, err := nodes.GetJSONForTest(req, "TestSvc")
+	if err == nil {
+		t.Fatal("want error for 403 response")
+	}
+	if nodes.IsRetryable(err) {
+		t.Errorf("want a 403 (client error) to never be Retryable, got retryable: %v", err)
+	}
+}
+
+// TestPostJSON_5xxIsNotRetryable is the other half of the same review
+// finding: a POST-based connector send (Slack, Jira, webhook, ...) must
+// stay non-retryable even for a 500, since the server may already have
+// acted on the request before the response was lost -- retrying could
+// double-send a message, ticket, or email. isIdempotentHTTPMethod("POST")
+// is false, so getJSON/doAndCheck's retryableIfIdempotent must never wrap
+// a POST failure.
+func TestPostJSON_5xxIsNotRetryable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal error"))
+	}))
+	defer srv.Close()
+
+	_, err := nodes.PostJSONForTest(context.Background(), srv.URL, nil, map[string]any{}, "sent", "TestSvc")
+	if err == nil {
+		t.Fatal("want error for 500 response")
+	}
+	if nodes.IsRetryable(err) {
+		t.Errorf("want a 500 on a POST request to never be Retryable (could double-send on retry), got retryable: %v", err)
+	}
+}
+
+// TestGetJSON_TransportFailureOnGETIsRetryable covers the transport-failure
+// path (not just a 5xx response) in doValidatedRequest: a connection that
+// never got a response at all is also safe to retry for an idempotent
+// method, same as callHTTP's identical case in tool.go.
+func TestGetJSON_TransportFailureOnGETIsRetryable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close() // closed before the request -- guarantees a transport-level failure, not a response.
+
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	_, err := nodes.GetJSONForTest(req, "TestSvc")
+	if err == nil {
+		t.Fatal("want a transport-level error against a closed server")
+	}
+	if !nodes.IsRetryable(err) {
+		t.Errorf("want a transport failure on a GET request to be Retryable, got non-retryable: %v", err)
+	}
+}
+
 func TestGetJSON_InvalidJSONReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("not json"))

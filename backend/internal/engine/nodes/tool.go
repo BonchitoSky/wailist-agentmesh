@@ -195,6 +195,34 @@ var httpMethodsWithBody = map[string]bool{
 	http.MethodDelete: true,
 }
 
+// idempotentHTTPMethods are the methods where repeating an identical request
+// cannot compound whatever the first attempt already did server-side --
+// standard HTTP idempotency (RFC 7231 §4.2.2), used here to decide whether a
+// failed call is safe to retry. POST and PATCH are deliberately excluded:
+// neither is idempotent, so a retry after an ambiguous failure (e.g. the
+// response was lost after the server already processed the write) could
+// double the effect.
+var idempotentHTTPMethods = map[string]bool{
+	http.MethodGet:     true,
+	http.MethodHead:    true,
+	http.MethodPut:     true,
+	http.MethodDelete:  true,
+	http.MethodOptions: true,
+}
+
+func isIdempotentHTTPMethod(method string) bool {
+	return idempotentHTTPMethods[method]
+}
+
+// IsIdempotentHTTPMethod exports isIdempotentHTTPMethod for callers outside
+// this package -- currently engine.nodeMayHaveRealSideEffect, which needs
+// the identical GET/HEAD/PUT/DELETE/OPTIONS classification to decide
+// whether an "http" Tool node's config-staleness check is safe to apply
+// (see its own doc comment).
+func IsIdempotentHTTPMethod(method string) bool {
+	return isIdempotentHTTPMethod(method)
+}
+
 func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	if err := urlValidator(node.URL); err != nil {
 		return nil, err
@@ -267,10 +295,28 @@ func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (a
 	}
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
+		// A transport failure on an idempotent method (nothing non-repeatable
+		// can have happened server-side) is safe to retry. POST/PATCH stay
+		// unwrapped and therefore non-retryable by default: the request may
+		// have reached the server and been acted on before the connection
+		// dropped, so a retry could replay a write we can't confirm failed.
+		if isIdempotentHTTPMethod(method) {
+			return nil, Retryable(err)
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		httpErr := fmt.Errorf("http: %s %d: %s", method, resp.StatusCode, readErrorBody(resp))
+		if isIdempotentHTTPMethod(method) {
+			return nil, Retryable(httpErr)
+		}
+		return nil, httpErr
+	}
 	if resp.StatusCode >= 400 {
+		// 4xx is a client error, not a transient one -- retrying sends the
+		// exact same broken request again. Never retryable regardless of
+		// method.
 		return nil, fmt.Errorf("http: %s %d: %s", method, resp.StatusCode, readErrorBody(resp))
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))

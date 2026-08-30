@@ -53,34 +53,68 @@ import (
 // new info handler. No existing amount/address/signing logic changed.
 // Digests below reflect the merged state.
 //
-// Updated 2026-08-31 for PR "engine/wallet: prevent bot-driven duplicate
-// settlements + workflow run cooldown" (merged as 5c92070), which was never
-// re-hashed against this test when it landed --
-//   - runfund.go: selfSettleWallet1ToWallet2 now retries up to
-//     selfSettleMaxAttempts times with full-jitter exponential backoff
-//     (sleepWithBackoff) on any failure except ErrSettlementIndeterminate,
-//     which still stops immediately to avoid a double-pay. Retryability is
-//     safe only because wallet/algorand.go's uniqueNote fix (a separate
-//     file, already covered below) makes every attempt's signed group
-//     distinct regardless of amount or timing. ctx.Err() is checked before
-//     every attempt so an already-canceled caller doesn't burn a full
-//     sign+verify round trip first. No payment amount, address, or
-//     signing logic changed -- only when and how many times a failed
-//     attempt is retried.
-//   - tool402.go: SettlePlatformFee's call-site timeout switched from a
-//     hardcoded 60s to SelfSettleRetryBudget (runfund.go's derived,
-//     multi-attempt budget), so the synchronous post-settlement window
-//     actually covers the new retry loop above instead of aborting mid-retry.
+// Updated 2026-08-30, rebasing PR #99 (run resume/retry/dead-letter/cron)
+// onto current master, which moved further while this PR was open --
+// master's PR #59 ("prevent bot-driven duplicate settlements + workflow run
+// cooldown") reworked runfund.go/tool402.go's settlement-idempotency guards.
+// Confirmed via `git log 7059903..feat/run-reliability -- nodes/runfund.go
+// nodes/tool402.go`: PR #59's commit is the ONLY history touching either
+// file on this branch -- PR #99's own commits never edit them. Clean merge
+// from master, not a local edit. Digests below reflect the merged state.
 //
-// Both verified against the PR's own description (four review rounds, all
-// findings addressed) and by tracing the retry/backoff/ctx-cancellation
-// logic directly. Digests below reflect the merged state.
+// Updated again 2026-08-30, same PR: a code review pass found the
+// dead-letter PaymentRisk classification (runner.go's isPaymentRisk) missed
+// two failure shapes that also mean real money already moved -- a tool402
+// call that signed and sent a real outbound payment before the target
+// rejected it or the request itself failed at the transport level.
+//
+//   - billing.go: added ErrPaymentAlreadyCommitted, a new sentinel error
+//     type (same shape as the existing ErrBalanceBlocked) wrapping a
+//     failure that happens strictly AFTER the ledger Commit call for a
+//     signed payment. No amount/address/signing logic touched.
+//   - tool402.go: the two return sites in executeTool402RunLevel and the
+//     one in executeTool402V2Relay that already returned a plain error
+//     AFTER their preceding Commit call now wrap that same error in
+//     ErrPaymentAlreadyCommitted before returning it, so a caller (the
+//     dead-letter classification) can tell it apart from a failure that
+//     happened before any payment was signed. Every Commit/Reserve/Release
+//     call, its ordering, and every amount/address/signing line are
+//     unchanged -- only the returned error's TYPE changed at these three
+//     already-post-Commit return statements.
+//
+// Updated again 2026-08-30, same PR: another review pass found
+// isAgentFeeOwedDespiteFailure/isPaymentRisk (runner.go) dispatched on a
+// hand-maintained list of concrete error types with nothing enforcing a
+// future payment-adjacent type gets added to it -- exactly the class of
+// gap that let ErrPaymentAlreadyCommitted (added above) need a separate
+// follow-up pass to wire in at all.
+//
+//   - billing.go: added AgentFeeOwedError, a marker interface (Error() +
+//     an AgentFeeOwed() no-op method), and implemented it on both
+//     *ErrBalanceBlocked and *ErrPaymentAlreadyCommitted. Purely additive:
+//     no existing field, amount, address, or signing line touched, and
+//     both types already existed with identical behavior -- this only
+//     adds a way to detect them generically via errors.As against the
+//     interface instead of one errors.As per concrete type.
+//
+// Updated again 2026-08-31, merging master's 4304044 ("update x402
+// freeze-test digests for the run-cooldown merge") into this branch --
+// master re-hashed tool402.go/runfund.go for 5c92070's retry/backoff
+// rework (selfSettleWallet1ToWallet2's full-jitter backoff loop,
+// SettlePlatformFee's timeout switching to SelfSettleRetryBudget), which
+// this branch had already merged earlier (see the 2026-08-30 entry above)
+// with its own correct digests. runfund.go's digest was already identical
+// on both sides -- no change there. tool402.go's digest conflicted because
+// this branch's tool402.go carries BOTH master's retry rework AND this
+// PR's ErrPaymentAlreadyCommitted wrapping on top of it; the digest below
+// is freshly computed from that merged file, not copied from either side.
+// No amount/address/signing logic touched by the merge itself.
 var frozenX402Files = map[string]string{
-	"nodes/tool402.go":             "1efb396d103d5896e815318ba3b5c08adb188ca0cb4379a2d608c5aea75d51c4",
+	"nodes/tool402.go":             "af54224f3e2afd23ce5fb1f434bc1ff912b12af47f21e6f941291ae136e90860",
 	"nodes/runfund.go":             "792e2a3c96465545119cebfcb744d487b79b27e5df7b9842ec643a98dce7b782",
 	"nodes/walletpay.go":           "98bb3f7d0cb167f8a50d050e04720738c63c68b9fd570758fa5b9604338a4e37",
 	"nodes/tendril.go":             "b787a18f17bc80f593159e46a0c7fd7e543a9db44f55a451ed8f47102fb9132a",
-	"nodes/billing.go":             "08ee13b175aa43bea258ca263180054057aa4e29c2d9a170059dac0071836cb6",
+	"nodes/billing.go":             "d6bc9e5931816840d99678f9015f7b186ae3069d54e28605aa618c367bf5beb9",
 	"nodes/tier.go":                "5718a3538e042c9d7f90b37f38b47d893644d6093f560d103ea9036c90ddc90b",
 	"../api/handlers/x402relay.go": "eacd56896816a213dd5658aa536c704db22362a5d787113cbf269d7fe7c1d858",
 	"../x402/facilitator.go":       "976d118ae200994728f96733dceca79bc90fcc2cc99e859c47d710477f9480ca",

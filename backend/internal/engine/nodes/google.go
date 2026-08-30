@@ -445,7 +445,13 @@ func executeDrive(ctx context.Context, node models.WorkflowNode, rc RunContexter
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode >= 400 {
-			return nil, fmt.Errorf("Google Drive API %d: %s", resp.StatusCode, readErrorBody(resp))
+			apiErr := fmt.Errorf("Google Drive API %d: %s", resp.StatusCode, readErrorBody(resp))
+			if resp.StatusCode >= 500 {
+				// GET, so idempotent -- see doValidatedRequest's own
+				// isIdempotentHTTPMethod reasoning in connector_helpers.go.
+				return nil, retryableIfIdempotent(apiErr, req.Method)
+			}
+			return nil, apiErr
 		}
 		// Same limit and same base64-in-JSON shape as the ElevenLabs audio
 		// connector (connectors_media.go) -- a proven precedent for

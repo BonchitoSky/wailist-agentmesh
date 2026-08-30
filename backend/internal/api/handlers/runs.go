@@ -173,7 +173,105 @@ func (d *Deps) GetRun(w http.ResponseWriter, r *http.Request) {
 	if logs == nil {
 		logs = []models.RunLog{}
 	}
-	respond.JSON(w, http.StatusOK, map[string]any{"run": run, "logs": logs})
+	deadLetters, err := d.Store.GetDeadLetterRuns(ctx, runID)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if deadLetters == nil {
+		deadLetters = []models.DeadLetterRun{}
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"run": run, "logs": logs, "deadLetters": deadLetters})
+}
+
+// ResumeRun continues a run that ended in "failed" or "stopped": nodes
+// already logged as success are skipped, everything else re-executes. See
+// engine.Runner.Resume for the skip contract.
+//
+// ?force=true is required when the run has a payment-risk dead-letter row
+// (see models.DeadLetterRun.PaymentRisk) -- checked here for a synchronous
+// 409 instead of the caller only finding out after the async resume fails,
+// and again inside Runner.Resume itself as the actual enforcement.
+//
+// The run.Status == running check below is a cheap, non-authoritative
+// fast path for the common case -- the real, race-safe admission decision
+// is StartResume's synchronous MarkRunRunning claim. Two concurrent
+// requests can both pass this read (neither has claimed yet); only one of
+// them will get claimed=true back from StartResume, and the loser gets a
+// 409 here without ever having started or cancelled anything.
+func (d *Deps) ResumeRun(w http.ResponseWriter, r *http.Request) {
+	runID := chi.URLParam(r, "runId")
+	ctx := r.Context()
+	userID, _ := ctx.Value(CtxUserID).(string)
+
+	run, err := d.Store.GetRun(ctx, runID)
+	if err != nil {
+		respond.Error(w, http.StatusNotFound, "run not found")
+		return
+	}
+	// Ownership checked before anything about the run's state is revealed --
+	// a non-owner (or a caller enumerating run IDs) must get the same
+	// generic 404 regardless of whether the run exists, is running, or has
+	// dead letters, matching GetRun's own check-first order below.
+	wf, err := d.Store.GetWorkflow(ctx, run.WorkflowID)
+	if err != nil || wf.UserID != userID {
+		respond.Error(w, http.StatusNotFound, "run not found")
+		return
+	}
+	if run.Status == models.RunStatusRunning {
+		respond.Error(w, http.StatusConflict, "run is already in progress")
+		return
+	}
+
+	force := r.URL.Query().Get("force") == "true"
+	if !force {
+		deadLetters, err := d.Store.GetDeadLetterRuns(ctx, runID)
+		if err != nil {
+			respond.Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, dl := range deadLetters {
+			if dl.PaymentRisk {
+				respond.Error(w, http.StatusConflict, "run has a payment-risk failure (node "+dl.NodeID+") -- resume with ?force=true to accept the risk of a double charge")
+				return
+			}
+		}
+		// A fast, synchronous version of Runner.Resume's own "node stuck
+		// mid-execution" check (see its doc comment there for why this is
+		// refused rather than guessed) -- gives the caller an immediate
+		// 409 instead of only finding out after StartResume's async
+		// goroutine already refused it.
+		states, err := d.Store.GetLatestNodeStates(ctx, runID)
+		if err != nil {
+			respond.Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for nodeID, l := range states {
+			if l.Status == models.LogStatusRunning {
+				respond.Error(w, http.StatusConflict, "node "+nodeID+" was mid-execution when this run crashed -- its side effect's fate is unknown; resume with ?force=true to accept the risk of repeating it")
+				return
+			}
+		}
+	}
+
+	wf.Nodes = decryptNodes(wf.Nodes, d.EncryptionKey)
+	// StartResume creates the broker hub itself, synchronously, only once
+	// its admission claim actually succeeds -- see its doc comment. Not
+	// done here: two concurrent resume requests for the same run.ID both
+	// calling Broker.Create before either claim resolves could overwrite
+	// each other's hub and orphan a client already subscribed via GET
+	// /runs/:id/stream, regardless of which request wins the claim.
+	claimed, err := d.Engine.StartResume(ctx, wf, run, force)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !claimed {
+		respond.Error(w, http.StatusConflict, "run is already in progress or already finished")
+		return
+	}
+
+	respond.JSON(w, http.StatusAccepted, map[string]string{"runId": run.ID})
 }
 
 func (d *Deps) StreamRun(w http.ResponseWriter, r *http.Request) {

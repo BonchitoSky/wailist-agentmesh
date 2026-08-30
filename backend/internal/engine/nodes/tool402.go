@@ -1579,7 +1579,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, cfg X4
 			if len(snippet) > errSnippetLimit {
 				snippet = snippet[:errSnippetLimit]
 			}
-			return out, fmt.Errorf("x402 relay: target rejected the paid request (status %d): %s", payResp.StatusCode, snippet)
+			return out, &ErrPaymentAlreadyCommitted{Err: fmt.Errorf("x402 relay: target rejected the paid request (status %d): %s", payResp.StatusCode, snippet)}
 		}
 	} else {
 		releaseReservation()
@@ -1724,7 +1724,7 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		// Target unreachable at the network level -- no response body to
 		// return, nothing else to give the caller but the error. The ledger
 		// above still reflects the real spend via Commit, not Release.
-		return Tool402PaymentResult{}, payErr
+		return Tool402PaymentResult{}, &ErrPaymentAlreadyCommitted{Err: payErr}
 	}
 
 	var response any
@@ -1747,7 +1747,7 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 			snippet = snippet[:errSnippetLimit]
 		}
 		return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost, PlatformFeeUSDMicros: markup},
-			fmt.Errorf("x402 run-level: target rejected the paid request (status %d): %s", result.StatusCode, snippet)
+			&ErrPaymentAlreadyCommitted{Err: fmt.Errorf("x402 run-level: target rejected the paid request (status %d): %s", result.StatusCode, snippet)}
 	}
 
 	out := Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost, PlatformFeeUSDMicros: markup}

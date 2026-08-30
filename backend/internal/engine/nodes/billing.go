@@ -90,6 +90,23 @@ var ErrActionSkipped = errors.New("action skipped: missing required configuratio
 // for a real, received rejection -- the money may have already moved.
 var ErrSettlementIndeterminate = errors.New("x402: facilitator settle response lost, payment fate unknown")
 
+// AgentFeeOwedError is implemented by any error meaning the agent's own
+// LLM turn already completed -- so its flat fee is still owed -- before
+// something it then did failed with real money potentially already moved.
+// engine.isAgentFeeOwedDespiteFailure/isPaymentRisk dispatch on this
+// interface via errors.As rather than a hand-maintained list of concrete
+// types, specifically so a FUTURE payment-adjacent error occurring mid-
+// agent-turn only needs to implement this one method to be picked up
+// correctly -- without it, a new type would silently classify as "no
+// payment risk" until someone remembered to add a matching branch by hand
+// (exactly what happened here: ErrPaymentAlreadyCommitted was added after
+// ErrBalanceBlocked, in a separate pass, and had to be found and added to
+// the dispatch list manually).
+type AgentFeeOwedError interface {
+	error
+	AgentFeeOwed()
+}
+
 // ErrBalanceBlocked wraps a BalanceChecker failure so the agent loop can
 // hard-stop instead of feeding the failure back to the LLM as a retryable
 // tool-level error (which would just spin the loop until
@@ -106,3 +123,23 @@ type ErrBalanceBlocked struct {
 
 func (e *ErrBalanceBlocked) Error() string { return e.Err.Error() }
 func (e *ErrBalanceBlocked) Unwrap() error { return e.Err }
+func (e *ErrBalanceBlocked) AgentFeeOwed() {}
+
+// ErrPaymentAlreadyCommitted wraps a tool402 failure that happens AFTER a
+// real outbound x402 payment already signed, submitted, and got committed
+// to the ledger (see PayTargetFromWallet2/Wallet2PayResult.Signed and the
+// relay path's identical shape) -- the target then rejected the paid
+// request, or the target request itself failed at the transport level.
+// Either way the money already left Wallet 2; nothing here is safe to
+// silently retry from scratch, since a retry would pay again for the same
+// call rather than just recovering the one part that actually failed.
+// Callers (the dead-letter PaymentRisk classification in runner.go) use
+// errors.As to distinguish this from a tool402 failure that happened
+// before any payment was signed, which is safe to retry freely.
+type ErrPaymentAlreadyCommitted struct {
+	Err error
+}
+
+func (e *ErrPaymentAlreadyCommitted) Error() string { return e.Err.Error() }
+func (e *ErrPaymentAlreadyCommitted) Unwrap() error { return e.Err }
+func (e *ErrPaymentAlreadyCommitted) AgentFeeOwed() {}

@@ -34,7 +34,7 @@ func TestRunAndLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.UpdateRunLog(ctx, logEntry.ID, models.LogStatusSuccess, []byte(`"done"`), 42); err != nil {
+	if err := store.UpdateRunLog(ctx, logEntry.ID, models.LogStatusSuccess, []byte(`"done"`), 42, ""); err != nil {
 		t.Fatal(err)
 	}
 

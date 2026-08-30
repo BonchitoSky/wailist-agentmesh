@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -242,6 +244,168 @@ func criticalAlert(wf models.Workflow, run models.Run, label string, err error, 
 	msg := strings.Join(parts, " ")
 	log.Print(msg)
 	go alert.Notify(context.Background(), alert.ChannelPayments, msg)
+}
+
+// isAgentFeeOwedDespiteFailure reports whether err means the agent's own
+// LLM turn already completed -- so its flat fee is still owed -- before
+// the node's overall execution failed. True for a failure that happens
+// DURING that turn's tool-calling loop, wherever it implements
+// nodes.AgentFeeOwedError (currently *nodes.ErrBalanceBlocked, an attached
+// call blocked by insufficient balance before it could run, and
+// *nodes.ErrPaymentAlreadyCommitted, one that already signed and sent a
+// real payment before a downstream failure) -- dispatched via errors.As
+// against that interface rather than a hand-maintained list of concrete
+// types, so a FUTURE payment-adjacent error occurring mid-agent-turn is
+// picked up correctly just by implementing the interface, not by also
+// remembering to add a branch here (see AgentFeeOwedError's own doc
+// comment in billing.go for why that's worth avoiding). False for
+// anything meaning the turn itself never ran -- an LLM connectivity error,
+// or the run-level pre-fund step (reserveAndFundRun) failing before the
+// agent's loop ever started, which is a real payment-risk case too but
+// not one where an LLM turn happened to bill for.
+func isAgentFeeOwedDespiteFailure(err error) bool {
+	var feeOwed nodes.AgentFeeOwedError
+	return errors.As(err, &feeOwed)
+}
+
+// isPaymentRisk reports whether err means real money may already have
+// moved for this node's attempt, regardless of whether an agent's LLM turn
+// was involved -- used to flag a dead-letter row (DeadLetterRun.PaymentRisk)
+// so Resume refuses to silently retry (and potentially re-pay) it without
+// an explicit force. Broader than isAgentFeeOwedDespiteFailure: also true
+// for nodes.ErrSettlementIndeterminate, the run-level pre-fund settle
+// response being lost before any node (agent or otherwise) even started.
+func isPaymentRisk(err error) bool {
+	return isAgentFeeOwedDespiteFailure(err) || errors.Is(err, nodes.ErrSettlementIndeterminate)
+}
+
+// nodeMayHaveRealSideEffect reports whether a node with this type/
+// template/method is one whose execution can move real money, or trigger
+// some other real external effect (an email, a Slack/webhook POST, an
+// agent's LLM call), that must never be silently repeated.
+// execute()'s skip-on-prior-success check (below) uses this to decide
+// whether a node's config-staleness check even applies: for one of these,
+// an already-succeeded node is skipped unconditionally on resume,
+// regardless of whether its config has changed since -- re-executing one
+// under new config could otherwise repeat a real payment/send under
+// different settings without the kind of explicit review this codebase's
+// payment-risk `force` gate already requires for a comparable decision
+// elsewhere in this file. A user who wants a payment-adjacent node's
+// edited config to actually take effect needs a fresh Run, not a Resume.
+//
+// Mirrors nodes.BillableFlatFee's own node-type/template cases (the same
+// types that move money or trigger a real external effect), plus
+// NodeTypeTool402 and NodeTypeTendril, which BillableFlatFee deliberately
+// excludes for its own (billing-mechanism) reasons documented on it, but
+// which absolutely must not be re-executed here either -- both charge
+// real money at runtime.
+//
+// A NodeTypeTool node is billable (hence flagged by BillableFlatFee) for
+// exactly two templates, "http" and "websearch", but that's a BILLING
+// distinction, not a SIDE-EFFECT one -- confirmed as a real gap in
+// review: an "http" GET node (or "websearch", a read-only paid search
+// call) is idempotent, so re-executing it under a corrected URL doesn't
+// repeat any real external effect, it just runs the CORRECTED request
+// that should have run the first time -- exactly what config-staleness
+// detection exists to let happen. Only re-executing a genuinely
+// non-idempotent "http" method (POST/PATCH) risks repeating a real write
+// under new config, so "http" is exempted here ONLY when method is
+// non-idempotent; "websearch" (no method of its own, always a read) is
+// never exempted on that basis alone.
+func nodeMayHaveRealSideEffect(nodeType models.NodeType, template, method string) bool {
+	if nodeType == models.NodeTypeTool && template == "http" {
+		return !nodes.IsIdempotentHTTPMethod(method)
+	}
+	return nodes.BillableFlatFee(nodeType, template) ||
+		nodeType == models.NodeTypeTool402 ||
+		nodeType == models.NodeTypeTendril
+}
+
+// nodeConfigHash returns a stable hash of node's functionally-relevant
+// configuration, used by execute()'s skip-on-prior-success check (above)
+// to detect a config edit made between a node's prior success and a
+// later Resume of the same run -- without this, that check reused a
+// node's stale prior output unconditionally, even when its config had
+// since changed to something that would produce different output or call
+// a different endpoint entirely (confirmed as a real gap in review: an
+// upstream node silently re-fed downstream steps its OLD output after
+// being edited, with no error).
+//
+// Deliberately hashes a hand-picked SUBSET of WorkflowNode's fields, not
+// the whole struct marshaled as-is, excluding:
+//   - ID, X, Y, Name, Label, Icon, Description: identity/canvas-position/
+//     cosmetic fields that never affect what running the node does
+//   - APIKey, EmailAPIKey, Secrets: independently encrypted at rest with
+//     a fresh nonce on every save (see encryptNodes/maskNodes/decryptNodes
+//     in handlers/workflows.go) -- their CIPHERTEXT changes on every
+//     ordinary autosave even when the underlying plaintext doesn't, so
+//     including them would make this hash change on every save regardless
+//     of any real edit, defeating the whole point of it
+//   - MaxRetries, RetryBackoffMs: retry POLICY, not what the node DOES --
+//     irrelevant to whether its output would differ
+//
+// Every field that actually determines what a node calls or computes is
+// included. json.Marshal on a struct with fixed field order (not a map)
+// is deterministic, and Go's encoding/json already sorts map keys
+// (ParamDefaults/Config) alphabetically, so this hash is stable across
+// repeated calls for identical input regardless of in-memory map
+// iteration order.
+func nodeConfigHash(n models.WorkflowNode) string {
+	relevant := struct {
+		Type             models.NodeType
+		Template         string
+		SystemPrompt     string
+		Wallet           string
+		Balance          string
+		Model            string
+		KeyMode          string
+		URL              string
+		Method           string
+		Endpoint         string
+		Price            string
+		Unit             string
+		Provider         string
+		Source           string
+		EmailTo          string
+		EmailFrom        string
+		EmailSubject     string
+		EmailBody        string
+		EmailProvider    string
+		DiscoveredParams []models.ParamDef
+		ParamDefaults    map[string]string
+		CustomParams     []models.CustomParam
+		BodyMode         string
+		BodyTemplate     string
+		Config           map[string]string
+		TendrilAction    string
+		TendrilNodeID    string
+		TendrilHours     string
+		TendrilAmount    string
+	}{
+		Type: n.Type, Template: n.Template, SystemPrompt: n.SystemPrompt,
+		Wallet: n.Wallet, Balance: n.Balance, Model: n.Model, KeyMode: n.KeyMode,
+		URL: n.URL, Method: n.Method, Endpoint: n.Endpoint, Price: n.Price,
+		Unit: n.Unit, Provider: n.Provider, Source: n.Source,
+		EmailTo: n.EmailTo, EmailFrom: n.EmailFrom, EmailSubject: n.EmailSubject,
+		EmailBody: n.EmailBody, EmailProvider: n.EmailProvider,
+		DiscoveredParams: n.DiscoveredParams, ParamDefaults: n.ParamDefaults,
+		CustomParams: n.CustomParams, BodyMode: n.BodyMode, BodyTemplate: n.BodyTemplate,
+		Config: n.Config, TendrilAction: n.TendrilAction, TendrilNodeID: n.TendrilNodeID,
+		TendrilHours: n.TendrilHours, TendrilAmount: n.TendrilAmount,
+	}
+	b, err := json.Marshal(relevant)
+	if err != nil {
+		// Every field above is a string, a slice of a plain struct, or a
+		// map[string]string -- json.Marshal cannot fail on this shape in
+		// practice. If it somehow did, "" is the SAFE direction: the skip
+		// check above treats an empty ConfigHash as "no signal, assume
+		// unchanged" (matching a legacy pre-migration row), never as
+		// "definitely changed" -- an unexpected marshal failure must not
+		// itself force every node in every run to needlessly re-execute.
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // newRunLevelLedger builds an in-memory credit pool for a single run,
@@ -661,16 +825,151 @@ func (r *Runner) debitAgentFee(ctx context.Context, wf models.Workflow, run mode
 
 // Start creates a cancellable context for the run, registers it, and launches
 // Run in a goroutine. Replaces the previous pattern of calling Run directly.
+//
+// register() unconditionally cancels any run already registered for
+// wf.ID -- correct here, since Start is only ever called for a user (or a
+// webhook) deliberately triggering their own workflow, which should
+// supersede whatever else was running. The scheduler must NOT get this
+// behavior -- see StartIfNotRunning below.
 func (r *Runner) Start(wf models.Workflow, run models.Run) {
 	ctx, cancel := context.WithCancel(context.Background())
 	gen := r.registry.register(wf.ID, cancel)
 	go r.Run(ctx, wf, run, gen)
 }
 
+// StartIfNotRunning is Start's non-superseding counterpart, for the
+// scheduler only. Its own overlap guard (Scheduler.tick's IsRunning +
+// HasRunningRun checks) is check-then-act: read shared state, decide, then
+// call this. That leaves a window between the read and this call where a
+// manual trigger or resume for the same workflow could register in
+// between -- if this used Start's register() (unconditional supersede),
+// closing that window would mean silently cancelling a run the user just
+// started, possibly mid-payment, which is exactly the class of bug
+// StartResume's own claim-before-register ordering exists to prevent for
+// resume. registerIfAbsent makes the FINAL registration step itself
+// atomic and non-destructive: if anything is already registered for wf.ID
+// by the time this runs -- including one that raced in during the
+// scheduler's own check-then-act window -- this refuses (false) instead
+// of cancelling it. Returns false without starting anything in that case;
+// the caller (scheduler) must not have already committed anything
+// unrecoverable (e.g. a run row) that this leaves orphaned.
+//
+// r.broker.Create(run.ID) happens here, only on the success path, for the
+// same two reasons as StartResume's identical ordering: doing it in the
+// caller before this call would leak a hub for a run that turns out to
+// never execute (registerIfAbsent refused), and doing it in the caller
+// AFTER this call would race the goroutine below actually publishing.
+func (r *Runner) StartIfNotRunning(wf models.Workflow, run models.Run) bool {
+	ctx, cancel := context.WithCancel(context.Background())
+	gen, ok := r.registry.registerIfAbsent(wf.ID, cancel)
+	if !ok {
+		cancel()
+		return false
+	}
+	r.broker.Create(run.ID)
+	go r.Run(ctx, wf, run, gen)
+	return true
+}
+
+// StartResume is Start's counterpart for continuing a run that already has
+// some nodes logged as success (e.g. a dead-lettered run, retried by hand).
+// force must be explicit to resume a run with a payment-risk dead-letter
+// row -- see Resume's doc comment.
+//
+// The admission claim (store.MarkRunRunning) happens synchronously HERE,
+// before registry.register() -- deliberately not inside Resume() itself.
+// registry.register() unconditionally cancels whatever run is currently
+// registered for this workflow ID; if the claim happened after it (as it
+// used to), a losing concurrent StartResume call would already have
+// cancelled a legitimately in-flight (possibly mid-payment) resume before
+// ever finding out it lost the claim. Claiming first means a losing call
+// returns false here and never touches the registry at all -- the winner's
+// run is never cancelled out from under it. The claim itself is a plain
+// conditional UPDATE, not registry state, so it's also correct across
+// Railway's multiple replicas: two different processes calling this
+// concurrently both hit the same row, and Postgres's row lock lets exactly
+// one UPDATE succeed regardless of which process or in-process registry
+// either is running under.
+//
+// Returns false (no error) if the run wasn't in a resumable state -- the
+// caller must treat that as "already resumed elsewhere" or "already
+// finished", not start executing anything.
+//
+// r.broker.Create(run.ID) happens HERE, synchronously, after the claim
+// succeeds -- not in the handler before calling this. Broker.Create
+// unconditionally overwrites any existing hub for run.ID with a fresh,
+// empty one (no compare-and-swap); if the caller created it beforehand,
+// two concurrent resume requests for the same run.ID would race that
+// overwrite, and whichever hub a client's GET /stream subscribed to could
+// end up orphaned -- silently never receiving events -- regardless of
+// which request actually won the claim below. Creating it only after the
+// claim succeeds means only the sole winner ever creates a hub for this
+// resume attempt, and it does so before the goroutine below can publish
+// anything into it.
+func (r *Runner) StartResume(ctx context.Context, wf models.Workflow, run models.Run, force bool) (bool, error) {
+	claimed, err := r.store.MarkRunRunning(ctx, run.ID)
+	if err != nil || !claimed {
+		return false, err
+	}
+	rctx, cancel := context.WithCancel(context.Background())
+	// registerIfAbsent, NOT register: run.ID is an OLD failed/stopped run
+	// being resumed, which says nothing about whether wf.ID has some OTHER
+	// run currently in flight (a manual trigger, a schedule, or another
+	// resume already executing). register() unconditionally cancels
+	// whatever's registered for wf.ID -- that would mean resuming this old
+	// run silently cancels a completely unrelated in-flight run for the
+	// same workflow, possibly mid-payment, exactly the class of bug
+	// registerIfAbsent/StartIfNotRunning already closed for the scheduler.
+	// If something's already running for this workflow, this resume must
+	// not claim it -- and having already flipped run.ID to 'running' via
+	// MarkRunRunning above, that claim must be undone so the run row
+	// doesn't get stuck reading "running" forever with nothing executing
+	// it.
+	gen, ok := r.registry.registerIfAbsent(wf.ID, cancel)
+	if !ok {
+		cancel()
+		// Revert to run's OWN status as the caller passed it in -- NOT a
+		// hardcoded RunStatusFailed. MarkRunRunning only ever claims a row
+		// already sitting at 'failed' or 'stopped' (its own WHERE clause),
+		// so run.Status here already carries whichever of those two it
+		// actually was before this call flipped it to 'running'. Hardcoding
+		// Failed would silently relabel a user-initiated Stop as a
+		// Failed run just because an unrelated concurrent run raced in.
+		revertStatus := run.Status
+		if revertStatus != models.RunStatusFailed && revertStatus != models.RunStatusStopped {
+			// Defensive: MarkRunRunning's own WHERE clause guarantees this
+			// never happens (it only claims rows already 'failed' or
+			// 'stopped'), but fail toward the safer, more visible label if
+			// it somehow did rather than silently reverting to something
+			// that isn't even a valid terminal status this run row started
+			// from.
+			revertStatus = models.RunStatusFailed
+		}
+		if revertErr := r.store.FinishRun(context.Background(), run.ID, revertStatus); revertErr != nil {
+			log.Printf("resume: workflow %s already has a run in flight, AND reverting run %s's claim failed: %v", wf.ID, run.ID, revertErr)
+		}
+		return false, nil
+	}
+	r.broker.Create(run.ID)
+	go r.Resume(rctx, wf, run, gen, force)
+	return true, nil
+}
+
 // Stop cancels the active run for the given workflow ID. Returns false if no
 // run was registered (i.e. the workflow is not currently running).
 func (r *Runner) Stop(workflowID string) bool {
 	return r.registry.cancel(workflowID)
+}
+
+// IsRunning reports whether workflowID currently has an in-flight run
+// registered, without affecting it. Unlike Start -- which always supersedes
+// (cancels) any previous run for the same workflow ID, since that's the
+// right behavior for a user re-triggering their own workflow -- StartResume
+// and StartIfNotRunning both refuse instead of superseding (see their own
+// doc comments for why); the scheduler additionally uses this read-only
+// check as a cheap first pass before StartIfNotRunning.
+func (r *Runner) IsRunning(workflowID string) bool {
+	return r.registry.isActive(workflowID)
 }
 
 // finishRun records the run's terminal status and fires a workflow-run audit-log
@@ -681,7 +980,7 @@ func (r *Runner) finishRun(wf models.Workflow, run models.Run, status models.Run
 	go alert.Notify(context.Background(), alert.ChannelWorkflows, fmt.Sprintf("workflow %q run %s finished: %s", wf.Name, run.ID, status))
 }
 
-// Run executes a workflow. Call via Start rather than directly.
+// Run executes a workflow from scratch. Call via Start rather than directly.
 func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, gen uint64) {
 	defer r.broker.Close(run.ID)
 	defer r.registry.deregister(wf.ID, gen)
@@ -712,6 +1011,107 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 
 	go alert.Notify(context.Background(), alert.ChannelWorkflows, fmt.Sprintf("workflow %q run %s started", wf.Name, run.ID))
 
+	r.execute(ctx, wf, run, nil)
+}
+
+// Resume continues run.ID from wherever it left off: nodes already logged as
+// success in run_logs are skipped (their prior output is fed to downstream
+// nodes unchanged) rather than re-executed, so nothing that already
+// side-effected -- an x402 payment, a debited flat fee, a sent email -- runs
+// twice. Call via StartResume rather than directly.
+//
+// Only a node's own prior success is checked here; a level upstream of the
+// failed node that fully succeeded falls through immediately with nothing
+// left to do, which is what makes "resume" cheaper than "restart" for
+// workflows with real side-effecting steps earlier in the graph.
+//
+// force must be true to resume a run that has any payment-risk dead-letter
+// row (see DeadLetterRun.PaymentRisk) -- otherwise this refuses outright.
+// Retrying one of those nodes would re-run its LLM turn and re-debit its
+// flat fee on top of the one already charged for the failed attempt, so the
+// default has to be "don't", with an operator's explicit force required to
+// accept that known double-charge risk.
+func (r *Runner) Resume(ctx context.Context, wf models.Workflow, run models.Run, gen uint64, force bool) {
+	defer r.broker.Close(run.ID)
+	defer r.registry.deregister(wf.ID, gen)
+
+	if !force {
+		deadLetters, err := r.store.GetDeadLetterRuns(ctx, run.ID)
+		if err != nil {
+			log.Printf("resume: loading dead letters failed, run=%s: %v", run.ID, err)
+			r.finishRun(wf, run, models.RunStatusFailed)
+			return
+		}
+		for _, dl := range deadLetters {
+			if dl.PaymentRisk {
+				criticalAlert(wf, run, "resume refused: payment-risk dead-letter row present, force required", nil, "nodeId", dl.NodeID)
+				r.finishRun(wf, run, models.RunStatusFailed)
+				return
+			}
+		}
+	}
+
+	// Same run-total billing registration Run() does (see its own doc
+	// comment) -- a resumed run can still execute new billable non-tool402
+	// work (whatever wasn't already logged success), and without this,
+	// addRunBilling's Load(run.ID) would miss and silently drop it: the
+	// user's credit balance still gets debited correctly per node, but the
+	// matching on-chain settlement would just never happen.
+	runTotal := new(int64)
+	r.runBilling.Store(run.ID, runTotal)
+	defer func() {
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nodes.SelfSettleRetryBudget)
+		defer cancel()
+		r.settleRunTotal(sctx, wf, run, runTotal)
+		r.runBilling.Delete(run.ID)
+	}()
+
+	states, err := r.store.GetLatestNodeStates(ctx, run.ID)
+	if err != nil {
+		log.Printf("resume: loading prior node state failed, run=%s: %v", run.ID, err)
+		r.finishRun(wf, run, models.RunStatusFailed)
+		return
+	}
+
+	if !force {
+		// A node whose LATEST logged state is still "running" means a
+		// prior attempt started executing it and the process crashed (or
+		// was killed) before ever writing a terminal status -- neither
+		// "success" (skip, safe) nor "failed" (re-execute, already the
+		// accepted risk for a plain failure). Whether that node's real
+		// side effect (a payment, an email, a webhook post) actually fired
+		// before the crash is genuinely unknown -- the exact same
+		// "fate unknown" ambiguity ErrSettlementIndeterminate exists to
+		// name elsewhere in this file, and the same fail-closed answer
+		// applies: refuse rather than guess. Execution below treats
+		// anything not LogStatusSuccess as not-yet-done and re-executes
+		// it, so left unguarded this would silently re-fire that same
+		// side effect a second time. force=true is the operator
+		// explicitly accepting that risk, same as the payment-risk gate
+		// above.
+		for nodeID, l := range states {
+			if l.Status == models.LogStatusRunning {
+				criticalAlert(wf, run, "resume refused: node stuck mid-execution from a prior crash, force required", nil, "nodeId", nodeID)
+				r.finishRun(wf, run, models.RunStatusFailed)
+				return
+			}
+		}
+	}
+
+	// The run row was already flipped to "running" by StartResume's
+	// MarkRunRunning claim before this goroutine was ever spawned -- that
+	// claim is Resume's actual admission gate (see StartResume's doc
+	// comment for why it has to happen there and not here).
+
+	go alert.Notify(context.Background(), alert.ChannelWorkflows, fmt.Sprintf("workflow %q run %s resumed", wf.Name, run.ID))
+
+	r.execute(ctx, wf, run, states)
+}
+
+// execute is Run and Resume's shared body. seed is nil for a fresh run, or
+// the prior run_logs state for a resumed one -- every node whose seed entry
+// has LogStatusSuccess is skipped rather than re-executed.
+func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run, seed map[string]models.RunLog) {
 	attachMap := BuildAttachMap(wf.Nodes, wf.Edges)
 	levels, err := TopologicalSort(wf.Nodes, wf.Edges)
 	if err != nil {
@@ -727,7 +1127,7 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 			NodeType: models.NodeTypeTrigger,
 			Status:   models.LogStatusRunning,
 		}); insErr == nil {
-			r.store.UpdateRunLog(context.Background(), entry.ID, models.LogStatusFailed, outJSON, 0)
+			r.store.UpdateRunLog(context.Background(), entry.ID, models.LogStatusFailed, outJSON, 0, "")
 		}
 		r.broker.Publish(run.ID, models.LogEvent{
 			NodeType: models.NodeTypeTrigger,
@@ -792,6 +1192,37 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 				if atomic.LoadInt32(&failed) != 0 {
 					return
 				}
+				// Resume path: this node already reached success on a prior
+				// attempt (real payments/debits included) — reuse its logged
+				// output rather than re-executing and risking a double
+				// side-effect. seed is nil for a fresh Run.
+				//
+				// For a node type with a real side effect (nodeMayHaveRealSideEffect),
+				// this is unconditional -- skip regardless of whether the
+				// node's config has since changed, exactly matching this
+				// codebase's existing fail-closed stance on anything
+				// payment-adjacent: re-executing one of these under a
+				// changed config could repeat a real payment, email, or
+				// connector send, which is a worse outcome than reusing
+				// stale (but already-paid-for) output. A user who wants a
+				// payment-adjacent node's new config to actually take
+				// effect needs a fresh Run, not a Resume.
+				//
+				// For every other node type (pure computation: Tool
+				// "calc"/"datetime", Trigger, End), prior.ConfigHash must
+				// also match the node's CURRENT config -- see
+				// nodeConfigHash's own doc comment for exactly which
+				// fields that covers and why. An empty prior.ConfigHash
+				// (a success logged before this check existed) is treated
+				// as a match, preserving the always-skip behavior every
+				// run resumed before this shipped already relied on.
+				if prior, ok := seed[n.ID]; ok && prior.Status == models.LogStatusSuccess {
+					if nodeMayHaveRealSideEffect(n.Type, n.Template, n.Method) ||
+						prior.ConfigHash == "" || prior.ConfigHash == nodeConfigHash(n) {
+						rc.Set(n.ID, prior.Output)
+						return
+					}
+				}
 
 				start := time.Now()
 				logEntry, _ := r.store.InsertRunLog(ctx, models.RunLog{
@@ -802,13 +1233,83 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 					Status:    models.LogStatusRunning,
 				})
 
-				result, execErr := r.executeNode(ctx, n, attachMap, walletByAgent, rc, run, wf)
+				// Retry only on an error the node explicitly marked safe
+				// (nodes.Retryable) — e.g. a transport failure on an
+				// idempotent HTTP method. Anything unclassified defaults to
+				// NOT retryable, the same fail-closed stance the payment
+				// paths in this file already take, since a node this loop
+				// doesn't understand may have already side-effected.
+				var result any
+				var execErr error
+				attempts := 0
+				for {
+					attempts++
+					result, execErr = r.executeNode(ctx, n, attachMap, walletByAgent, rc, run, wf)
+					// A sibling in this same parallel level already failed the
+					// run (atomic `failed` below) -- no point sleeping through
+					// a backoff and making another live outbound call for a
+					// run that's already doomed to fail.
+					if execErr == nil || ctx.Err() != nil || attempts > n.MaxRetries || !nodes.IsRetryable(execErr) || atomic.LoadInt32(&failed) != 0 {
+						break
+					}
+					if n.RetryBackoffMs > 0 {
+						timer := time.NewTimer(time.Duration(n.RetryBackoffMs) * time.Millisecond)
+						select {
+						case <-timer.C:
+						case <-ctx.Done():
+							timer.Stop()
+						}
+					}
+					// Rechecked immediately on waking, before looping back to
+					// executeNode -- ctx can be cancelled (Stop) or `failed`
+					// can flip (a sibling in this level failed) at any point
+					// during the sleep above, and the loop's own condition at
+					// the top only catches that on its NEXT iteration's
+					// result, one live outbound call too late. Breaking here
+					// instead means a doomed or cancelled run never makes
+					// that extra call.
+					if ctx.Err() != nil || atomic.LoadInt32(&failed) != 0 {
+						break
+					}
+				}
 				dur := int(time.Since(start).Milliseconds())
 
 				if execErr != nil {
 					atomic.StoreInt32(&failed, 1)
 					outJSON, _ := json.Marshal(execErr.Error())
-					r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusFailed, outJSON, dur)
+					r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusFailed, outJSON, dur, "")
+					// A run cancelled mid-node (Stop) surfaces as execErr too,
+					// but that's not a permanent node failure worth
+					// dead-lettering -- the finishRun path below already
+					// reports it as "stopped", not "failed".
+					if ctx.Err() == nil {
+						// isPaymentRisk covers every shape of "real money may
+						// already have moved for this attempt": an attached
+						// call blocked by insufficient balance after the
+						// agent's own LLM turn (and its fee) already
+						// completed, an attached tool402 call that signed and
+						// sent a real payment before a downstream failure, or
+						// the run-level pre-fund settle response getting lost
+						// before any node started. Flag it so Resume refuses
+						// to blindly retry (and potentially re-pay) this node
+						// without an explicit force.
+						paymentRisk := isPaymentRisk(execErr)
+						if dlErr := r.store.InsertDeadLetterRun(context.Background(), models.DeadLetterRun{
+							RunID:        run.ID,
+							NodeID:       n.ID,
+							Error:        execErr.Error(),
+							AttemptCount: attempts,
+							PaymentRisk:  paymentRisk,
+						}); dlErr != nil {
+							// This row is the only record of paymentRisk --
+							// Resume's force-required guard reads it back via
+							// GetDeadLetterRuns, so a failed write here would
+							// silently let a resume re-execute (and re-bill)
+							// a node whose fee was already charged. Loud
+							// enough to page an operator, not just a log line.
+							criticalAlert(wf, run, "dead-letter insert failed, payment-risk flag may be lost", dlErr, "nodeId", n.ID, "paymentRisk", paymentRisk)
+						}
+					}
 					r.broker.Publish(run.ID, models.LogEvent{
 						StepIndex:  idx,
 						NodeID:     n.ID,
@@ -823,7 +1324,17 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 
 				rc.Set(n.ID, result)
 				outJSON, _ := json.Marshal(result)
-				r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusSuccess, outJSON, dur)
+				r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusSuccess, outJSON, dur, nodeConfigHash(n))
+				// This node just succeeded -- any dead-letter row an EARLIER
+				// attempt at it left behind (this run reached here via
+				// Resume) no longer reflects this node's current state, and
+				// must not keep permanently requiring force to resume this
+				// run in the future. See DeleteDeadLettersForNode's doc
+				// comment. A fresh (non-resumed) run has no such rows to
+				// begin with, so this is a no-op there.
+				if delErr := r.store.DeleteDeadLettersForNode(context.Background(), run.ID, n.ID); delErr != nil {
+					log.Printf("resume: clearing dead-letter rows for node %s, run=%s failed: %v", n.ID, run.ID, delErr)
+				}
 				r.broker.Publish(run.ID, models.LogEvent{
 					StepIndex:  idx,
 					NodeID:     n.ID,
@@ -861,7 +1372,15 @@ func (r *Runner) Run(ctx context.Context, wf models.Workflow, run models.Run, ge
 								NodeType:  models.NodeTypeTool402,
 								Status:    models.LogStatusRunning,
 							}); err == nil {
-								r.store.UpdateRunLog(context.Background(), entry.ID, models.LogStatusSuccess, payJSON, 0)
+								// "" for configHash: this synthetic row is keyed by
+								// the ATTACHED tool402 node's ID, not the agent
+								// node actually running as a topology step --
+								// execute()'s own skip-on-prior-success check
+								// never looks this row up (attached tools are
+								// excluded from that loop entirely, see
+								// agentToolIDs above), so no hash is meaningful
+								// here; it's purely an audit record.
+								r.store.UpdateRunLog(context.Background(), entry.ID, models.LogStatusSuccess, payJSON, 0, "")
 							}
 							r.broker.Publish(run.ID, ev)
 						}
@@ -977,14 +1496,15 @@ func (r *Runner) executeNode(
 		}
 		result, err := nodes.ExecuteAgent(ctx, node, attach, aw, r.walletSvc, rc, checkBalance, r.platformKeys, relayCfg)
 		if err != nil {
-			// A *nodes.ErrBalanceBlocked failure means the agent's own LLM
-			// turn already completed and only ran into insufficient balance
-			// when it tried an attached call — the agent's own flat fee is
+			// isAgentFeeOwedDespiteFailure means the agent's own LLM turn
+			// already completed -- either an attached call was blocked by
+			// insufficient balance before it could run, or an attached
+			// tool402 call signed and sent a real payment before a
+			// downstream failure -- either way the agent's own flat fee is
 			// still owed. Any other error (e.g. LLM connectivity failure)
 			// means the agent turn itself never completed, so nothing is
 			// billed, matching the pre-existing behavior for those failures.
-			var blocked *nodes.ErrBalanceBlocked
-			if errors.As(err, &blocked) {
+			if isAgentFeeOwedDespiteFailure(err) {
 				r.debitAgentFee(ctx, wf, run, node.ID, agentFeeUSDMicros, platformMode, resolvedModel, 0, 0)
 			}
 			return nil, err
