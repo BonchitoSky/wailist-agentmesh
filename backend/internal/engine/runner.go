@@ -244,6 +244,17 @@ func criticalAlert(wf models.Workflow, run models.Run, label string, err error, 
 	go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 }
 
+// isBalanceBlocked reports whether err is (or wraps) *nodes.ErrBalanceBlocked
+// -- the agent's own LLM turn completed and its flat fee was already
+// debited before an attached call it then tried ran into insufficient
+// balance. Shared by the agent-fee debit gate and the dead-letter
+// PaymentRisk classification below so the two can't drift out of sync on
+// what counts as "money already moved."
+func isBalanceBlocked(err error) bool {
+	var blocked *nodes.ErrBalanceBlocked
+	return errors.As(err, &blocked)
+}
+
 // newRunLevelLedger builds an in-memory credit pool for a single run,
 // atomically tracking reservations against a fixed budget instead of hitting
 // the DB per-call. Reserve decrements the pool; Commit writes the permanent
@@ -942,7 +953,11 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 				for {
 					attempts++
 					result, execErr = r.executeNode(ctx, n, attachMap, walletByAgent, rc, run, wf)
-					if execErr == nil || ctx.Err() != nil || attempts > n.MaxRetries || !nodes.IsRetryable(execErr) {
+					// A sibling in this same parallel level already failed the
+					// run (atomic `failed` below) -- no point sleeping through
+					// a backoff and making another live outbound call for a
+					// run that's already doomed to fail.
+					if execErr == nil || ctx.Err() != nil || attempts > n.MaxRetries || !nodes.IsRetryable(execErr) || atomic.LoadInt32(&failed) != 0 {
 						break
 					}
 					if n.RetryBackoffMs > 0 {
@@ -973,15 +988,22 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 						// real money already moved for this attempt. Flag it
 						// so Resume refuses to blindly retry (and re-bill)
 						// this node without an explicit force.
-						var blocked *nodes.ErrBalanceBlocked
-						paymentRisk := errors.As(execErr, &blocked)
-						r.store.InsertDeadLetterRun(context.Background(), models.DeadLetterRun{
+						paymentRisk := isBalanceBlocked(execErr)
+						if dlErr := r.store.InsertDeadLetterRun(context.Background(), models.DeadLetterRun{
 							RunID:        run.ID,
 							NodeID:       n.ID,
 							Error:        execErr.Error(),
 							AttemptCount: attempts,
 							PaymentRisk:  paymentRisk,
-						})
+						}); dlErr != nil {
+							// This row is the only record of paymentRisk --
+							// Resume's force-required guard reads it back via
+							// GetDeadLetterRuns, so a failed write here would
+							// silently let a resume re-execute (and re-bill)
+							// a node whose fee was already charged. Loud
+							// enough to page an operator, not just a log line.
+							criticalAlert(wf, run, "dead-letter insert failed, payment-risk flag may be lost", dlErr, "nodeId", n.ID, "paymentRisk", paymentRisk)
+						}
 					}
 					r.broker.Publish(run.ID, models.LogEvent{
 						StepIndex:  idx,
@@ -1157,8 +1179,7 @@ func (r *Runner) executeNode(
 			// still owed. Any other error (e.g. LLM connectivity failure)
 			// means the agent turn itself never completed, so nothing is
 			// billed, matching the pre-existing behavior for those failures.
-			var blocked *nodes.ErrBalanceBlocked
-			if errors.As(err, &blocked) {
+			if isBalanceBlocked(err) {
 				r.debitAgentFee(ctx, wf, run, node.ID, agentFeeUSDMicros, platformMode, resolvedModel, 0, 0)
 			}
 			return nil, err

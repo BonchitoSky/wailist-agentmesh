@@ -209,13 +209,17 @@ func (d *Deps) ResumeRun(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, http.StatusNotFound, "run not found")
 		return
 	}
-	if run.Status == models.RunStatusRunning {
-		respond.Error(w, http.StatusConflict, "run is already in progress")
-		return
-	}
+	// Ownership checked before anything about the run's state is revealed --
+	// a non-owner (or a caller enumerating run IDs) must get the same
+	// generic 404 regardless of whether the run exists, is running, or has
+	// dead letters, matching GetRun's own check-first order below.
 	wf, err := d.Store.GetWorkflow(ctx, run.WorkflowID)
 	if err != nil || wf.UserID != userID {
 		respond.Error(w, http.StatusNotFound, "run not found")
+		return
+	}
+	if run.Status == models.RunStatusRunning {
+		respond.Error(w, http.StatusConflict, "run is already in progress")
 		return
 	}
 

@@ -82,8 +82,26 @@ func (s *Scheduler) tick(ctx context.Context) {
 		// again here -- Runner.Start's registry always supersedes (cancels)
 		// any previous run for the same workflow ID, so starting a new one
 		// now would silently truncate the one still in flight.
+		//
+		// s.engine.IsRunning is a fast, free, in-process check that catches
+		// the common single-replica case with no DB round trip -- but it's
+		// invisible to every OTHER backend replica. The Postgres deployment
+		// here runs multiple replicas (see MarkRunRunning's own doc comment
+		// for the same concern on Resume), so a run one replica started is
+		// otherwise undetectable to the replica whose tick lands next.
+		// HasRunningRun reads shared DB state instead, closing that gap:
+		// checked second (only when the cheap local check says "not
+		// running") since it costs a query, not because it's less
+		// authoritative -- it's the one that's actually correct here.
 		if s.engine.IsRunning(wf.ID) {
-			log.Printf("scheduler: skipping workflow %s -- previous scheduled run still in progress", wf.ID)
+			log.Printf("scheduler: skipping workflow %s -- previous scheduled run still in progress (local)", wf.ID)
+			continue
+		}
+		if running, err := s.store.HasRunningRun(ctx, wf.ID); err != nil {
+			log.Printf("scheduler: checking in-flight run failed for workflow %s: %v", wf.ID, err)
+			continue
+		} else if running {
+			log.Printf("scheduler: skipping workflow %s -- previous scheduled run still in progress (another replica)", wf.ID)
 			continue
 		}
 		run, err := s.store.CreateRun(ctx, wf.ID, "schedule", []byte("{}"))

@@ -251,3 +251,75 @@ func TestWebhookSecretGeneratedAndPersisted(t *testing.T) {
 		t.Fatalf("secret rotated on re-save: want %q got %q", secret, resaved.Nodes[0].Secrets["webhookSecret"])
 	}
 }
+
+// TestUpdateWorkflowClampsRetryFields guards against a node being saved
+// with an unbounded retry configuration -- MaxRetries/RetryBackoffMs had no
+// server-side cap, so a workflow could be saved to retry a node for hours
+// against a third-party endpoint. UpdateWorkflow must clamp both fields to
+// models.MaxNodeRetries/MaxNodeRetryBackoffMs (and floor a negative value
+// to 0) regardless of what the client sends.
+func TestUpdateWorkflowClampsRetryFields(t *testing.T) {
+	d := testDeps(t)
+	ctx := context.Background()
+
+	wf, err := d.Store.CreateWorkflow(ctx, "Retry Clamp Test", "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	body, _ := json.Marshal(map[string]any{
+		"name": "Retry Clamp Test",
+		"nodes": []map[string]any{
+			{"id": "n1", "type": "trigger", "template": "manual"},
+			{"id": "n2", "type": "tool", "template": "http", "url": "http://example.com", "method": "GET",
+				"maxRetries": 100000, "retryBackoffMs": 600000},
+			{"id": "n3", "type": "end"},
+			{"id": "n4", "type": "tool", "template": "http", "url": "http://example.com", "method": "GET",
+				"maxRetries": -5, "retryBackoffMs": -5},
+		},
+		"edges": []map[string]any{
+			{"id": "e1", "from": "n1", "to": "n2", "kind": "flow"},
+			{"id": "e2", "from": "n2", "to": "n3", "kind": "flow"},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/workflows/"+wf.ID, bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev"))
+	req = withURLParam(req, "id", wf.ID)
+	w := httptest.NewRecorder()
+	d.UpdateWorkflow(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 got %d body=%s", w.Code, w.Body.String())
+	}
+
+	var saved models.Workflow
+	json.NewDecoder(w.Body).Decode(&saved)
+	byID := map[string]models.WorkflowNode{}
+	for _, n := range saved.Nodes {
+		byID[n.ID] = n
+	}
+	if got := byID["n2"].MaxRetries; got != models.MaxNodeRetries {
+		t.Errorf("n2 MaxRetries: want clamped to %d, got %d", models.MaxNodeRetries, got)
+	}
+	if got := byID["n2"].RetryBackoffMs; got != models.MaxNodeRetryBackoffMs {
+		t.Errorf("n2 RetryBackoffMs: want clamped to %d, got %d", models.MaxNodeRetryBackoffMs, got)
+	}
+	if got := byID["n4"].MaxRetries; got != 0 {
+		t.Errorf("n4 MaxRetries: want negative floored to 0, got %d", got)
+	}
+	if got := byID["n4"].RetryBackoffMs; got != 0 {
+		t.Errorf("n4 RetryBackoffMs: want negative floored to 0, got %d", got)
+	}
+
+	// Re-fetching from the DB confirms the clamp was actually persisted,
+	// not just reflected in this response.
+	fetched, err := d.Store.GetWorkflow(ctx, wf.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range fetched.Nodes {
+		if n.ID == "n2" && (n.MaxRetries != models.MaxNodeRetries || n.RetryBackoffMs != models.MaxNodeRetryBackoffMs) {
+			t.Errorf("persisted n2: want clamped values, got maxRetries=%d retryBackoffMs=%d", n.MaxRetries, n.RetryBackoffMs)
+		}
+	}
+}

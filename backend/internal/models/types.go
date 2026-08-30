@@ -148,12 +148,26 @@ type WorkflowNode struct {
 	// MaxRetries is how many additional attempts the runner makes for this
 	// node after a failure classified as safe to retry (see
 	// nodes.IsRetryable) — 0 (default) means no automatic retry. A
-	// non-retryable error is never retried regardless of this value.
+	// non-retryable error is never retried regardless of this value. Clamped
+	// to MaxNodeRetries on save (see handlers.clampRetryFields) so a saved
+	// workflow can't hammer a third-party endpoint indefinitely.
 	MaxRetries int `json:"maxRetries,omitempty"`
 	// RetryBackoffMs is the delay before each retry attempt. 0 with
-	// MaxRetries > 0 means retry immediately.
+	// MaxRetries > 0 means retry immediately. Clamped to
+	// MaxNodeRetryBackoffMs on save, same reasoning as MaxRetries.
 	RetryBackoffMs int `json:"retryBackoffMs,omitempty"`
 }
+
+// MaxNodeRetries and MaxNodeRetryBackoffMs bound a node's retry
+// configuration so a saved workflow can't hold a run's goroutine open
+// indefinitely retrying against a third-party endpoint -- 5 attempts at up
+// to 30s apart is generous for real transient failures (a blip, a brief
+// rate limit) without letting a single misconfigured or abusive node retry
+// for hours.
+const (
+	MaxNodeRetries        = 5
+	MaxNodeRetryBackoffMs = 30_000
+)
 
 type WorkflowEdge struct {
 	ID     string   `json:"id"`

@@ -73,6 +73,7 @@ func (d *Deps) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
 		Edges []models.WorkflowEdge `json:"edges"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
+	clampRetryFields(body.Nodes)
 	encryptedNodes := encryptNodes(body.Nodes, d.EncryptionKey, existing.Nodes)
 	encryptedNodes = ensureWebhookSecrets(encryptedNodes, d.EncryptionKey)
 	graph := models.WorkflowGraph{Nodes: encryptedNodes, Edges: body.Edges}
@@ -84,6 +85,26 @@ func (d *Deps) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
 	decrypted := decryptNodes(wf.Nodes, d.EncryptionKey)
 	wf.Nodes = unmaskWebhookSecrets(maskNodes(wf.Nodes), decrypted)
 	respond.JSON(w, http.StatusOK, wf)
+}
+
+// clampRetryFields bounds every node's MaxRetries/RetryBackoffMs to
+// models.MaxNodeRetries/MaxNodeRetryBackoffMs in place, so a saved workflow
+// can never configure a node to retry for hours against a third-party
+// endpoint -- see those constants' doc comment. Negative values are floored
+// to 0 rather than left to produce a nonsensical negative retry count/delay.
+func clampRetryFields(nodes []models.WorkflowNode) {
+	for i := range nodes {
+		if nodes[i].MaxRetries < 0 {
+			nodes[i].MaxRetries = 0
+		} else if nodes[i].MaxRetries > models.MaxNodeRetries {
+			nodes[i].MaxRetries = models.MaxNodeRetries
+		}
+		if nodes[i].RetryBackoffMs < 0 {
+			nodes[i].RetryBackoffMs = 0
+		} else if nodes[i].RetryBackoffMs > models.MaxNodeRetryBackoffMs {
+			nodes[i].RetryBackoffMs = models.MaxNodeRetryBackoffMs
+		}
+	}
 }
 
 func (d *Deps) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {

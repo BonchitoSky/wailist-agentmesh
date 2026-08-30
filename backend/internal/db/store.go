@@ -635,6 +635,23 @@ func (s *Store) MarkRunRunning(ctx context.Context, runID string) (bool, error) 
 	return tag.RowsAffected() > 0, nil
 }
 
+// HasRunningRun reports whether workflowID has any run currently in
+// "running" status, read straight from Postgres rather than any
+// in-process registry -- the scheduler's overlap guard needs this to be
+// visible across every backend replica, not just the one whose tick happens
+// to land next. Like every other admission check in this file, this is a
+// point-in-time read, not a claim: a run can transition between this call
+// and whatever the caller does next, so it narrows the cross-replica gap
+// engine.Runner.IsRunning has (in-process only) without claiming to make
+// the scheduler's decision fully atomic.
+func (s *Store) HasRunningRun(ctx context.Context, workflowID string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM runs WHERE workflow_id=$1 AND status='running')
+	`, workflowID).Scan(&exists)
+	return exists, err
+}
+
 // --- DeadLetterRun methods ---
 
 func (s *Store) InsertDeadLetterRun(ctx context.Context, dl models.DeadLetterRun) error {
