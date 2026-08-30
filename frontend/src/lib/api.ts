@@ -12,14 +12,45 @@ import {
 } from "./types";
 import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
 import { isWriteBlocked, isReadOnlyNow } from "./readonly";
+import { IS_NATIVE, authHeaders } from "./nativeAuth";
 
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
 // Exported so other modules (e.g. lib/bazaar.ts) share this one definition
 // instead of re-deriving it and silently drifting out of sync.
 const _CONFIGURED = process.env.NEXT_PUBLIC_API_URL ?? "";
+// The browser routes through /api so the auth cookie stays same-site. The
+// native shell cannot: its bundle is a static export served from the device,
+// with no Next server behind it to proxy /api anywhere, and no same-site
+// cookie to protect. It calls the backend's absolute URL and authenticates
+// with a bearer token instead (see nativeAuth.ts).
 export const BASE =
-  _CONFIGURED && typeof window !== "undefined" ? "/api" : _CONFIGURED;
+  !IS_NATIVE && _CONFIGURED && typeof window !== "undefined"
+    ? "/api"
+    : _CONFIGURED;
+
+// apiFetch is the single place that knows how this client authenticates.
+//
+// Before this existed every call site spelled out `credentials: "include"`
+// and nothing else, which was correct for exactly one kind of client. Routing
+// them all through here means the native shell's bearer header is added once
+// rather than at thirty call sites, and the web request is unchanged --
+// authHeaders() returns nothing at all off-device.
+async function apiFetch(
+  input: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const extra = authHeaders();
+  const headers = {
+    ...(init.headers as Record<string, string> | undefined),
+    ...extra,
+  };
+  return fetch(input, {
+    credentials: "include",
+    ...init,
+    ...(Object.keys(headers).length ? { headers } : {}),
+  });
+}
 
 // Defence in depth for read-only mode. Every authoring control is hidden from
 // the UI, but a stale bundle, a deep link, or a console call must not be able
@@ -48,7 +79,7 @@ export interface AuthUser {
 export const auth = {
   signIn: async (email: string, password: string): Promise<void> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/auth/signin`, {
+      const res = await apiFetch(`${BASE}/auth/signin`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -70,7 +101,7 @@ export const auth = {
     org: string,
   ): Promise<void> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/auth/signup`, {
+      const res = await apiFetch(`${BASE}/auth/signup`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -89,7 +120,7 @@ export const auth = {
 
   me: async (): Promise<AuthUser> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/auth/me`, { credentials: "include" });
+      const res = await apiFetch(`${BASE}/auth/me`, { credentials: "include" });
       if (!res.ok) throw new Error("unauthorized");
       return res.json();
     }
@@ -107,7 +138,7 @@ export const auth = {
   // general profile edit.
   updateProfile: async (name: string, orgName: string): Promise<AuthUser> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/auth/me`, {
+      const res = await apiFetch(`${BASE}/auth/me`, {
         method: "PATCH",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -128,7 +159,7 @@ export const auth = {
 
   signOut: async (): Promise<void> => {
     if (BASE) {
-      await fetch(`${BASE}/auth/signout`, {
+      await apiFetch(`${BASE}/auth/signout`, {
         method: "POST",
         credentials: "include",
       });
@@ -148,7 +179,9 @@ export const workflows = {
   // TODO: GET /workflows
   list: async (): Promise<Workflow[]> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows`, { credentials: "include" });
+      const res = await apiFetch(`${BASE}/workflows`, {
+        credentials: "include",
+      });
       if (!res.ok) throw new Error("workflows fetch failed");
       return res.json();
     }
@@ -159,7 +192,7 @@ export const workflows = {
   // TODO: GET /workflows/:id
   get: async (id: string): Promise<Workflow> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows/${id}`, {
+      const res = await apiFetch(`${BASE}/workflows/${id}`, {
         credentials: "include",
       });
       const data = await res.json().catch(() => ({}));
@@ -176,7 +209,7 @@ export const workflows = {
   create: async (name: string): Promise<Workflow> => {
     assertWritable("POST", "/workflows");
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows`, {
+      const res = await apiFetch(`${BASE}/workflows`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -194,7 +227,7 @@ export const workflows = {
   update: async (id: string, wf: Partial<Workflow>): Promise<Workflow> => {
     assertWritable("PUT", `/workflows/${id}`);
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows/${id}`, {
+      const res = await apiFetch(`${BASE}/workflows/${id}`, {
         method: "PUT",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -220,7 +253,7 @@ export const workflows = {
   remove: async (id: string): Promise<void> => {
     assertWritable("DELETE", `/workflows/${id}`);
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows/${id}`, {
+      const res = await apiFetch(`${BASE}/workflows/${id}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -241,7 +274,7 @@ export const workflows = {
   }> => {
     assertWritable("POST", `/workflows/${id}/deploy`);
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows/${id}/deploy`, {
+      const res = await apiFetch(`${BASE}/workflows/${id}/deploy`, {
         method: "POST",
         credentials: "include",
       });
@@ -259,7 +292,7 @@ export const workflows = {
     input?: Record<string, unknown>,
   ): Promise<{ runId: string }> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows/${id}/run`, {
+      const res = await apiFetch(`${BASE}/workflows/${id}/run`, {
         method: "POST",
         credentials: "include",
         headers: input ? { "Content-Type": "application/json" } : {},
@@ -280,7 +313,7 @@ export const workflows = {
   ): Promise<{ reply: string; workflow: Workflow }> => {
     assertWritable("POST", `/workflows/${id}/build`);
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows/${id}/build`, {
+      const res = await apiFetch(`${BASE}/workflows/${id}/build`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -305,7 +338,7 @@ export const workflows = {
   // TODO: POST /workflows/:id/stop
   stop: async (id: string): Promise<void> => {
     if (BASE) {
-      await fetch(`${BASE}/workflows/${id}/stop`, {
+      await apiFetch(`${BASE}/workflows/${id}/stop`, {
         method: "POST",
         credentials: "include",
       });
@@ -322,7 +355,7 @@ export const credits = {
   // from another source is a guess that drifts the moment a run spends money.
   balance: async (): Promise<number> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/credits/balance`, {
+      const res = await apiFetch(`${BASE}/credits/balance`, {
         credentials: "include",
       });
       const data = await res.json().catch(() => ({}));
@@ -343,7 +376,7 @@ export const credits = {
     code: string,
   ): Promise<{ balanceUSD: number; creditedUSD: number }> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/credits/redeem-coupon`, {
+      const res = await apiFetch(`${BASE}/credits/redeem-coupon`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -388,7 +421,7 @@ export const runs = {
     runId: string,
   ): Promise<{ run: { status: string }; logs: RunLogRecord[] }> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/runs/${runId}`, {
+      const res = await apiFetch(`${BASE}/runs/${runId}`, {
         credentials: "include",
       });
       const data = await res.json().catch(() => ({}));
@@ -463,7 +496,7 @@ export const agents = {
     agentId: string,
   ): Promise<{ address: string; balance: string; network: string }> => {
     if (BASE) {
-      const res = await fetch(
+      const res = await apiFetch(
         `${BASE}/workflows/${wfId}/agents/${agentId}/balance`,
         { credentials: "include" },
       );
@@ -482,7 +515,7 @@ export const agents = {
     amount: number,
   ): Promise<{ txHash: string; balance: string }> => {
     if (BASE) {
-      const res = await fetch(
+      const res = await apiFetch(
         `${BASE}/workflows/${wfId}/agents/${agentId}/fund`,
         {
           method: "POST",
@@ -530,7 +563,7 @@ export const tools = {
     }>;
   }> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/tools/x402/quote`, {
+      const res = await apiFetch(`${BASE}/tools/x402/quote`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -569,9 +602,11 @@ export const oauth2 = {
   // async request.
   connectURL: (provider: string): string => `${BASE}/oauth2/${provider}/start`,
 
-  listCredentials: async (provider: string): Promise<OAuthCredentialSummary[]> => {
+  listCredentials: async (
+    provider: string,
+  ): Promise<OAuthCredentialSummary[]> => {
     if (!BASE) return []; // No connected-account concept in mock mode.
-    const res = await fetch(
+    const res = await apiFetch(
       `${BASE}/oauth2/credentials?provider=${encodeURIComponent(provider)}`,
       { credentials: "include" },
     );
@@ -581,7 +616,7 @@ export const oauth2 = {
 
   deleteCredential: async (id: string): Promise<void> => {
     if (!BASE) return;
-    await fetch(`${BASE}/oauth2/credentials/${encodeURIComponent(id)}`, {
+    await apiFetch(`${BASE}/oauth2/credentials/${encodeURIComponent(id)}`, {
       method: "DELETE",
       credentials: "include",
     });
@@ -593,6 +628,11 @@ export const waitlist = {
   // TODO: POST /waitlist
   join: async (email: string): Promise<void> => {
     if (BASE) {
+      // Plain fetch, not apiFetch: this is the one genuinely public endpoint
+      // here, and it must not send credentials. A credentialed cross-origin
+      // request fails outright when CORS_ORIGIN is unset (the wildcard case,
+      // where the server cannot send Allow-Credentials), which would break the
+      // landing page's signup for a deployment where nothing else is wrong.
       await fetch(`${BASE}/waitlist`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -618,7 +658,7 @@ export const payments = {
     app_id: string;
   }> => {
     if (!BASE) throw new Error("payments require a configured backend");
-    const res = await fetch(`${BASE}/payments/cashfree/order`, {
+    const res = await apiFetch(`${BASE}/payments/cashfree/order`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -633,7 +673,7 @@ export const payments = {
     orderId: string,
   ): Promise<{ status: string; credited_usd_micros: number }> => {
     if (!BASE) throw new Error("payments require a configured backend");
-    const res = await fetch(`${BASE}/payments/cashfree/verify`, {
+    const res = await apiFetch(`${BASE}/payments/cashfree/verify`, {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -673,7 +713,7 @@ function bucketFor(range: UsageRange): "hour" | "day" {
 // summary did, and the other four threw fixed strings that discarded detail.
 async function usageFetch<T>(path: string, mock: () => T): Promise<T> {
   if (BASE) {
-    const res = await fetch(`${BASE}${path}`, { credentials: "include" });
+    const res = await apiFetch(`${BASE}${path}`, { credentials: "include" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok)
       throw new Error(
