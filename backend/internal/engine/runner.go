@@ -775,9 +775,29 @@ func (r *Runner) StartResume(ctx context.Context, wf models.Workflow, run models
 	if err != nil || !claimed {
 		return false, err
 	}
-	r.broker.Create(run.ID)
 	rctx, cancel := context.WithCancel(context.Background())
-	gen := r.registry.register(wf.ID, cancel)
+	// registerIfAbsent, NOT register: run.ID is an OLD failed/stopped run
+	// being resumed, which says nothing about whether wf.ID has some OTHER
+	// run currently in flight (a manual trigger, a schedule, or another
+	// resume already executing). register() unconditionally cancels
+	// whatever's registered for wf.ID -- that would mean resuming this old
+	// run silently cancels a completely unrelated in-flight run for the
+	// same workflow, possibly mid-payment, exactly the class of bug
+	// registerIfAbsent/StartIfNotRunning already closed for the scheduler.
+	// If something's already running for this workflow, this resume must
+	// not claim it -- and having already flipped run.ID to 'running' via
+	// MarkRunRunning above, that claim must be undone so the run row
+	// doesn't get stuck reading "running" forever with nothing executing
+	// it.
+	gen, ok := r.registry.registerIfAbsent(wf.ID, cancel)
+	if !ok {
+		cancel()
+		if revertErr := r.store.FinishRun(context.Background(), run.ID, models.RunStatusFailed); revertErr != nil {
+			log.Printf("resume: workflow %s already has a run in flight, AND reverting run %s's claim failed: %v", wf.ID, run.ID, revertErr)
+		}
+		return false, nil
+	}
+	r.broker.Create(run.ID)
 	go r.Resume(rctx, wf, run, gen, force)
 	return true, nil
 }
@@ -789,11 +809,12 @@ func (r *Runner) Stop(workflowID string) bool {
 }
 
 // IsRunning reports whether workflowID currently has an in-flight run
-// registered, without affecting it. Unlike Start/StartResume -- which always
-// supersede (cancel) any previous run for the same workflow ID, since that's
-// the right behavior for a user re-triggering their own workflow -- the
-// scheduler uses this read-only check to skip firing a new scheduled run
-// over one still executing, rather than silently truncating it mid-level.
+// registered, without affecting it. Unlike Start -- which always supersedes
+// (cancels) any previous run for the same workflow ID, since that's the
+// right behavior for a user re-triggering their own workflow -- StartResume
+// and StartIfNotRunning both refuse instead of superseding (see their own
+// doc comments for why); the scheduler additionally uses this read-only
+// check as a cheap first pass before StartIfNotRunning.
 func (r *Runner) IsRunning(workflowID string) bool {
 	return r.registry.isActive(workflowID)
 }
@@ -1103,6 +1124,16 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 				rc.Set(n.ID, result)
 				outJSON, _ := json.Marshal(result)
 				r.store.UpdateRunLog(context.Background(), logEntry.ID, models.LogStatusSuccess, outJSON, dur)
+				// This node just succeeded -- any dead-letter row an EARLIER
+				// attempt at it left behind (this run reached here via
+				// Resume) no longer reflects this node's current state, and
+				// must not keep permanently requiring force to resume this
+				// run in the future. See DeleteDeadLettersForNode's doc
+				// comment. A fresh (non-resumed) run has no such rows to
+				// begin with, so this is a no-op there.
+				if delErr := r.store.DeleteDeadLettersForNode(context.Background(), run.ID, n.ID); delErr != nil {
+					log.Printf("resume: clearing dead-letter rows for node %s, run=%s failed: %v", n.ID, run.ID, delErr)
+				}
 				r.broker.Publish(run.ID, models.LogEvent{
 					StepIndex:  idx,
 					NodeID:     n.ID,

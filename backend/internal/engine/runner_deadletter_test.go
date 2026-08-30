@@ -354,3 +354,84 @@ func TestPaymentRiskDeadLetterRefusesResumeWithoutForce(t *testing.T) {
 		t.Fatalf("resume with force made %d new LLM calls, want at least 1 (must actually attempt the node)", got-llmHitsBeforeResume)
 	}
 }
+
+// TestDeadLetterRowClearedOnceNodeLaterSucceeds is a regression test for a
+// review finding: dead_letter_runs rows were never deleted anywhere, so a
+// node that dead-lettered once (even for an ordinary transient reason, let
+// alone a payment-risk one) stayed in GetDeadLetterRuns' result forever --
+// permanently requiring ?force=true to resume this run ever again, even
+// long after that exact node succeeded on a prior resume. Reuses
+// TestResumeAfterDeadLetterSkipsSucceededUpstreamNode's fixture (n3 fails
+// once, resume succeeds) and adds the actual assertion that finding is
+// about: the dead-letter row for n3 must be gone after it succeeds.
+func TestDeadLetterRowClearedOnceNodeLaterSucceeds(t *testing.T) {
+	runner, store := newTestRunner(t)
+	ctx := context.Background()
+
+	var failN3 atomic.Bool
+	failN3.Store(true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failN3.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	wf, err := store.CreateWorkflow(ctx, "Dead Letter Clear Test", fundedTestUser(t, store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "n3", Type: models.NodeTypeTool, Template: "http", URL: srv.URL, Method: "GET"},
+			{ID: "n4", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "n3", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "n3", To: "n4", Kind: models.EdgeKindFlow},
+		},
+	}
+	wf, _ = store.UpdateWorkflow(ctx, wf.ID, wf.Name, graph)
+
+	run, err := store.CreateRun(ctx, wf.ID, "test", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := sse.NewBroker()
+	broker.Create(run.ID)
+
+	runner.Run(ctx, wf, run, 0)
+
+	deadLettersBeforeResume, err := store.GetDeadLetterRuns(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deadLettersBeforeResume) != 1 || deadLettersBeforeResume[0].NodeID != "n3" {
+		t.Fatalf("want exactly 1 dead-letter row for n3 before resume, got %+v", deadLettersBeforeResume)
+	}
+
+	failN3.Store(false)
+	broker.Create(run.ID)
+	runner.Resume(ctx, wf, run, 0, false)
+
+	finalRun, err := store.GetRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalRun.Status != models.RunStatusSuccess {
+		t.Fatalf("run status after resume = %s, want success", finalRun.Status)
+	}
+
+	deadLettersAfterResume, err := store.GetDeadLetterRuns(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deadLettersAfterResume) != 0 {
+		t.Fatalf("want 0 dead-letter rows once n3 succeeded, got %+v -- a stale row here would permanently require force to resume this run again, even for an unrelated later failure", deadLettersAfterResume)
+	}
+}

@@ -75,7 +75,8 @@ func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models
 // Tendril, the instant they open ANY of their own workflows.
 func (s *Store) FindSystemWorkflow(ctx context.Context, userID, name string) (w models.Workflow, found bool, err error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
+		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at,
+		       schedule_cron, schedule_next_run_at
 		FROM workflows WHERE user_id = $1 AND name = $2 ORDER BY created_at ASC LIMIT 1
 	`, userID, name)
 	if err != nil {
@@ -87,6 +88,7 @@ func (s *Store) FindSystemWorkflow(ctx context.Context, userID, name string) (w 
 		if err := rows.Scan(
 			&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
 			&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
+			&w.ScheduleCron, &w.ScheduleNextRunAt,
 		); err != nil {
 			rows.Close()
 			return models.Workflow{}, false, err
@@ -663,6 +665,22 @@ func (s *Store) InsertDeadLetterRun(ctx context.Context, dl models.DeadLetterRun
 		INSERT INTO dead_letter_runs (run_id, node_id, error, attempt_count, payment_risk)
 		VALUES ($1,$2,$3,$4,$5)
 	`, dl.RunID, dl.NodeID, dl.Error, dl.AttemptCount, dl.PaymentRisk)
+	return err
+}
+
+// DeleteDeadLettersForNode removes every dead-letter row for nodeID within
+// runID -- called once that node reaches a real success within this same
+// run (a fresh run, or a resume that retried it), so a node's earlier
+// failed attempt stops permanently gating every future resume of this run.
+// Without this, a single PaymentRisk row that gets force-resolved (forced
+// past, node succeeds) still shows up in GetDeadLetterRuns forever after,
+// so an unrelated later node failing for an ordinary transient reason would
+// ALSO require force to resume, since the stale, already-resolved row is
+// still in the result set alongside it. Scoped to (run_id, node_id), not
+// the whole run, so any OTHER node's still-unresolved dead-letter row is
+// untouched.
+func (s *Store) DeleteDeadLettersForNode(ctx context.Context, runID, nodeID string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM dead_letter_runs WHERE run_id=$1 AND node_id=$2`, runID, nodeID)
 	return err
 }
 

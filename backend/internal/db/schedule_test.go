@@ -229,3 +229,46 @@ func TestListWorkflowsAndUpdateWorkflowReportScheduleFields(t *testing.T) {
 		t.Error("UpdateWorkflow response: schedule_next_run_at is nil, want the set time to survive an unrelated save")
 	}
 }
+
+// TestFindSystemWorkflowReportsScheduleFields is a regression test for a
+// review finding: FindSystemWorkflow's SELECT was left on the pre-existing
+// 9-column list when schedule_cron/schedule_next_run_at were added to
+// GetWorkflow, ListWorkflows, and UpdateWorkflow's queries -- so a workflow
+// found via FindSystemWorkflow/GetOrCreateSystemWorkflow (the Tendril
+// console's hidden per-user workflow) always reported a null schedule
+// regardless of the row's real DB state.
+func TestFindSystemWorkflowReportsScheduleFields(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	email := fmt.Sprintf("schedule-find-system-test-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const systemWorkflowName = "Tendril Console"
+	wf, err := store.GetOrCreateSystemWorkflow(ctx, user.ID, systemWorkflowName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetWorkflowDeployed(ctx, wf.ID, "https://example.com/run", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetWorkflowSchedule(ctx, wf.ID, "0 9 * * *", time.Now().Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	found, ok, err := store.FindSystemWorkflow(ctx, user.ID, systemWorkflowName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("FindSystemWorkflow: want found=true")
+	}
+	if found.ScheduleCron == nil || *found.ScheduleCron != "0 9 * * *" {
+		t.Errorf("FindSystemWorkflow: schedule_cron = %v, want \"0 9 * * *\"", found.ScheduleCron)
+	}
+	if found.ScheduleNextRunAt == nil {
+		t.Error("FindSystemWorkflow: schedule_next_run_at is nil, want the set time")
+	}
+}
