@@ -1,0 +1,81 @@
+name: Android
+
+# Deliberately NOT on push. The web app auto-deploys on merge; an Android
+# build cannot, because every artefact that leaves here is signed with a real
+# release key and lands in front of Play's review. So this is gated on an
+# explicit release tag or a manual dispatch.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "android-v*"
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    name: android / signed bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install shell dependencies
+        working-directory: mobile
+        run: npm ci
+
+      # Builds the static export, copies it into mobile/www, and runs
+      # `cap sync android`. The API URL is baked in at build time -- there is
+      # no server behind the bundle to configure it later.
+      - name: Build the web bundle and sync
+        working-directory: mobile
+        env:
+          NEXT_PUBLIC_API_URL: ${{ secrets.MOBILE_API_URL }}
+        run: npm run sync
+
+      # The keystore never exists in the repo. It is a base64 secret,
+      # materialised for this job only and removed with the runner.
+      - name: Restore the signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 is not set; cannot produce a signed bundle." >&2
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > mobile/android/release.keystore
+
+      - name: Build the release bundle
+        working-directory: mobile/android
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew bundleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentmesh-release-aab
+          path: mobile/android/app/build/outputs/bundle/release/*.aab
+          # Signed and installable: it does not want a long shelf life in
+          # CI storage.
+          retention-days: 7
+
+      # Uploading to Play is intentionally NOT automated here. Background
+      # location gets a manual review, and a release should be a decision
+      # somebody makes, not a side effect of pushing a tag. Take the artefact
+      # above to the internal-testing track by hand.
