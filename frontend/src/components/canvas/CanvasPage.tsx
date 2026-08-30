@@ -23,6 +23,11 @@ import { ConsolePanel } from "./ConsolePanel";
 import { ResizeHandle } from "./ResizeHandle";
 import { ChatRail } from "./chat/ChatRail";
 import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
+import { can } from "@/lib/readonly";
+import { ghostBtnSm, primaryBtnSm } from "@/components/ui/buttons";
+import { useIsCompact } from "@/hooks/useIsCompact";
+import { runBlockedMessage } from "./runBlocked";
+import { useReadOnly } from "@/hooks/useReadOnly";
 import {
   PALETTE,
   INSPECTOR,
@@ -37,12 +42,24 @@ interface CanvasPageProps {
 
 export function CanvasPage({ workflowId }: CanvasPageProps) {
   const router = useRouter();
+  const compact = useIsCompact();
+  const readOnly = useReadOnly();
 
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [manualBuildMode, setManualBuildMode] = useState(false);
+  // Below the compact breakpoint the studio stacks instead of sitting in
+  // three columns, and the rail becomes a sheet. Closed by default: the
+  // reader came to look at the graph, so the graph gets the screen until
+  // they ask for something else.
+  const [sheetOpen, setSheetOpen] = useState(false);
+  // Filled in by CanvasGraph. Tap-to-add has no cursor position to place
+  // against, and the centre of the current view is only known down there.
+  const addAtCentre = useRef<((meta: Partial<WorkflowNode>) => void) | null>(
+    null,
+  );
   const [deployed, setDeployed] = useState(false);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -156,6 +173,12 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     // node "appear then vanish" a second later.
     let cancelled = false;
     if (workflowId === "new") {
+      // Nothing to create here in read-only mode -- send the visitor back to
+      // the list rather than letting the route sit on "creating workflow…".
+      if (!can("workflow.create", readOnly)) {
+        router.replace("/workflows");
+        return;
+      }
       workflowsApi
         .create("Untitled workflow")
         .then((wf) => {
@@ -189,7 +212,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [workflowId, router, isNarrow]);
+  }, [workflowId, router, isNarrow, readOnly]);
 
   // Auto-save: debounce 1.5s after any change, skip on initial load.
   // pendingSave holds the graph the debounce timer is still sitting on, and
@@ -233,6 +256,10 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   useEffect(() => {
     if (!workflow) return;
+    // Never arm the autosave in read-only mode. Every editing control is
+    // gone, but this effect answers to any change in `workflow` at all --
+    // left armed, one stray state update would PUT the graph back.
+    if (!can("workflow.editGraph", readOnly)) return;
     if (skipNextAutosave.current) {
       skipNextAutosave.current = false;
       return;
@@ -246,7 +273,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     }, 1500);
     saveTimer.current = t;
     return () => clearTimeout(t);
-  }, [workflow, saveWorkflow]);
+  }, [workflow, saveWorkflow, readOnly]);
 
   const selected = useMemo(
     () => workflow?.nodes.find((n) => n.id === selectedId) ?? null,
@@ -288,7 +315,14 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     );
   }, []);
 
+  // Guarded here rather than at the call sites. This is the single node-
+  // deletion path -- the Delete/Backspace handler below and the Inspector
+  // both route through it -- so the gate belongs on the mutation itself,
+  // not on each caller. A viewer can reach it because selecting a node is
+  // allowed (that is how the read-only inspector opens); only the removal
+  // is withheld.
   const onDelete = useCallback(() => {
+    if (!can("workflow.editGraph", readOnly)) return;
     if (!selectedId) return;
     setWorkflow((wf) =>
       wf
@@ -302,7 +336,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         : wf,
     );
     setSelectedId(null);
-  }, [selectedId]);
+  }, [selectedId, readOnly]);
 
   // Delete/Backspace removes the selected node -- ignored while typing in a field.
   useEffect(() => {
@@ -358,20 +392,34 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [workflow],
   );
 
-  const buildMode = !hasProviderNode || manualBuildMode;
+  // Null when a run can proceed. Naming the real obstacle matters most to a
+  // viewer, who cannot deploy and so cannot act on "deploy first" at all.
+  const runBlocked = useMemo(
+    () =>
+      runBlockedMessage({
+        deployed,
+        hasProviderNode,
+        canDeploy: can("workflow.deploy", readOnly),
+      }),
+    [deployed, hasProviderNode, readOnly],
+  );
+
+  const buildMode =
+    can("workflow.buildFromChat", readOnly) &&
+    (!hasProviderNode || manualBuildMode);
 
   // Returns the new run's id, or null when no run started. Callers that own a
   // chat turn need that signal: a failure here only raises a toast, and
   // without an answer the turn would sit on "working…" forever.
   //
-  // The deployed check lives here, not only in onRun: the chat panel calls
-  // startRun directly, so keeping the guard upstream silently dropped
-  // "Deploy first to run" for every message sent from the console.
+  // The guard lives here, not only in onRun: the chat panel calls startRun
+  // directly, so keeping it upstream silently dropped the explanation for
+  // every message sent from the console.
   const startRun = useCallback(
     async (input?: Record<string, unknown>): Promise<string | null> => {
       if (!workflow) return null;
-      if (!deployed) {
-        showToast("Deploy first to run");
+      if (runBlocked) {
+        showToast(runBlocked);
         return null;
       }
       try {
@@ -388,7 +436,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         return null;
       }
     },
-    [workflow, deployed, showToast],
+    [workflow, runBlocked, showToast],
   );
 
   const startBuild = useCallback(
@@ -416,7 +464,10 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "unknown error";
         showToast(`Build failed · ${message}`);
-        return { ok: false, reply: `Could not update the workflow: ${message}` };
+        return {
+          ok: false,
+          reply: `Could not update the workflow: ${message}`,
+        };
       }
     },
     [workflow, showToast, flushPendingSave],
@@ -424,8 +475,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   const onRun = useCallback(async () => {
     if (!workflow) return;
-    if (!deployed) {
-      showToast("Deploy first to run");
+    if (runBlocked) {
+      showToast(runBlocked);
       return;
     }
     if (running) {
@@ -444,7 +495,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       return;
     }
     await startRun();
-  }, [workflow, deployed, running, hasChatTrigger, startRun, showToast]);
+  }, [workflow, running, hasChatTrigger, startRun, showToast, runBlocked]);
 
   const onDragNodeStart = useCallback(
     (e: React.DragEvent, meta: Partial<WorkflowNode>) => {
@@ -540,6 +591,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   if (loading || !workflow) {
     return (
       <div
+        className="am-viewport"
         style={{
           height: "100dvh",
           display: "flex",
@@ -558,6 +610,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
   return (
     <div
+      className="am-viewport"
       style={{
         height: "100dvh",
         display: "flex",
@@ -579,27 +632,40 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
 
       <div
         ref={attachRow}
-        style={{
-          flex: 1,
-          display: "flex",
-          position: "relative",
-          overflow: "hidden",
-        }}
+        className="am-studio-row"
+        data-compact={compact ? "true" : "false"}
       >
-        <PalettePanel onDragNodeStart={onDragNodeStart} width={paletteW} />
-        <ResizeHandle
-          side="left"
-          value={paletteW}
-          min={PALETTE.min}
-          max={PALETTE.max}
-          ariaLabel="Resize palette panel"
-          onChange={resizePalette}
-          onCommit={persistWidths}
-          onReset={() => {
-            setPaletteW(PALETTE.default);
-            persistWidths();
-          }}
-        />
+        {/* The palette exists to drag new nodes onto the canvas, so in
+            read-only mode it has no job -- and dropping it gives the graph
+            back ~280px, which is what makes the studio fit a narrow window
+            at all (PALETTE.min + MIN_CANVAS + INSPECTOR.min was 780px). */}
+        {/* The palette lives in exactly one place at a time: its own column
+            when there is room, otherwise a pane in the bottom sheet (see
+            paletteNode below). Rendering it here while the row is stacked
+            gave it a full-height column of its own and squeezed the canvas
+            to zero. */}
+        {!compact && can("workflow.editGraph", readOnly) && (
+          <>
+            <PalettePanel
+              onDragNodeStart={onDragNodeStart}
+              onAddNode={(meta) => addAtCentre.current?.(meta)}
+              width={paletteW}
+            />
+            <ResizeHandle
+              side="left"
+              value={paletteW}
+              min={PALETTE.min}
+              max={PALETTE.max}
+              ariaLabel="Resize palette panel"
+              onChange={resizePalette}
+              onCommit={persistWidths}
+              onReset={() => {
+                setPaletteW(PALETTE.default);
+                persistWidths();
+              }}
+            />
+          </>
+        )}
 
         <ChatConsoleHost
           runId={runId}
@@ -630,6 +696,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 }}
               >
                 <CanvasGraph
+                  addAtCentreRef={addAtCentre}
                   workflow={workflow}
                   setWorkflow={setWorkflowNN}
                   selectedId={selectedId}
@@ -649,42 +716,105 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                 />
               </div>
 
-              <ResizeHandle
-                side="right"
-                value={inspectorW}
-                min={INSPECTOR.min}
-                max={INSPECTOR.max}
-                ariaLabel="Resize chat panel"
-                onChange={resizeInspector}
-                onCommit={persistWidths}
-                onReset={() => {
-                  setInspectorW(INSPECTOR.default);
-                  persistWidths();
-                }}
-              />
-              <ChatRail
-                session={chat.session}
-                onSend={chat.handleSend}
-                busy={chat.busy}
-                onShowLogs={() => setLogOpen(true)}
-                width={inspectorW}
-                buildMode={buildMode}
-                canToggleBuildMode={hasProviderNode}
-                onToggleBuildMode={() => setManualBuildMode((v) => !v)}
-                inspectorNode={
-                  <Inspector
-                    selected={selected}
-                    workflowId={workflow.id}
-                    onUpdate={onUpdate}
-                    onDelete={onDelete}
-                    onClose={() => setSelectedId(null)}
-                    width="100%"
-                    embedded
+              {compact ? (
+                <div
+                  className="am-studio-sheet am-safe-bottom"
+                  data-open={sheetOpen ? "true" : "false"}
+                >
+                  <button
+                    className="am-sheet-grip"
+                    onClick={() => setSheetOpen((o) => !o)}
+                    aria-expanded={sheetOpen}
+                    aria-label={
+                      sheetOpen ? "Collapse the panel" : "Expand the panel"
+                    }
+                  >
+                    {sheetOpen ? "" : selected ? "node selected" : "chat"}
+                  </button>
+                  {sheetOpen && (
+                    <ChatRail
+                      session={chat.session}
+                      onSend={chat.handleSend}
+                      busy={chat.busy}
+                      onShowLogs={() => setLogOpen(true)}
+                      width="100%"
+                      buildMode={buildMode}
+                      canToggleBuildMode={
+                        can("workflow.buildFromChat", readOnly) &&
+                        hasProviderNode
+                      }
+                      onToggleBuildMode={() => setManualBuildMode((v) => !v)}
+                      inspectorNode={
+                        <Inspector
+                          selected={selected}
+                          workflowId={workflow.id}
+                          onUpdate={onUpdate}
+                          onDelete={onDelete}
+                          onClose={() => setSelectedId(null)}
+                          width="100%"
+                          embedded
+                        />
+                      }
+                      hasSelection={selected !== null}
+                      leaseId={chat.leaseId}
+                      forceTab={selected ? "inspector" : null}
+                      // Only when this client may author: a stacked layout
+                      // on a computer. A handheld gets no palette at all,
+                      // and a desktop gives it its own column instead.
+                      paletteNode={
+                        can("workflow.editGraph", readOnly) ? (
+                          <PalettePanel
+                            onDragNodeStart={onDragNodeStart}
+                            onAddNode={(meta) => addAtCentre.current?.(meta)}
+                            width="100%"
+                          />
+                        ) : undefined
+                      }
+                    />
+                  )}
+                </div>
+              ) : (
+                <>
+                  <ResizeHandle
+                    side="right"
+                    value={inspectorW}
+                    min={INSPECTOR.min}
+                    max={INSPECTOR.max}
+                    ariaLabel="Resize chat panel"
+                    onChange={resizeInspector}
+                    onCommit={persistWidths}
+                    onReset={() => {
+                      setInspectorW(INSPECTOR.default);
+                      persistWidths();
+                    }}
                   />
-                }
-                hasSelection={selected !== null}
-                leaseId={chat.leaseId}
-              />
+                  <ChatRail
+                    session={chat.session}
+                    onSend={chat.handleSend}
+                    busy={chat.busy}
+                    onShowLogs={() => setLogOpen(true)}
+                    width={inspectorW}
+                    buildMode={buildMode}
+                    canToggleBuildMode={
+                      can("workflow.buildFromChat", readOnly) && hasProviderNode
+                    }
+                    onToggleBuildMode={() => setManualBuildMode((v) => !v)}
+                    inspectorNode={
+                      <Inspector
+                        selected={selected}
+                        workflowId={workflow.id}
+                        onUpdate={onUpdate}
+                        onDelete={onDelete}
+                        onClose={() => setSelectedId(null)}
+                        width="100%"
+                        embedded
+                      />
+                    }
+                    hasSelection={selected !== null}
+                    leaseId={chat.leaseId}
+                  />
+                </>
+              )}
             </>
           )}
         </ChatConsoleHost>
@@ -735,6 +865,28 @@ function ChatConsoleHost({
 }
 
 // ── Topbar ─────────────────────────────────────────────────────────────────
+// Shared by the editable field and its read-only twin so the workflow name
+// occupies exactly the same space in both modes.
+const nameFieldStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  outline: "none",
+  color: "var(--fg)",
+  fontSize: 13,
+  fontWeight: 500,
+  fontFamily: "var(--font-sans)",
+  flex: "0 1 200px",
+  // A floor, not 0. With minWidth:0 the field collapsed to 12px on a narrow
+  // topbar -- the workflow name was simply gone. 120px keeps enough to read
+  // and to recognise, and the text ellipsizes from there.
+  minWidth: 120,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  padding: "4px 6px",
+  borderRadius: 4,
+};
+
 function CanvasTopbar({
   workflow,
   setWorkflow,
@@ -754,6 +906,7 @@ function CanvasTopbar({
   saveLabel: string;
   onBack: () => void;
 }) {
+  const readOnly = useReadOnly();
   // Wallet balance is global (not per-node), so it lives in the topbar's
   // financial cluster. The value comes from the backend (the same row the
   // engine debits), so it is only meaningful once that fetch has landed —
@@ -799,24 +952,34 @@ function CanvasTopbar({
         ← Workflows
       </button>
       <span style={{ color: "var(--fg-dim)" }}>/</span>
-      <input
-        value={workflow.name}
-        onChange={(e) => setWorkflow((wf) => ({ ...wf, name: e.target.value }))}
-        style={{
-          background: "transparent",
-          border: "none",
-          outline: "none",
-          color: "var(--fg)",
-          fontSize: 13,
-          fontWeight: 500,
-          fontFamily: "var(--font-sans)",
-          flex: "0 1 200px",
-          minWidth: 0,
-          padding: "4px 6px",
-          borderRadius: 4,
-        }}
-      />
+      {can("workflow.editGraph", readOnly) ? (
+        <input
+          value={workflow.name}
+          onChange={(e) =>
+            setWorkflow((wf) => ({ ...wf, name: e.target.value }))
+          }
+          style={nameFieldStyle}
+        />
+      ) : (
+        <span
+          style={{
+            ...nameFieldStyle,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {workflow.name}
+        </span>
+      )}
       {saveLabel && <Pill mono>{saveLabel}</Pill>}
+      {!can("workflow.editGraph", readOnly) && (
+        <span title="Editing happens in the AgentMesh desktop app.">
+          <Pill mono dot tone="warm">
+            viewing only
+          </Pill>
+        </span>
+      )}
 
       <div style={{ flex: 1 }} />
 
@@ -837,36 +1000,48 @@ function CanvasTopbar({
           value={balanceKnown ? `$${balanceUSD.toFixed(2)}` : "-"}
           color={lowBalance ? "var(--danger)" : "var(--accent)"}
         />
-        <Hairline vertical length={18} />
-        <Stat
-          label="agents"
-          value={workflow.nodes.filter((n) => n.type === "agent").length}
-        />
-        <Stat
-          label="tools"
-          value={
-            workflow.nodes.filter(
-              (n) => n.type === "tool" || n.type === "tool402",
-            ).length
-          }
-        />
-        <Stat
-          label="x402"
-          value={workflow.nodes.filter((n) => n.type === "tool402").length}
-          color="#E879F9"
-        />
+        <span className="am-studio-stats-extra">
+          <Hairline vertical length={18} />
+        </span>
+        <span className="am-studio-stats-extra">
+          <Stat
+            label="agents"
+            value={workflow.nodes.filter((n) => n.type === "agent").length}
+          />
+        </span>
+        <span className="am-studio-stats-extra">
+          <Stat
+            label="tools"
+            value={
+              workflow.nodes.filter(
+                (n) => n.type === "tool" || n.type === "tool402",
+              ).length
+            }
+          />
+        </span>
+        <span className="am-studio-stats-extra">
+          <Stat
+            label="x402"
+            value={workflow.nodes.filter((n) => n.type === "tool402").length}
+            color="#E879F9"
+          />
+        </span>
       </div>
 
-      <button style={ghostBtnSm}>Share</button>
-      <button onClick={onDeploy} style={btnStyle}>
-        {deployed ? "Re-deploy" : "Deploy"}
-      </button>
+      {can("workflow.deploy", readOnly) && (
+        <>
+          <button style={ghostBtnSm}>Share</button>
+          <button onClick={onDeploy} style={btnStyle}>
+            {deployed ? "Re-deploy" : "Deploy"}
+          </button>
+        </>
+      )}
       <button
         onClick={onRun}
         disabled={!deployed}
         title={!deployed ? "Deploy first" : "Run workflow"}
         style={{
-          ...primaryBtnStyle,
+          ...primaryBtnSm,
           minWidth: 86,
           justifyContent: "center",
           opacity: !deployed ? 0.5 : 1,
@@ -945,24 +1120,6 @@ function Stat({
     </div>
   );
 }
-
-const ghostBtnSm: React.CSSProperties = {
-  height: 28,
-  padding: "0 10px",
-  fontSize: 12,
-  fontWeight: 500,
-  background: "transparent",
-  border: "1px solid var(--border-strong)",
-  borderRadius: "var(--r-2)",
-  color: "var(--fg-muted)",
-  cursor: "pointer",
-  fontFamily: "var(--font-sans)",
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-  whiteSpace: "nowrap",
-  flexShrink: 0,
-};
 const btnStyle: React.CSSProperties = {
   height: 28,
   padding: "0 12px",
@@ -972,23 +1129,6 @@ const btnStyle: React.CSSProperties = {
   border: "1px solid var(--border-strong)",
   borderRadius: "var(--r-2)",
   color: "var(--fg)",
-  cursor: "pointer",
-  fontFamily: "var(--font-sans)",
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 4,
-  whiteSpace: "nowrap",
-  flexShrink: 0,
-};
-const primaryBtnStyle: React.CSSProperties = {
-  height: 28,
-  padding: "0 12px",
-  fontSize: 12,
-  fontWeight: 600,
-  background: "var(--accent)",
-  border: "1px solid var(--accent)",
-  borderRadius: "var(--r-2)",
-  color: "var(--accent-fg)",
   cursor: "pointer",
   fontFamily: "var(--font-sans)",
   display: "inline-flex",

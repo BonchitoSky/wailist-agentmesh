@@ -1,0 +1,412 @@
+/* ── Responsive layer ─────────────────────────────────────────────────────
+   Almost every surface in this app is styled with inline React styles, which
+   media queries cannot reach. Anything whose only reason to change is the
+   viewport width lives here as a class instead, so the breakpoints sit in one
+   file rather than being re-derived per component in JavaScript.
+
+   The scale extends the one breakpoint the app already had (`.usage-split` at
+   1024px) rather than introducing a second, competing set:
+
+     <= 1024px   compact  — the studio collapses from three columns to one
+     <=  768px   mobile   — wide tables become cards, the top nav collapses
+     <=  480px   small    — tightest padding, single column everywhere
+
+   Imported from the top of globals.css, so these rules land BEFORE it: every
+   selector here is a new `.am-*` class with nothing to override. A rule that
+   genuinely needs to beat an existing globals.css declaration belongs in
+   globals.css next to the rule it overrides, not here.
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Full-viewport shells ───────────────────────────────────────────────── */
+/* `100vh` on a mobile browser measures the LARGE viewport — the height the
+   page would have with the toolbars retracted — so a `height: 100vh` app shell
+   is taller than what is actually on screen and its bottom row hides behind
+   the address bar. `dvh` tracks the visible area as that chrome comes and
+   goes. The `vh` declaration stays first as the fallback for engines without
+   `dvh`; an inline style cannot express a two-value fallback, which is the
+   whole reason these shells need a class instead of a style prop. */
+.am-viewport {
+  height: 100vh;
+  height: 100dvh;
+}
+.am-viewport-min {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Bottom-docked bars sit under the home indicator on notched phones without
+   this. `0px` (not `0`) is deliberate — env() fallbacks must carry a unit. */
+.am-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ── Wide tables ────────────────────────────────────────────────────────── */
+/* The endpoint and settlement tables are ~900px of fixed grid columns and the
+   workflow table ~834px; none of them fit a phone. Rather than reflowing the
+   columns (which would misalign the header from its rows), the table keeps its
+   desktop grid and scrolls horizontally inside its own card, so the page body
+   never scrolls sideways. `overscroll-behavior-x: contain` stops a swipe that
+   reaches the end of the table from triggering the browser's back gesture. */
+.am-table-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Applied to the grid inside .am-table-scroll so the columns keep their
+   intended widths instead of being squeezed by the scroll container. */
+.am-table-track {
+  min-width: max-content;
+}
+
+/* ── Landing page ───────────────────────────────────────────────────────── */
+/* The marketing page was laid out for a desktop window: fixed 32px gutters,
+   a 2-up pillar grid, a 4-up step grid, and a hero whose clamp() floor was
+   taller than a phone is wide. Each of these replaces an inline style, so the
+   corresponding style prop has to be removed from the JSX — an inline
+   declaration always beats a stylesheet. */
+
+.landing-gutter {
+  padding-left: clamp(16px, 4vw, 32px);
+  padding-right: clamp(16px, 4vw, 32px);
+}
+
+.landing-pillars {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+@media (max-width: 768px) {
+  .landing-pillars {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.landing-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+/* Two-up before one-up: these are four short, numbered cards, and a 2x2 block
+   reads as one sequence where a 4x1 stack reads as four separate things. */
+@media (max-width: 900px) {
+  .landing-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .landing-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The "›" chevrons between steps point along a row. Once the grid wraps they
+   point at the card below, so they come off. */
+@media (max-width: 900px) {
+  .landing-step-chevron {
+    display: none;
+  }
+}
+
+/* The anchor nav is centred by absolute positioning, so it sits on top of the
+   logo and the CTA rather than pushing them apart. There is no room for all
+   three on a phone; the page is a single scroll narrative and both CTAs
+   survive, so the anchors are what give way. */
+.landing-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+@media (max-width: 768px) {
+  .landing-nav {
+    display: none;
+  }
+}
+
+/* Label beside a marquee needs ~140px, leaving ~150px of track on a 375px
+   screen. Stacking gives the track the full width instead. */
+.landing-marquee-row {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 48px;
+}
+@media (max-width: 640px) {
+  .landing-marquee-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+}
+
+/* ── Studio, compact ────────────────────────────────────────────────────── */
+/* The studio is a three-column desktop IDE: palette | graph | rail. Read-only
+   already drops the palette, but the rail's 320px still leaves ~55px of graph
+   on a 375px screen. Below the compact breakpoint the two remaining columns
+   stack instead, so the graph gets the whole width and the rail becomes a
+   sheet the reader pulls up when they want it.
+   Widths/structure are switched in React (useIsCompact) because this changes
+   which elements mount, not just how they look — these rules dress the result. */
+.am-studio-row {
+  flex: 1;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+.am-studio-row[data-compact="true"] {
+  flex-direction: column;
+}
+
+/* Sheet sits under the graph in flow, not over it: overlaying would hide the
+   node whose config the reader just opened the sheet to read. */
+.am-studio-sheet {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-elev-1);
+  border-top: 1px solid var(--border);
+}
+.am-studio-sheet[data-open="true"] {
+  /* Just over half the screen: enough to read a node's config without losing
+     sight of the graph it belongs to. */
+  height: 55dvh;
+}
+
+/* The grip is 14px of visible bar in a 44px target — the minimum a thumb can
+   reliably hit, per the same rule .pw-reveal follows. */
+.am-sheet-grip {
+  flex-shrink: 0;
+  height: 44px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.12s var(--ease);
+}
+.am-sheet-grip:hover {
+  color: var(--fg-muted);
+}
+.am-sheet-grip:active {
+  transform: scale(0.97);
+}
+.am-sheet-grip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--r-2);
+}
+.am-sheet-grip::before {
+  content: "";
+  width: 34px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-sheet-grip {
+    transition: none;
+  }
+  .am-sheet-grip:active {
+    transform: none;
+  }
+}
+
+/* ── App top bar ────────────────────────────────────────────────────────── */
+.am-nav-link {
+  height: 28px;
+  padding: 0 12px;
+}
+
+/* Owned here, not inline, so the breakpoint below can actually override it. */
+.am-topbar-context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* One 56px row of brand + workspace + network + three nav links + avatar needs
+   well over 375px, so on a phone the bar wraps: identity stays on the first
+   row, navigation drops to a full-width second row where the links are wide,
+   evenly spaced, and comfortably thumb-sized. Nothing is hidden behind a menu
+   — the whole point of this pass is that the UI stops cutting things off. */
+.am-topbar {
+  height: 56px;
+  flex-shrink: 0;
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+@media (max-width: 768px) {
+  .am-topbar {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 0 14px;
+    gap: 10px;
+  }
+  /* The workspace switcher and the network pill are context, not navigation.
+     They are the first things to go when the row runs out of width.
+     `display` is set on the class rather than inline in Topbar.tsx for a
+     reason worth stating: an inline `display: flex` outranks any stylesheet
+     rule, so this `none` silently never applied and the cluster stayed on
+     screen at every width. */
+  .am-topbar-context {
+    display: none;
+  }
+  .am-topbar-spacer {
+    display: none;
+  }
+  .am-topbar-brand {
+    min-width: 0;
+    /* `flex: 1` would set a 0% basis, and a 0-basis item plus a 100% one
+       sums to exactly one line -- so the row would never wrap and the brand
+       would collapse to zero width instead. An auto basis makes the brand
+       count its own content, which is what pushes the second row down. */
+    flex: 1 1 auto;
+    /* Owns the 56px the bar no longer fixes. */
+    height: 56px;
+  }
+  /* The nav sits inside this cluster, so the whole cluster is what drops to
+     a second row -- navigation on the left, account on the right. Moving
+     just the nav would mean reparenting it, and `width: 100%` on a nested
+     child cannot escape its own flex container. */
+  .am-topbar-actions {
+    order: 10;
+    /* flex-basis, not width: a flex item still shrinks out of a 100% width
+       to stay on the line, so the row never actually wraps. */
+    flex: 0 0 100%;
+    margin: 0 -14px;
+    padding: 0 10px;
+    border-top: 1px solid var(--border);
+    justify-content: space-between;
+  }
+  .am-topbar-nav {
+    flex: 1;
+    justify-content: space-around;
+  }
+  /* 28px is a comfortable pointer target and a poor thumb one. */
+  .am-nav-link {
+    flex: 1;
+    height: 44px;
+    justify-content: center;
+  }
+  .am-topbar-divider {
+    display: none;
+  }
+}
+
+/* ── Wide tables → labelled cards ───────────────────────────────────────── */
+/* The workflow table is ~834px of grid before it can lay out a single row, so
+   on a phone it either overflows or crushes. Below the mobile breakpoint each
+   row becomes a small card instead: the name spans the full width, and the
+   remaining figures sit in a two-up grid, each captioned by the column header
+   it lost when the header row was dropped (data-label on the cell).
+   Cards, not a sideways scroll, because these rows are separate entities you
+   pick from -- unlike the usage tables below, where the columns are numbers
+   you compare across, and keeping them aligned matters more. */
+.am-wf-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr)
+    minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px;
+  gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .am-wf-head {
+    display: none;
+  }
+  .am-wf-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+    align-items: start;
+  }
+  /* Name, and the actions, each get their own full-width line. */
+  .am-wf-grid > :first-child,
+  .am-wf-grid > :last-child {
+    grid-column: 1 / -1;
+  }
+  .am-wf-grid > [data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-dim);
+  }
+}
+
+/* Usage tables keep their columns and scroll sideways inside their own card,
+   so the page body never does. */
+@media (max-width: 1024px) {
+  .am-usage-table {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ── Assorted fixed grids ───────────────────────────────────────────────── */
+.am-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 768px) {
+  .am-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .am-grid-4 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The sign-in split: form beside artwork on a desktop, form alone on a phone
+   (the artwork half is decorative, and it is the half that goes). */
+@media (max-width: 900px) {
+  .am-auth-split {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .am-auth-aside {
+    display: none;
+  }
+}
+
+/* The rail's segmented switch is sized for a pointer (26px) because in its own
+   column that is all it ever meets. Inside the bottom sheet it is tapped, so it
+   takes the full 44px target -- the same floor .pw-reveal and .am-sheet-grip
+   hold to. Scoped to the sheet so the desktop rail keeps its density. */
+.am-studio-sheet .rail-switch__seg {
+  min-height: 44px;
+}
+
+/* ── Studio topbar ──────────────────────────────────────────────────────── */
+/* The bar carries brand, breadcrumb, workflow name, four counters and three
+   actions. Below ~900px that no longer fits, and what gave way was the
+   workflow NAME -- it was squeezed to 12px, which is worse than useless.
+   The three ancillary counters go instead: they are tallies of what the canvas
+   already shows, and both they and the credit balance appear in full on
+   /usage. The credit balance stays, because it is the one number that decides
+   whether a run can happen. */
+@media (max-width: 900px) {
+  .am-studio-stats-extra {
+    display: none;
+  }
+}
