@@ -15,16 +15,62 @@ import (
 
 const authCookieName = "agentmesh_token"
 
-func corsMiddleware(next http.Handler) http.Handler {
-	origin := strings.TrimRight(os.Getenv("CORS_ORIGIN"), "/")
-	// When a specific origin is set, we can send credentials (cookies).
-	// Wildcard origins are incompatible with credentials; fall back to no-creds mode.
-	allowCreds := origin != "" && origin != "*"
-	if origin == "" {
-		origin = "*"
+// allowedOrigins parses CORS_ORIGIN, which accepts a comma-separated list.
+//
+// A list rather than a single value because this API is now called by two
+// different first-party clients: the web app on its own domain, and the native
+// Android shell, whose WebView origin is https://localhost. One value cannot
+// serve both, and the obvious escape -- falling back to "*" -- is not
+// available: a wildcard is illegal on a credentialed request, so it would sign
+// the web app out.
+func allowedOrigins() []string {
+	raw := strings.Split(os.Getenv("CORS_ORIGIN"), ",")
+	out := make([]string, 0, len(raw))
+	for _, o := range raw {
+		if o = strings.TrimRight(strings.TrimSpace(o), "/"); o != "" {
+			out = append(out, o)
+		}
 	}
+	return out
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	origins := allowedOrigins()
+	// With no origins configured we keep the old permissive behaviour: a
+	// wildcard, and therefore no credentials. Unchanged for any deployment
+	// that never set the variable.
+	wildcard := len(origins) == 0
+
+	allowed := make(map[string]bool, len(origins))
+	for _, o := range origins {
+		allowed[o] = true
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		// Echo the REQUEST's origin rather than a fixed string. With more than
+		// one permitted origin there is no single correct value to hardcode,
+		// and a credentialed response may not answer "*" -- the browser
+		// rejects it outright.
+		reqOrigin := strings.TrimRight(r.Header.Get("Origin"), "/")
+		allowCreds := false
+		switch {
+		case wildcard:
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		case allowed[reqOrigin]:
+			w.Header().Set("Access-Control-Allow-Origin", reqOrigin)
+			allowCreds = true
+		default:
+			// Unrecognised origin: send the first configured one, which the
+			// browser will compare against the caller and reject. Answering
+			// nothing at all is equivalent, but this keeps the header shape
+			// consistent for anything inspecting responses.
+			w.Header().Set("Access-Control-Allow-Origin", origins[0])
+		}
+		// The response now varies by request origin, so any shared cache must
+		// key on it. Without this a proxy can serve the web app's CORS headers
+		// to the native shell, and the failure looks like an intermittent
+		// CORS error with no pattern to it.
+		w.Header().Add("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		// x402 clients send payment proofs via Payment-Signature (the v2
 		// spec's canonical header, base64 JSON) or X-Payment (legacy, raw
