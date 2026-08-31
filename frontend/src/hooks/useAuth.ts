@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { auth, AuthUser } from "@/lib/api";
+import { IS_NATIVE, setAuthToken } from "@/lib/nativeAuth";
 
 const UI_COOKIE = "agentmesh_ui";
 const TTL = 60 * 60 * 24 * 7; // 7 days -- matches backend JWT TTL
@@ -35,7 +36,15 @@ export function useAuth() {
   }, []);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    await auth.signIn(email, password);
+    const token = await auth.signIn(email, password);
+    // Hand the session to the native shell so it survives the app being
+    // closed. Inert on the web, where the token is null and the HttpOnly
+    // cookie is the session. Dynamic and IS_NATIVE-guarded for the same
+    // reason as NativeBoot: a browser build must not pull Capacitor in.
+    if (token && IS_NATIVE) {
+      setAuthToken(token);
+      void import("@/native").then(({ shell }) => shell.onSignedIn(token));
+    }
     setUICookie();
     setSignedIn(true);
   }, []);

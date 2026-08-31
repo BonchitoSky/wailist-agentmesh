@@ -77,7 +77,11 @@ export interface AuthUser {
 }
 
 export const auth = {
-  signIn: async (email: string, password: string): Promise<void> => {
+  // Returns the bearer token when the caller is a native client, null
+  // otherwise. The web app authenticates with the HttpOnly cookie the same
+  // response sets and simply ignores this -- see nativeAuth.ts for why a
+  // browser is deliberately not handed a readable token.
+  signIn: async (email: string, password: string): Promise<string | null> => {
     if (BASE) {
       const res = await apiFetch(`${BASE}/auth/signin`, {
         method: "POST",
@@ -87,11 +91,12 @@ export const auth = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "sign in failed");
-      return;
+      return data.token ?? null;
     }
     void email;
     void password;
     await delay(400);
+    return null;
   },
 
   signUp: async (
