@@ -346,6 +346,45 @@ export const workflows = {
     }
     await delay(100);
   },
+
+  // PUT /workflows/:id/schedule
+  setSchedule: async (
+    id: string,
+    cron: string,
+  ): Promise<{ cron: string; nextRunAt: string }> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/workflows/${id}/schedule`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cron }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "could not set schedule");
+      return data;
+    }
+    await delay(200);
+    return {
+      cron,
+      nextRunAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    };
+  },
+
+  // DELETE /workflows/:id/schedule
+  clearSchedule: async (id: string): Promise<void> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/workflows/${id}/schedule`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "could not remove schedule");
+      }
+      return;
+    }
+    await delay(150);
+  },
 };
 
 // -- Credits ----------------------------------------------------------------
@@ -407,6 +446,15 @@ export interface RunLogRecord {
   ts: string;
 }
 
+export interface DeadLetterRun {
+  id: string;
+  runId: string;
+  nodeId: string;
+  error: string;
+  attemptCount: number;
+  createdAt: string;
+}
+
 export const runs = {
   // The DB-backed source of truth for a run's logs — used as a reconciliation
   // fallback once the live SSE stream ends, since the stream's broker only
@@ -419,7 +467,11 @@ export const runs = {
   // happened to deliver live.
   get: async (
     runId: string,
-  ): Promise<{ run: { status: string }; logs: RunLogRecord[] }> => {
+  ): Promise<{
+    run: { status: string };
+    logs: RunLogRecord[];
+    deadLetters: DeadLetterRun[];
+  }> => {
     if (BASE) {
       const res = await apiFetch(`${BASE}/runs/${runId}`, {
         credentials: "include",
@@ -442,6 +494,7 @@ export const runs = {
       "7F2AC9D1E4B8A6350C1D9E2F4A7B8C3D5E6F1A2B3C4D5E6F7A8B9C0D1E2F3A4B";
     return {
       run: { status: "success" },
+      deadLetters: [],
       logs: [
         {
           id: "rl-1",
@@ -485,6 +538,20 @@ export const runs = {
         },
       ],
     };
+  },
+
+  resume: async (runId: string): Promise<{ runId: string }> => {
+    if (BASE) {
+      const res = await fetch(`${BASE}/runs/${runId}/resume`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "resume failed");
+      return data;
+    }
+    await delay(200);
+    return { runId };
   },
 };
 
