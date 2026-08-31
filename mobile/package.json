@@ -4,7 +4,7 @@
   "private": true,
   "description": "AgentMesh native Android shell: workflow viewer/controller and background geofence trigger client.",
   "scripts": {
-    "build:web": "cd ../frontend && cross-env MOBILE_BUILD=1 NEXT_PUBLIC_NATIVE_CLIENT=1 next build",
+    "build:web": "cross-env MOBILE_BUILD=1 NEXT_PUBLIC_NATIVE_CLIENT=1 npm --prefix ../frontend run build",
     "copy:web": "node scripts/copy-web.mjs",
     "sync": "npm run build:web && npm run copy:web && cap sync android",
     "open:android": "cap open android",
