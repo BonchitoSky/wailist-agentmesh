@@ -13,7 +13,6 @@ dependencies {
     implementation project(':capacitor-network')
     implementation project(':capacitor-preferences')
     implementation project(':capacitor-push-notifications')
-    implementation project(':transistorsoft-capacitor-background-geolocation')
 
 }
 

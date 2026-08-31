@@ -33,9 +33,25 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+
+        <!-- Receives geofence transitions from the OS. Not exported: only
+             Play Services delivers to it, and an exported receiver would let
+             any app on the device forge a crossing. -->
+        <receiver
+            android:name=".GeofenceReceiver"
+            android:exported="false" />
     </application>
 
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Geofencing. BACKGROUND_LOCATION is a separate, later grant on Android
+         10+, and without it a fence only holds while the app is open, which
+         is not a geofence anybody wants. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- So registered fences survive a reboot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 </manifest>

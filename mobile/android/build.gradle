@@ -21,14 +21,6 @@ allprojects {
     repositories {
         google()
         mavenCentral()
-        // The background-geolocation plugin ships its native AARs as a local
-        // maven repo inside node_modules rather than publishing them to a
-        // public one, so Gradle has to be pointed at it explicitly. Without
-        // this, com.transistorsoft:tslocationmanager resolves nowhere and the
-        // build fails at dependency resolution.
-        maven {
-            url "$rootDir/../node_modules/@transistorsoft/capacitor-background-geolocation/android/libs"
-        }
     }
 }
 

@@ -9,7 +9,7 @@
 //
 // Google Play reviews background-location use specifically, and asks to see
 // the disclosure. The copy below is written to be shown, not to be a comment.
-import BackgroundGeolocation from "@transistorsoft/capacitor-background-geolocation";
+import { Geofence } from "./nativeGeofence";
 
 export type PermissionState = "granted" | "denied" | "denied-permanently";
 
@@ -36,19 +36,13 @@ export const DISCLOSURE = {
 // shown and the user has chosen to continue -- asking first and explaining
 // afterwards is the pattern that gets refused.
 export async function requestBackgroundLocation(): Promise<PermissionState> {
-  const status = await BackgroundGeolocation.requestPermission();
-
-  // The plugin reports Android's three-way answer. "Always" is the only one
-  // that supports a geofence while the app is closed; "When in use" is not
-  // enough, and treating it as enough would produce a trigger that silently
-  // stops firing the moment the phone is pocketed.
-  if (status === BackgroundGeolocation.AUTHORIZATION_STATUS_ALWAYS) {
-    return "granted";
-  }
-  if (status === BackgroundGeolocation.AUTHORIZATION_STATUS_DENIED) {
-    return "denied-permanently";
-  }
-  return "denied";
+  const { granted, reason } = await Geofence.requestPermission();
+  if (granted) return "granted";
+  // Refused at the foreground step means the user dismissed the first dialog
+  // outright; refused at background means they chose "While using the app",
+  // which is not enough for a fence that has to hold with the phone pocketed.
+  // Both are refusals, but only the second is worth a second conversation.
+  return reason === "background" ? "denied" : "denied-permanently";
 }
 
 // What the app says once permission is refused.
@@ -65,6 +59,8 @@ export const DENIED_COPY = {
   action: "Open Settings",
 } as const;
 
+// Sending someone to Settings is the only route back after a refusal --
+// Android will not show the permission dialog again once it has been declined.
 export async function openSettings(): Promise<void> {
-  await BackgroundGeolocation.showSettings("APPLICATION_DETAILS");
+  await Geofence.openSettings();
 }

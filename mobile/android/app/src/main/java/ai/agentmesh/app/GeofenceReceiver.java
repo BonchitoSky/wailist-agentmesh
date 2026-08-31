@@ -1,0 +1,119 @@
+package ai.agentmesh.app;
+
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.location.Location;
+import android.util.Log;
+
+import com.google.android.gms.location.Geofence;
+import com.google.android.gms.location.GeofencingEvent;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
+import java.util.TimeZone;
+
+/**
+ * Where a geofence crossing lands when the app is not running.
+ *
+ * This is the part of the free route that a commercial SDK is really selling:
+ * the OS delivers this broadcast whether or not any of our code is alive, and
+ * we get a few seconds of execution to do something durable with it. There is
+ * no WebView here, so nothing in TypeScript can run.
+ *
+ * The choice made here is to PERSIST rather than transmit. The crossing is
+ * appended to exactly the queue the TypeScript side already drains
+ * (src/queue.ts), in exactly the storage @capacitor/preferences reads, so the
+ * app flushes it on next launch or next network change without any of that
+ * code knowing it came from native.
+ *
+ * Being honest about the limit: that means a crossing is DELIVERED late -- on
+ * next app open -- rather than immediately. Immediate delivery needs an
+ * HTTP POST and a WorkManager retry chain written natively, right here.
+ * That is the real remaining cost of not paying for the SDK, and it is a
+ * contained amount of work rather than an unknown one. The server side
+ * already tolerates late and out-of-order fixes by design, so nothing
+ * downstream has to change when it is added.
+ */
+public class GeofenceReceiver extends BroadcastReceiver {
+
+    private static final String TAG = "AgentMeshGeofence";
+
+    // The store @capacitor/preferences uses on Android. Writing here rather
+    // than to a private file of our own is what lets the existing TypeScript
+    // queue pick these up unchanged.
+    private static final String PREFS = "CapacitorStorage";
+    private static final String QUEUE_KEY = "agentmesh.geofence.queue";
+
+    @Override
+    public void onReceive(Context context, Intent intent) {
+        GeofencingEvent event = GeofencingEvent.fromIntent(intent);
+        if (event == null || event.hasError()) {
+            Log.w(TAG, "geofence broadcast carried an error: "
+                    + (event == null ? "null event" : String.valueOf(event.getErrorCode())));
+            return;
+        }
+
+        int transition = event.getGeofenceTransition();
+        if (transition != Geofence.GEOFENCE_TRANSITION_ENTER
+                && transition != Geofence.GEOFENCE_TRANSITION_EXIT) {
+            return;
+        }
+
+        Location location = event.getTriggeringLocation();
+        List<Geofence> fences = event.getTriggeringGeofences();
+        if (location == null || fences == null) {
+            return;
+        }
+
+        // The fence id IS the workflow id -- that is how GeofencePlugin
+        // registers them, so no lookup table is needed to route a crossing
+        // back to the workflow it belongs to.
+        for (Geofence fence : fences) {
+            append(context, fence.getRequestId(), location);
+            Log.i(TAG, "queued " + (transition == Geofence.GEOFENCE_TRANSITION_ENTER ? "entry" : "exit")
+                    + " for workflow " + fence.getRequestId());
+        }
+    }
+
+    private void append(Context context, String workflowId, Location location) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        try {
+            String raw = prefs.getString(QUEUE_KEY, "[]");
+            JSONArray queue = new JSONArray(raw == null ? "[]" : raw);
+
+            JSONObject fix = new JSONObject();
+            fix.put("workflowId", workflowId);
+            fix.put("lat", location.getLatitude());
+            fix.put("lng", location.getLongitude());
+            if (location.hasAccuracy()) {
+                fix.put("accuracyM", location.getAccuracy());
+            }
+            // The OS's observation time, not now. The server orders fixes by
+            // this and ignores anything older than the last crossing it
+            // handled, which is what stops a late flush re-firing a run.
+            fix.put("recordedAt", iso8601(location.getTime()));
+            queue.put(fix);
+
+            // commit(), not apply(): this process may be torn down the moment
+            // onReceive returns, and an asynchronous write is not guaranteed
+            // to have reached disk by then. Losing the one event the whole
+            // feature exists for is not an acceptable trade for a few ms.
+            prefs.edit().putString(QUEUE_KEY, queue.toString()).commit();
+        } catch (Exception e) {
+            Log.e(TAG, "could not queue the crossing", e);
+        }
+    }
+
+    private String iso8601(long millis) {
+        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
+        fmt.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return fmt.format(new Date(millis));
+    }
+}

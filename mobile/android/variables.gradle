@@ -13,4 +13,8 @@ ext {
     androidxJunitVersion = '1.2.1'
     androidxEspressoCoreVersion = '3.6.1'
     cordovaAndroidVersion = '10.1.1'
+    // Android's own geofencing lives here. Free, OS-batched across
+    // every app on the device, and the reason a paid background
+    // tracking SDK is not required for enter/leave on a circle.
+    playServicesLocationVersion = '21.3.0'
 }
