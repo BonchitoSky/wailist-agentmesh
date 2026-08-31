@@ -44,6 +44,11 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   const router = useRouter();
   const compact = useIsCompact();
   const readOnly = useReadOnly();
+  // Whether the narrow-screen wall applies at all. It is about EDITING, not
+  // width: dragging nodes really does not work at 375px, so an editor on a
+  // narrow window is told so. A viewer has nothing to drag -- viewing is the
+  // entire reason the native shell exists -- and gets the touch canvas below.
+  const canEdit = can("workflow.editGraph", readOnly);
 
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [loading, setLoading] = useState(true);
@@ -158,9 +163,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // a different workflow remounts this component and every piece of state
   // returns to its initial value (loading=true, selectedId=null, …).
   useEffect(() => {
-    // Neither creating nor loading a workflow is worth doing on a screen that
-    // cannot render the editor anyway -- this re-runs once isNarrow flips.
-    if (isNarrow) return;
+    // Skip only when the wall below will actually show. A viewer renders a
+    // real canvas on a narrow screen, so it needs the workflow fetched.
+    if (isNarrow && canEdit) return;
 
     // Guards against a stale response overwriting fresher state: React 18
     // Strict Mode double-invokes this effect in dev (mount → cleanup →
@@ -212,7 +217,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [workflowId, router, isNarrow, readOnly]);
+  }, [workflowId, router, isNarrow, readOnly, canEdit]);
 
   // Auto-save: debounce 1.5s after any change, skip on initial load.
   // pendingSave holds the graph the debounce timer is still sitting on, and
@@ -569,13 +574,16 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [setWorkflow],
   ) as React.Dispatch<React.SetStateAction<Workflow>>;
 
-  // Below the breakpoint, stop here: no fetch, no graph, no chat/SSE host.
-  // See the isNarrow declaration above for why this can't just be an overlay.
-  if (isNarrow) {
+  // Below the breakpoint, an EDITOR stops here: no graph, no chat/SSE host.
+  // A viewer does not -- it falls through to the stacked studio and bottom
+  // sheet below, which is what makes a workflow readable on a phone at all.
+  if (isNarrow && canEdit) {
     return (
       <div style={{ height: "100dvh", background: "var(--bg)" }}>
         <div className="canvas-narrow">
-          <p className="canvas-narrow__title">The editor needs a wider screen.</p>
+          <p className="canvas-narrow__title">
+            The editor needs a wider screen.
+          </p>
           <p className="canvas-narrow__body">
             Building a workflow means dragging nodes across a canvas and
             resizing side panels. That does not work on a phone yet.
