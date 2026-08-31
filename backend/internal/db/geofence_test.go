@@ -203,3 +203,63 @@ func TestClearedGeofenceRejectsFixes(t *testing.T) {
 		t.Fatal("recording a fix against a cleared geofence should error, not succeed")
 	}
 }
+
+// The precise case CI caught, and the one an offline flush actually produces:
+// a client resending a fix it already sent, with the SAME timestamp. It must be
+// recognised as a replay.
+//
+// This failed before RecordGeofenceFix truncated to microseconds. Postgres
+// TIMESTAMPTZ stores microseconds and Go's time.Time carries nanoseconds, so a
+// timestamp did not survive its own round trip: the incoming value compared as
+// strictly newer than the stored copy of itself, and the replay guard let it
+// through. Clients resend identical timestamps -- they do not invent fresh
+// ones -- so this is the boundary that matters, not an edge case.
+func TestResendingTheSameTimestampIsAReplay(t *testing.T) {
+	store := testStore(t)
+	id, cleanup := geofencedWorkflow(t, "same-ts")
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+
+	// A timestamp with sub-microsecond digits, which is what time.Now() gives
+	// and therefore what a real client sends.
+	at := time.Now().Add(-time.Hour).Truncate(time.Nanosecond).Add(432 * time.Nanosecond)
+
+	if _, err := store.RecordGeofenceFix(ctx, id, false, at); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.RecordGeofenceFix(ctx, id, false, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Stale {
+		t.Fatalf("resending an identical timestamp must be reported stale, got %+v", got)
+	}
+	if got.Fired {
+		t.Fatalf("a replay must never fire a crossing, got %+v", got)
+	}
+}
+
+// Two fixes closer together than Postgres can represent are the same instant
+// as far as the stored state is concerned. Treating the second as newer would
+// reopen the same hole from the other side.
+func TestSubMicrosecondDifferenceIsStillAReplay(t *testing.T) {
+	store := testStore(t)
+	id, cleanup := geofencedWorkflow(t, "sub-us")
+	t.Cleanup(cleanup)
+	ctx := context.Background()
+
+	base := time.Now().Add(-time.Hour).Truncate(time.Microsecond)
+	if _, err := store.RecordGeofenceFix(ctx, id, false, base); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.RecordGeofenceFix(ctx, id, true, base.Add(500*time.Nanosecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Stale {
+		t.Fatalf("a sub-microsecond step is the same instant once stored; want stale, got %+v", got)
+	}
+	if got.Fired {
+		t.Fatalf("it must not fire a crossing either, got %+v", got)
+	}
+}

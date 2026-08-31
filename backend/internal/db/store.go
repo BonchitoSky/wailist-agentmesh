@@ -226,6 +226,16 @@ type GeofenceCrossing struct {
 func (s *Store) RecordGeofenceFix(
 	ctx context.Context, workflowID string, inside bool, fixAt time.Time,
 ) (GeofenceCrossing, error) {
+	// Postgres TIMESTAMPTZ stores microseconds; Go's time.Time carries
+	// nanoseconds. Without truncating here, a value does not survive its own
+	// round trip: what is written is compared on the next call against a
+	// version of itself that has lost sub-microsecond digits, so
+	// fixAt.After(prevAt) is TRUE for the very same instant and a resent fix
+	// looks new rather than replayed. That defeats the replay guard this
+	// column exists for, at exactly the boundary an offline flush hits --
+	// clients resend identical timestamps, they do not invent fresh ones.
+	fixAt = fixAt.UTC().Truncate(time.Microsecond)
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return GeofenceCrossing{}, err
