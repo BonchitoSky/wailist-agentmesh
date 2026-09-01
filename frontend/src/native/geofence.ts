@@ -10,11 +10,16 @@
 // queue, in the same storage, and this code drains it on next launch without
 // knowing or caring that native wrote it.
 import { Network } from "@capacitor/network";
+import type { PluginListenerHandle } from "@capacitor/core";
 import { Geofence } from "./nativeGeofence";
 import { pushFix, Unauthorized } from "./api";
 import { pending, remove, type Fix } from "./queue";
 
 let flushing = false;
+
+// Module-scoped so a repeated start() replaces its listener instead of
+// stacking another one, and stop() can remove it.
+let networkListener: PluginListenerHandle | null = null;
 
 // Sends whatever is queued, oldest first, stopping at the first failure.
 //
@@ -73,9 +78,18 @@ export async function start(opts: StartOptions): Promise<boolean> {
 
   // The other half of the offline queue: without this a backlog sits there
   // until the next crossing happens to occur.
-  await Network.addListener("networkStatusChange", (status) => {
-    if (status.connected) void flush();
-  });
+  //
+  // The handle is kept so the listener can be removed. Deliberately NOT
+  // Network.removeAllListeners(), which would also tear down listeners
+  // belonging to any other code using the same plugin -- fixing our own leak
+  // by reaching into everyone else's is not a fix.
+  await networkListener?.remove();
+  networkListener = await Network.addListener(
+    "networkStatusChange",
+    (status) => {
+      if (status.connected) void flush();
+    },
+  );
 
   // Anything the native receiver queued while the app was closed.
   await flush();
@@ -84,4 +98,8 @@ export async function start(opts: StartOptions): Promise<boolean> {
 
 export async function stop(workflowId: string): Promise<void> {
   await Geofence.removeGeofence({ id: workflowId });
+  // Nothing left to flush for, so stop listening. Leaving it attached would
+  // wake the app on every network change for a feature the user turned off.
+  await networkListener?.remove();
+  networkListener = null;
 }

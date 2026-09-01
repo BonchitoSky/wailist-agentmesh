@@ -46,7 +46,11 @@ async function apiFetch(
     ...extra,
   };
   return fetch(input, {
-    credentials: "include",
+    // The native client authenticates with Authorization: Bearer and has no
+    // cookie to send. Asking for credentials anyway would oblige the server to
+    // answer a non-wildcard Allow-Origin plus Allow-Credentials for no benefit
+    // -- an extra CORS constraint to get wrong, guarding nothing.
+    credentials: IS_NATIVE ? "omit" : "include",
     ...init,
     ...(Object.keys(headers).length ? { headers } : {}),
   });

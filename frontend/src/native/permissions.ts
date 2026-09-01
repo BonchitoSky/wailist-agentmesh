@@ -24,8 +24,14 @@ export const DISCLOSURE = {
     "choose. To do that, Android needs to let it check your location even " +
     "when the app is closed.\n\n" +
     "Your location is used only to work out whether you crossed that edge. " +
-    "We record that you entered or left -- not where you have been. There is " +
-    "no location history to look through, ours or yours.\n\n" +
+    "On our servers we keep just that -- you entered, or you left -- and " +
+    "never the coordinates themselves. There is no record of where you have " +
+    "been for us to look through.\n\n" +
+    "On this phone, a crossing waits in a queue until it can be sent, so one " +
+    "that happens with no signal is not lost. Those waiting readings do " +
+    "include your position. They never leave the device except to report " +
+    "that one crossing, and each is deleted as soon as it is sent -- or " +
+    "within a day if it never can be.\n\n" +
     "You can turn this off at any time, and everything else in the app keeps " +
     "working without it.",
   grant: "Choose location access",
