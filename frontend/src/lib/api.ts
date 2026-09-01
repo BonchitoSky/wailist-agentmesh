@@ -50,12 +50,18 @@ export async function apiFetch(
     ...extra,
   };
   return fetch(input, {
-    // The native client authenticates with Authorization: Bearer and has no
-    // cookie to send. Asking for credentials anyway would oblige the server to
-    // answer a non-wildcard Allow-Origin plus Allow-Credentials for no benefit
-    // -- an extra CORS constraint to get wrong, guarding nothing.
-    credentials: IS_NATIVE ? "omit" : "include",
     ...init,
+    // Deliberately AFTER `...init`, not before: every call site in this file
+    // and lib/tendril.ts still passes its own `credentials: "include"` (predating
+    // this native-aware default), which would otherwise silently win and
+    // override this decision for every native call. apiFetch's whole reason to
+    // exist is being the one place that knows how this client authenticates --
+    // a caller's own guess must never be able to outrank it. The native client
+    // authenticates with Authorization: Bearer and has no cookie to send;
+    // asking for credentials anyway would oblige the server to answer a
+    // non-wildcard Allow-Origin plus Allow-Credentials for no benefit, an extra
+    // CORS constraint to get wrong, guarding nothing.
+    credentials: IS_NATIVE ? "omit" : "include",
     ...(Object.keys(headers).length ? { headers } : {}),
   });
 }

@@ -357,6 +357,12 @@ export function CanvasGraph({
     // nothing rather than panning the canvas out from under the finger.
     if (editable && onPort) return;
 
+    // Same as onBgMouseDown's left-button pan: a tap on empty background
+    // deselects. Without this, the natural "tap outside to dismiss the
+    // inspector" gesture that panning-from-anywhere otherwise supports left
+    // the previously-selected node stuck selected and the inspector open.
+    setSelectedId(null);
+
     touchRef.current = {
       ...touchRef.current,
       mode: "pan",
@@ -416,6 +422,18 @@ export function CanvasGraph({
   };
 
   const onTouchEnd = (e: React.TouchEvent) => {
+    // A lifted finger fires a browser-emulated click on whatever element sat
+    // under it -- harmless over empty background, but a tap that landed on an
+    // edge (edges aren't [data-node], so onTouchStart's node branch doesn't
+    // catch them; they fall to the generic pan case) would otherwise trigger
+    // that edge's onClick={editable ? () => removeEdge(e.id) : undefined} a
+    // moment after our own touch handling already ran, silently deleting it.
+    // Suppressed only when we actually handled this as a gesture of our own
+    // (mode !== "none"); React registers touchstart/touchmove/wheel as
+    // passive listeners by default (preventDefault there is a no-op) but
+    // touchend is not one of them, so this call has real effect.
+    if (touchRef.current.mode !== "none") e.preventDefault();
+
     if (e.touches.length === 0) {
       touchRef.current.mode = "none";
       return;

@@ -19,6 +19,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Where a geofence crossing lands when the app is not running.
@@ -70,6 +71,19 @@ public class GeofenceReceiver extends BroadcastReceiver {
     // drop a crossing; see drainNativeQueue()'s doc comment for the shape
     // that bug used to take.
     static final Object LOCK = new Object();
+
+    // A per-process monotonic counter, not just the millisecond timestamp
+    // below: Android's fused location provider is documented to sometimes
+    // hand consecutive geofence transition broadcasts the SAME cached
+    // Location object when a fresh GPS fix hasn't landed between them --
+    // this is a real platform behavior, not merely "GPS jitter" narrowing
+    // with finer clock resolution. An ENTER and an EXIT delivered with a
+    // bit-identical Location would still collide on
+    // queue.ts's `${workflowId}@${recordedAt}` dedup key even at millisecond
+    // precision. Folding this counter into the key (see iso8601's caller)
+    // makes every appended fix's key unique regardless of what the location
+    // timestamp says, closing the gap the precision change alone left open.
+    private static final AtomicLong SEQ = new AtomicLong();
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -132,6 +146,9 @@ public class GeofenceReceiver extends BroadcastReceiver {
                 // this and ignores anything older than the last crossing it
                 // handled, which is what stops a late flush re-firing a run.
                 fix.put("recordedAt", iso8601(location.getTime()));
+                // See SEQ's doc comment: disambiguates the dedup key from a
+                // same-timestamp sibling, which recordedAt alone cannot always do.
+                fix.put("seq", SEQ.getAndIncrement());
                 queue.put(fix);
 
                 // commit(), not apply(): this process may be torn down the moment
@@ -145,14 +162,11 @@ public class GeofenceReceiver extends BroadcastReceiver {
         }
     }
 
-    // Millisecond precision, not whole seconds: queue.ts's remove() dedups
-    // sent fixes on `${workflowId}@${recordedAt}`, and a GPS-jitter bounce at
-    // the fence boundary can produce an ENTER and EXIT for the same workflow
-    // within the same second. A second-precision timestamp gives both an
-    // identical dedup key, so if one succeeds and the other fails, removing
-    // the sent one by key also silently deletes the still-unacknowledged
-    // other. The backend parses this as RFC3339Nano, which accepts the
-    // fractional-seconds component natively -- no backend change needed.
+    // Millisecond precision, not whole seconds: narrows (but per SEQ's doc
+    // comment above, does not by itself eliminate) the window where two
+    // fixes queued close together share a dedup key. The backend parses this
+    // as RFC3339Nano, which accepts the fractional-seconds component
+    // natively -- no backend change needed.
     private String iso8601(long millis) {
         SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US);
         fmt.setTimeZone(TimeZone.getTimeZone("UTC"));

@@ -32,6 +32,18 @@ export interface Fix {
   accuracyM?: number;
   /** ISO 8601, captured when the OS reported the fix, never when it is sent. */
   recordedAt: string;
+  /**
+   * A per-process counter GeofenceReceiver.java stamps on every fix it
+   * appends. Android's fused location provider can hand two consecutive
+   * geofence transitions the same cached Location object with no fresh GPS
+   * fix in between, which means recordedAt alone -- even at millisecond
+   * precision -- is not always unique for two fixes queued close together.
+   * Folded into remove()'s dedup key below so an ENTER and an EXIT sharing
+   * an identical location+timestamp still get distinct keys. Optional
+   * because a fix already sitting in storage from before this field existed
+   * won't have it; dedup falls back to the old two-part key for those.
+   */
+  seq?: number;
 }
 
 // A corrupt queue must not brick the trigger. Losing the backlog is
@@ -75,21 +87,31 @@ async function drainNative(): Promise<void> {
 
 export async function pending(now = Date.now()): Promise<Fix[]> {
   await drainNative();
-  const fresh = (await read()).filter(
-    (f) => now - Date.parse(f.recordedAt) < MAX_AGE_MS,
-  );
+  const all = await read();
+  const fresh = all.filter((f) => now - Date.parse(f.recordedAt) < MAX_AGE_MS);
+  // Persist the drop, not just the read-side filter: the privacy disclosure
+  // shown before Android's permission dialog promises a fix "is deleted...
+  // within a day if it never can be sent." Filtering fresh out of the return
+  // value without writing it back left every stale fix sitting in
+  // @capacitor/preferences indefinitely -- the promise wasn't kept, only the
+  // symptom (an old fix never being SENT) was masked.
+  if (fresh.length !== all.length) await write(fresh);
   return fresh.sort(
     (a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt),
   );
 }
 
+// Matches sent/stored fixes on workflow + timestamp + seq (when present) --
+// see Fix.seq's doc comment for why timestamp alone isn't always unique.
+function dedupKey(f: Fix): string {
+  return `${f.workflowId}@${f.recordedAt}@${f.seq ?? ""}`;
+}
+
 // Removes exactly the fixes that were accepted, matched on their timestamp and
 // workflow. Anything enqueued while a flush was in flight survives.
 export async function remove(sent: Fix[]): Promise<void> {
-  const gone = new Set(sent.map((f) => `${f.workflowId}@${f.recordedAt}`));
-  await write(
-    (await read()).filter((f) => !gone.has(`${f.workflowId}@${f.recordedAt}`)),
-  );
+  const gone = new Set(sent.map(dedupKey));
+  await write((await read()).filter((f) => !gone.has(dedupKey(f))));
 }
 
 export async function clear(): Promise<void> {

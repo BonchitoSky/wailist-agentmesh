@@ -13,16 +13,29 @@ export const COMPACT_QUERY = "(max-width: 1023.98px)";
 // layout is a different React tree (the rail becomes a bottom sheet, the
 // palette stops mounting at all), not the same tree with different rules.
 
+// Cached, not re-created per call: useSyncExternalStore invokes getSnapshot()
+// on every render of every component that calls useIsCompact(), and
+// window.matchMedia() allocates a new MediaQueryList each time it's called.
+// The query itself is fixed for the module's lifetime -- only its .matches
+// value changes, which subscribe() below already listens for -- so caching
+// the MediaQueryList is safe. Same fix as useReadOnly.ts's identical pattern.
+let cachedQuery: MediaQueryList | null = null;
+
+function query(): MediaQueryList | null {
+  if (typeof window === "undefined" || !window.matchMedia) return null;
+  if (!cachedQuery) cachedQuery = window.matchMedia(COMPACT_QUERY);
+  return cachedQuery;
+}
+
 function subscribe(onChange: () => void): () => void {
-  if (typeof window === "undefined" || !window.matchMedia) return () => {};
-  const mql = window.matchMedia(COMPACT_QUERY);
+  const mql = query();
+  if (!mql) return () => {};
   mql.addEventListener("change", onChange);
   return () => mql.removeEventListener("change", onChange);
 }
 
 function getSnapshot(): boolean {
-  if (typeof window === "undefined" || !window.matchMedia) return false;
-  return window.matchMedia(COMPACT_QUERY).matches;
+  return query()?.matches ?? false;
 }
 
 // The server has no viewport to measure, so it always renders the desktop

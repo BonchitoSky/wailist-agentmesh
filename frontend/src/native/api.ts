@@ -22,8 +22,6 @@ import type { Fix } from "./queue";
 // Next server in front of the shell, so this is the backend's absolute URL.
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-export class Unauthorized extends Error {}
-
 async function call(path: string, init: RequestInit = {}): Promise<Response> {
   const token = await loadToken();
   const res = await fetch(`${API_BASE}${path}`, {
@@ -38,7 +36,11 @@ async function call(path: string, init: RequestInit = {}): Promise<Response> {
   if (res.status === 401) {
     // Drop the dead token rather than retrying with it forever.
     await clearToken();
-    throw new Unauthorized("session expired");
+    // A plain Error, not a dedicated type: flush()'s catch in geofence.ts
+    // used to branch on a 401 specifically, but both branches took the same
+    // action (stop the flush, keep the queue), so nothing left in the
+    // codebase actually distinguishes this from any other failure by type.
+    throw new Error("session expired");
   }
   return res;
 }

@@ -664,6 +664,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         running={running}
         onDeploy={onDeploy}
         onRun={onRun}
+        runBlocked={runBlocked}
         saveLabel={saveLabel}
         onBack={() => router.push("/workflows")}
       />
@@ -938,6 +939,7 @@ function CanvasTopbar({
   running,
   onDeploy,
   onRun,
+  runBlocked,
   saveLabel,
   onBack,
 }: {
@@ -947,6 +949,10 @@ function CanvasTopbar({
   running: boolean;
   onDeploy: () => void;
   onRun: () => void;
+  /** Why the Run button is disabled, or null when a run can proceed --
+   *  computed once in CanvasPage (runBlockedMessage) so this component
+   *  doesn't need its own copy of hasProviderNode/canDeploy to derive it. */
+  runBlocked: string | null;
   saveLabel: string;
   onBack: () => void;
 }) {
@@ -1082,13 +1088,13 @@ function CanvasTopbar({
       )}
       <button
         onClick={onRun}
-        disabled={!deployed}
-        title={!deployed ? "Deploy first" : "Run workflow"}
+        disabled={!!runBlocked}
+        title={runBlocked ?? "Run workflow"}
         style={{
           ...primaryBtnSm,
           minWidth: 86,
           justifyContent: "center",
-          opacity: !deployed ? 0.5 : 1,
+          opacity: runBlocked ? 0.5 : 1,
         }}
       >
         {running ? (

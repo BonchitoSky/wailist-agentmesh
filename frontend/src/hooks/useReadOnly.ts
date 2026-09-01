@@ -4,7 +4,7 @@ import {
   HOVER_NONE_QUERY,
   POINTER_COARSE_QUERY,
   isHandheld,
-  DeviceSignals,
+  readDeviceSignals,
 } from "@/lib/device";
 
 // Whether this client is a viewer rather than an editor.
@@ -57,20 +57,17 @@ function subscribe(onChange: () => void): () => void {
 
 function getSnapshot(): boolean {
   const mq = mediaQueries();
-  const uaData = (
-    navigator as Navigator & {
-      userAgentData?: { mobile?: boolean; platform?: string };
-    }
-  ).userAgentData;
-  const signals: DeviceSignals = {
-    uaDataMobile: uaData?.mobile,
-    uaDataPlatform: uaData?.platform,
-    pointerCoarse: mq?.pointerCoarse.matches ?? false,
-    hoverNone: mq?.hoverNone.matches ?? false,
-    maxTouchPoints:
-      typeof navigator === "undefined" ? 0 : (navigator.maxTouchPoints ?? 0),
-  };
-  return isHandheld(signals);
+  // device.ts's readDeviceSignals() stays the single source of truth for
+  // every signal besides the two cached MediaQueryLists -- a hand-copied
+  // second implementation here would drift from it silently the next time
+  // either function's signal-reading logic changes.
+  return isHandheld(
+    readDeviceSignals(
+      mq
+        ? { pointerCoarse: mq.pointerCoarse.matches, hoverNone: mq.hoverNone.matches }
+        : undefined,
+    ),
+  );
 }
 
 // The server has no device to inspect, so it renders the editor. That is both

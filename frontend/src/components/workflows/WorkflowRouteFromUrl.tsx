@@ -1,6 +1,7 @@
 "use client";
 import { useSearchParams } from "next/navigation";
 import { WorkflowRoute } from "./WorkflowRoute";
+import { IS_NATIVE } from "@/lib/nativeAuth";
 
 // Which workflow this page is showing, resolved from the URL.
 //
@@ -21,6 +22,12 @@ import { WorkflowRoute } from "./WorkflowRoute";
 // segment would be a constant in the native shell and never remount.
 export function WorkflowRouteFromUrl({ routeId }: { routeId: string }) {
   const fromQuery = useSearchParams().get("id");
-  const workflowId = fromQuery || routeId;
+  // Only the native shell's ?id= is meant to override the route segment --
+  // the web build's routeId already IS the real id, straight from the path.
+  // Applying fromQuery unconditionally let a web URL like
+  // /workflows/<real-id>?id=<other-id> silently open a different workflow
+  // than the path says, since a query param a user (or a stale/crafted link)
+  // added would win over the actual route.
+  const workflowId = IS_NATIVE && fromQuery ? fromQuery : routeId;
   return <WorkflowRoute key={workflowId} workflowId={workflowId} />;
 }

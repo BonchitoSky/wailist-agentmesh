@@ -80,7 +80,17 @@ interface UADataLike {
 // Reads the live signals off `navigator`. Returns a desktop-shaped answer when
 // there is no window at all (SSR), which is what keeps the server snapshot and
 // the first client render in agreement.
-export function readDeviceSignals(): DeviceSignals {
+//
+// `mediaMatches` lets a caller that already holds its own MediaQueryList
+// objects (useReadOnly.ts caches them to avoid a fresh matchMedia() call on
+// every render) pass their current .matches values in directly, rather than
+// this function calling matchMedia() a second time for the same two queries.
+// Omitted, it calls matchMedia() itself -- the one-shot callers (isHandheldNow)
+// have no cached MediaQueryList to reuse, so there is nothing to pass.
+export function readDeviceSignals(mediaMatches?: {
+  pointerCoarse: boolean;
+  hoverNone: boolean;
+}): DeviceSignals {
   if (typeof window === "undefined" || !window.matchMedia) {
     return { pointerCoarse: false, hoverNone: false, maxTouchPoints: 0 };
   }
@@ -89,8 +99,11 @@ export function readDeviceSignals(): DeviceSignals {
   return {
     uaDataMobile: uaData?.mobile,
     uaDataPlatform: uaData?.platform,
-    pointerCoarse: window.matchMedia(POINTER_COARSE_QUERY).matches,
-    hoverNone: window.matchMedia(HOVER_NONE_QUERY).matches,
+    pointerCoarse:
+      mediaMatches?.pointerCoarse ??
+      window.matchMedia(POINTER_COARSE_QUERY).matches,
+    hoverNone:
+      mediaMatches?.hoverNone ?? window.matchMedia(HOVER_NONE_QUERY).matches,
     maxTouchPoints: navigator.maxTouchPoints ?? 0,
   };
 }
