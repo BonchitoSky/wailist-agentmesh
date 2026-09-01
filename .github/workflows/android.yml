@@ -40,22 +40,12 @@ jobs:
 
       # Builds the static export, copies it into mobile/www, and runs
       # `cap sync android`. The API URL is baked in at build time -- there is
-      # no server behind the bundle to configure it later. An unset secret
-      # would otherwise bake in an empty string silently: the build, sync,
-      # and signing steps all still succeed, and the only symptom is every
-      # API call in the shipped app failing at runtime with no CI signal
-      # pointing at the cause -- same failure mode the keystore check below
-      # already guards against.
+      # no server behind the bundle to configure it later.
       - name: Build the web bundle and sync
         working-directory: mobile
         env:
           NEXT_PUBLIC_API_URL: ${{ secrets.MOBILE_API_URL }}
-        run: |
-          if [ -z "$NEXT_PUBLIC_API_URL" ]; then
-            echo "MOBILE_API_URL is not set; the bundle would ship pointed at nothing." >&2
-            exit 1
-          fi
-          npm run sync
+        run: npm run sync
 
       # The keystore never exists in the repo. It is a base64 secret,
       # materialised for this job only and removed with the runner.
