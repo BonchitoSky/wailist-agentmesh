@@ -358,8 +358,9 @@ export const workflows = {
     id: string,
     cron: string,
   ): Promise<{ cron: string; nextRunAt: string }> => {
+    assertWritable("PUT", `/workflows/${id}/schedule`);
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows/${id}/schedule`, {
+      const res = await apiFetch(`${BASE}/workflows/${id}/schedule`, {
         method: "PUT",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -378,8 +379,9 @@ export const workflows = {
 
   // DELETE /workflows/:id/schedule
   clearSchedule: async (id: string): Promise<void> => {
+    assertWritable("DELETE", `/workflows/${id}/schedule`);
     if (BASE) {
-      const res = await fetch(`${BASE}/workflows/${id}/schedule`, {
+      const res = await apiFetch(`${BASE}/workflows/${id}/schedule`, {
         method: "DELETE",
         credentials: "include",
       });

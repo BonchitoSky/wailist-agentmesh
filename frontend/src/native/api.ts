@@ -5,7 +5,19 @@
 // There may be no WebView document alive at all at that moment, so it cannot
 // rely on anything the page set up.
 import { clearToken, loadToken } from "./auth";
+import { isWriteBlocked, isReadOnlyNow } from "../lib/readonly";
 import type { Fix } from "./queue";
+
+// Same defence-in-depth as lib/api.ts's assertWritable, reimplemented rather
+// than imported: this module is deliberately kept independent of lib/api.ts
+// (see the file header), and the two write calls below are the only ones
+// this file makes, so a private inline check is simpler than exporting
+// lib/api.ts's version for one other caller.
+function assertWritable(method: string, path: string): void {
+  if (isWriteBlocked(method, path, isReadOnlyNow())) {
+    throw new Error("Workflows can only be edited in the AgentMesh desktop app.");
+  }
+}
 
 // Baked in at build time, same value the web bundle is given. There is no
 // Next server in front of the shell, so this is the backend's absolute URL.
@@ -76,6 +88,7 @@ export async function setGeofence(
   workflowId: string,
   fence: Geofence,
 ): Promise<void> {
+  assertWritable("PUT", `/workflows/${workflowId}/geofence`);
   const res = await call(`/workflows/${workflowId}/geofence`, {
     method: "PUT",
     body: JSON.stringify(fence),
@@ -87,5 +100,6 @@ export async function setGeofence(
 }
 
 export async function clearGeofence(workflowId: string): Promise<void> {
+  assertWritable("DELETE", `/workflows/${workflowId}/geofence`);
   await call(`/workflows/${workflowId}/geofence`, { method: "DELETE" });
 }

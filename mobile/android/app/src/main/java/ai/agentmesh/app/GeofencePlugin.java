@@ -1,7 +1,9 @@
 package ai.agentmesh.app;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.provider.Settings;
 import android.content.pm.PackageManager;
@@ -186,5 +188,30 @@ public class GeofencePlugin extends Plugin {
                     call.resolve();
                 })
                 .addOnFailureListener(e -> call.reject("could not remove the geofence: " + e.getMessage()));
+    }
+
+    /**
+     * Atomically reads and clears GeofenceReceiver's queue in one native call.
+     *
+     * queue.ts used to do this with two separate @capacitor/preferences calls
+     * (a read, then a write of whatever was left over) with no way to
+     * coordinate against GeofenceReceiver.append() running in between --
+     * append() could land after the second read but before the write landed,
+     * and that crossing would be silently overwritten. Doing the read and the
+     * clear inside one synchronized(LOCK) block, in the same call
+     * GeofenceReceiver.append() itself synchronizes on, makes the two
+     * mutually exclusive instead of racing.
+     */
+    @PluginMethod
+    public void drainNativeQueue(PluginCall call) {
+        SharedPreferences prefs = getContext().getSharedPreferences(GeofenceReceiver.PREFS, Context.MODE_PRIVATE);
+        String raw;
+        synchronized (GeofenceReceiver.LOCK) {
+            raw = prefs.getString(GeofenceReceiver.QUEUE_KEY, "[]");
+            prefs.edit().remove(GeofenceReceiver.QUEUE_KEY).commit();
+        }
+        JSObject out = new JSObject();
+        out.put("value", raw == null ? "[]" : raw);
+        call.resolve(out);
     }
 }

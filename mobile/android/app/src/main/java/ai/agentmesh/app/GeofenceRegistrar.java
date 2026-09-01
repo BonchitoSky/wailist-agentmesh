@@ -45,22 +45,30 @@ final class GeofenceRegistrar {
     // fresh one from LocationServices instead.
     static void register(Context context, GeofencingClient client, String id, double lat, double lng,
             double radiusM, Callback callback) {
-        Geofence fence = new Geofence.Builder()
-                .setRequestId(id)
-                .setCircularRegion(lat, lng, (float) radiusM)
-                .setExpirationDuration(Geofence.NEVER_EXPIRE)
-                .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER | Geofence.GEOFENCE_TRANSITION_EXIT)
-                .build();
-
-        GeofencingRequest request = new GeofencingRequest.Builder()
-                // No initial trigger, same reasoning as GeofencePlugin's live
-                // path: reporting the current state the moment a fence is
-                // (re-)registered would fire an "entry" the user never made.
-                .setInitialTrigger(0)
-                .addGeofences(Collections.singletonList(fence))
-                .build();
-
+        // Builder construction is inside the try, not just addGeofences():
+        // BootReceiver calls this once per persisted fence with no try/catch
+        // of its own, so a single corrupted entry (an out-of-range radius or
+        // coordinate surviving in SharedPreferences) throwing
+        // IllegalArgumentException here would otherwise escape uncaught,
+        // skip pending.finish() for every fence still queued behind it, and
+        // leak that PendingResult -- one bad fence taking down reboot
+        // recovery for every other workflow's fence in the same batch.
         try {
+            Geofence fence = new Geofence.Builder()
+                    .setRequestId(id)
+                    .setCircularRegion(lat, lng, (float) radiusM)
+                    .setExpirationDuration(Geofence.NEVER_EXPIRE)
+                    .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER | Geofence.GEOFENCE_TRANSITION_EXIT)
+                    .build();
+
+            GeofencingRequest request = new GeofencingRequest.Builder()
+                    // No initial trigger, same reasoning as GeofencePlugin's live
+                    // path: reporting the current state the moment a fence is
+                    // (re-)registered would fire an "entry" the user never made.
+                    .setInitialTrigger(0)
+                    .addGeofences(Collections.singletonList(fence))
+                    .build();
+
             client.addGeofences(request, transitionIntent(context))
                     .addOnSuccessListener(unused -> callback.onDone(true, null))
                     .addOnFailureListener(e -> callback.onDone(false, e.getMessage()));
@@ -70,6 +78,8 @@ final class GeofenceRegistrar {
             // which is a different thing to tell the user and to triage than
             // "the request to Play Services failed".
             callback.onDone(false, "permission revoked: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            callback.onDone(false, "invalid geofence parameters: " + e.getMessage());
         }
     }
 }

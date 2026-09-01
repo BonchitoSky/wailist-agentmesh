@@ -71,23 +71,39 @@ type pingLimiter struct {
 
 func (p *pingLimiter) allow(workflowID string, now time.Time) bool {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.last == nil {
 		p.last = make(map[string]time.Time)
 	}
 	if prev, ok := p.last[workflowID]; ok && now.Sub(prev) < minPingInterval {
+		p.mu.Unlock()
 		return false
 	}
 	p.last[workflowID] = now
-	if now.Sub(p.lastSweep) > pingSweepInterval {
-		for id, t := range p.last {
-			if now.Sub(t) > pingEntryTTL {
-				delete(p.last, id)
-			}
-		}
+	needsSweep := now.Sub(p.lastSweep) > pingSweepInterval
+	if needsSweep {
 		p.lastSweep = now
 	}
+	p.mu.Unlock()
+
+	// Run off the request path, not inline: the O(n) sweep still needs the
+	// same mutex for correctness, but the caller whose ping happened to land
+	// on the sweep minute should not have its own accept/reject decision --
+	// already made above -- wait behind a full map scan before its HTTP
+	// response can proceed.
+	if needsSweep {
+		go p.sweep(now)
+	}
 	return true
+}
+
+func (p *pingLimiter) sweep(now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, t := range p.last {
+		if now.Sub(t) > pingEntryTTL {
+			delete(p.last, id)
+		}
+	}
 }
 
 var locationPings pingLimiter

@@ -47,7 +47,13 @@ export function useAuth() {
     // reason as NativeBoot: a browser build must not pull Capacitor in.
     if (token && IS_NATIVE) {
       setAuthToken(token);
-      void import("@/native").then(({ shell }) => shell.onSignedIn(token));
+      // Logged, not swallowed: a failed native persist (e.g. a Keystore
+      // write error) would otherwise leave the UI showing signed-in while
+      // the shell never actually saved the token, silently failing to
+      // survive the app being killed.
+      void import("@/native")
+        .then(({ shell }) => shell.onSignedIn(token))
+        .catch((err) => console.error("native shell failed to persist sign-in", err));
     }
     setUICookie();
     setSignedIn(true);
@@ -58,7 +64,9 @@ export function useAuth() {
       const token = await auth.signUp(email, password, name, org);
       if (token && IS_NATIVE) {
         setAuthToken(token);
-        void import("@/native").then(({ shell }) => shell.onSignedIn(token));
+        void import("@/native")
+          .then(({ shell }) => shell.onSignedIn(token))
+          .catch((err) => console.error("native shell failed to persist sign-in", err));
       }
       setUICookie();
       setSignedIn(true);
@@ -70,7 +78,12 @@ export function useAuth() {
     await auth.signOut();
     if (IS_NATIVE) {
       setAuthToken(null);
-      void import("@/native").then(({ shell }) => shell.onSignedOut());
+      // Logged for the mirror-image reason: a shared device that fails to
+      // clear the persisted token would otherwise silently keep the old
+      // user's session live in Keystore after the UI has already moved on.
+      void import("@/native")
+        .then(({ shell }) => shell.onSignedOut())
+        .catch((err) => console.error("native shell failed to clear sign-out", err));
     }
     clearUICookie();
     setSignedIn(false);

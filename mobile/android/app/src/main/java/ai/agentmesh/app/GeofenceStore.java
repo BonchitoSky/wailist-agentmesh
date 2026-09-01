@@ -25,35 +25,60 @@ final class GeofenceStore {
     private static final String PREFS = "AgentMeshGeofenceStore";
     private static final String KEY_FENCES = "fences";
 
+    // Guards every read-modify-write of KEY_FENCES below. save()/remove() are
+    // called from async GMS Task callbacks (GeofencePlugin's addGeofence and
+    // removeGeofence success listeners), which can run back-to-back for
+    // different workflows, and BootReceiver.loadAll() can run concurrently
+    // with either. Without this, two calls can both read the same starting
+    // JSONObject before either writes, and the second write wins outright --
+    // silently dropping the other workflow's entry, exactly the single-slot
+    // clobber this keyed store exists to eliminate.
+    private static final Object LOCK = new Object();
+
     private GeofenceStore() {
     }
 
     static void save(Context context, String id, double lat, double lng, double radiusM) {
-        SharedPreferences p = prefs(context);
-        JSONObject fences = readAll(p);
-        try {
-            JSONObject fence = new JSONObject();
-            fence.put("lat", lat);
-            fence.put("lng", lng);
-            fence.put("radiusM", radiusM);
-            fences.put(id, fence);
-        } catch (JSONException e) {
-            return;
+        synchronized (LOCK) {
+            SharedPreferences p = prefs(context);
+            JSONObject fences = readAll(p);
+            try {
+                JSONObject fence = new JSONObject();
+                fence.put("lat", lat);
+                fence.put("lng", lng);
+                fence.put("radiusM", radiusM);
+                fences.put(id, fence);
+            } catch (JSONException e) {
+                return;
+            }
+            // commit(), not apply(): a reboot landing between this call
+            // returning and an async apply() reaching disk means
+            // BootReceiver won't find this fence in loadAll() and silently
+            // fails to re-register it after restart -- the same durability
+            // argument GeofenceReceiver.append() makes for its own commit().
+            p.edit().putString(KEY_FENCES, fences.toString()).commit();
         }
-        p.edit().putString(KEY_FENCES, fences.toString()).apply();
     }
 
     // Removes exactly this workflow's fence. Any other workflow's armed fence
     // is untouched, unlike a single clear() that would wipe them all.
     static void remove(Context context, String id) {
-        SharedPreferences p = prefs(context);
-        JSONObject fences = readAll(p);
-        fences.remove(id);
-        p.edit().putString(KEY_FENCES, fences.toString()).apply();
+        synchronized (LOCK) {
+            SharedPreferences p = prefs(context);
+            JSONObject fences = readAll(p);
+            fences.remove(id);
+            // See save()'s comment: commit(), not apply(), so a disarm just
+            // before a reboot can't lose the race and have BootReceiver
+            // re-register a fence the user just removed.
+            p.edit().putString(KEY_FENCES, fences.toString()).commit();
+        }
     }
 
     static List<Active> loadAll(Context context) {
-        JSONObject fences = readAll(prefs(context));
+        JSONObject fences;
+        synchronized (LOCK) {
+            fences = readAll(prefs(context));
+        }
         List<Active> out = new ArrayList<>();
         JSONArray ids = fences.names();
         if (ids == null) {

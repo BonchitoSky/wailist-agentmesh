@@ -10,17 +10,9 @@
 // backlog cannot re-fire a crossing that was already handled. That is why
 // recordedAt is captured here, at observation time, and never at send time.
 import { Preferences } from "@capacitor/preferences";
+import { Geofence } from "./nativeGeofence";
 
 const QUEUE_KEY = "agentmesh.geofence.queue";
-
-// GeofenceReceiver.java writes here, never to QUEUE_KEY above. It runs with no
-// WebView and cannot call into this module, so a crossing landing while the
-// app is dead has to go through SharedPreferences instead -- and if it used
-// QUEUE_KEY, its read-modify-write could race the one below and silently
-// clobber whichever side wrote second. A separate key sidesteps needing a
-// cross-process lock: Java only ever appends here, and drainNative() below is
-// written to be safe against that append landing mid-drain.
-const NATIVE_QUEUE_KEY = "agentmesh.geofence.native_queue";
 
 // Bounded so a phone that is offline for a week cannot grow this without
 // limit. The oldest fixes are the least interesting -- the server ignores
@@ -69,30 +61,21 @@ export async function enqueue(fix: Fix): Promise<void> {
 }
 
 // Migrates whatever GeofenceReceiver.java queued while the app was dead into
-// the main queue above, then re-reads NATIVE_QUEUE_KEY and writes back only
-// the tail that arrived after the snapshot was taken -- not an empty array.
-// Java only ever appends (JSONArray.put), so the live value is always the
-// snapshot plus zero or more new entries at the end; truncating to that tail
-// instead of clearing outright means a crossing delivered in the exact window
-// between the snapshot read and this write is kept, not lost.
+// the main queue above. drainNativeQueue() reads and clears the native side's
+// queue in one atomic native call (synchronized against
+// GeofenceReceiver.append() on the Java side), so there is no read-then-write
+// window here for a concurrent append to land in and get silently dropped --
+// unlike a plain @capacitor/preferences read/write pair, which cannot
+// coordinate with a write happening outside the WebView at all. Anything
+// GeofenceReceiver appends after this call's clear starts a fresh queue and
+// is picked up whole on the next drainNative().
 async function drainNative(): Promise<void> {
-  const { value } = await Preferences.get({ key: NATIVE_QUEUE_KEY });
+  const { value } = await Geofence.drainNativeQueue();
   const snapshot = parseFixes(value);
   if (snapshot.length === 0) return;
 
   const all = [...(await read()), ...snapshot];
   await write(all.slice(-MAX_QUEUED));
-
-  const { value: current } = await Preferences.get({ key: NATIVE_QUEUE_KEY });
-  const remaining = parseFixes(current).slice(snapshot.length);
-  if (remaining.length === 0) {
-    await Preferences.remove({ key: NATIVE_QUEUE_KEY });
-  } else {
-    await Preferences.set({
-      key: NATIVE_QUEUE_KEY,
-      value: JSON.stringify(remaining),
-    });
-  }
 }
 
 export async function pending(now = Date.now()): Promise<Fix[]> {

@@ -56,6 +56,28 @@ describe("isWriteBlocked", () => {
     );
   });
 
+  // Added alongside PUT/DELETE .../schedule, PUT/DELETE .../geofence, and
+  // GET /tendril/console -- these must mirror backend/internal/api/readonly.go
+  // one for one, same as every other rule in this list.
+  it("blocks schedule, geofence, and the tendril console for a viewer", () => {
+    expect(isWriteBlocked("PUT", "/workflows/wf_123/schedule", VIEWER)).toBe(
+      true,
+    );
+    expect(
+      isWriteBlocked("DELETE", "/workflows/wf_123/schedule", VIEWER),
+    ).toBe(true);
+    expect(isWriteBlocked("PUT", "/workflows/wf_123/geofence", VIEWER)).toBe(
+      true,
+    );
+    expect(
+      isWriteBlocked("DELETE", "/workflows/wf_123/geofence", VIEWER),
+    ).toBe(true);
+    // GET, not a write verb -- listed because the backend handler behind it
+    // creates a workflow row on first call (get-or-create), so it is a write
+    // in effect. See lib/tendril.ts's console().
+    expect(isWriteBlocked("GET", "/tendril/console", VIEWER)).toBe(true);
+  });
+
   it("blocks nothing for an editor", () => {
     expect(isWriteBlocked("POST", "/workflows", EDITOR)).toBe(false);
     expect(isWriteBlocked("DELETE", "/workflows/wf_123", EDITOR)).toBe(false);

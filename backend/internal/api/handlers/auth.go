@@ -41,7 +41,7 @@ func (d *Deps) setUICookie(w http.ResponseWriter) {
 	})
 }
 
-// nativeClientHeader lets a non-browser client ask for its session as a bearer
+// NativeClientHeader lets a non-browser client ask for its session as a bearer
 // token instead of a cookie.
 //
 // The web app must keep using the HttpOnly cookie -- a token readable by page
@@ -57,14 +57,17 @@ func (d *Deps) setUICookie(w http.ResponseWriter) {
 // carries, with the same claims and lifetime -- it just hands it to a client
 // that cannot use cookies. The app is responsible for storing it in
 // Keystore-backed storage rather than anywhere a page can read it.
-const nativeClientHeader = "X-AgentMesh-Client"
+// Exported because middleware.go's CORS allow-list needs the same literal: a
+// client cannot send a header the server's own CORS response doesn't permit,
+// so the two must never drift.
+const NativeClientHeader = "X-AgentMesh-Client"
 
 // wantsBearerToken reports whether this caller identified itself as a native
 // client. Opt-in by header rather than by user agent: a UA string is guessable
 // and spoofable, and more to the point it changes under us, whereas a header
 // our own app sets is an explicit request we control both ends of.
 func wantsBearerToken(r *http.Request) bool {
-	switch strings.ToLower(strings.TrimSpace(r.Header.Get(nativeClientHeader))) {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get(NativeClientHeader))) {
 	case "android", "ios":
 		return true
 	}
