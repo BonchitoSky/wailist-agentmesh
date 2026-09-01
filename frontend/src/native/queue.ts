@@ -55,11 +55,6 @@ async function write(fixes: Fix[]): Promise<void> {
   await Preferences.set({ key: QUEUE_KEY, value: JSON.stringify(fixes) });
 }
 
-export async function enqueue(fix: Fix): Promise<void> {
-  const all = [...(await read()), fix];
-  await write(all.slice(-MAX_QUEUED));
-}
-
 // Migrates whatever GeofenceReceiver.java queued while the app was dead into
 // the main queue above. drainNativeQueue() reads and clears the native side's
 // queue in one atomic native call (synchronized against

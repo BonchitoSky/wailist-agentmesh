@@ -16,10 +16,40 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // android.yml (bundleRelease) restores a real keystore to
+    // mobile/android/release.keystore and sets these three env vars before
+    // invoking Gradle. Without a signingConfig actually wired to them, the
+    // workflow's own restore/env-var steps ran for nothing: bundleRelease
+    // would succeed and produce an AAB, but an UNSIGNED one -- Play's
+    // internal-testing track rejects that on upload, only surfacing the
+    // problem well after the "signed and installable" workflow already
+    // reported success.
+    //
+    // Only defined -- and only required -- for an actual release build. A
+    // debug build (what every device-testing session in this repo uses
+    // today) never touches this block, so a contributor with no keystore
+    // can still `assembleDebug` with no setup.
+    signingConfigs {
+        release {
+            // android.yml writes this to mobile/android/release.keystore --
+            // the Gradle ROOT project dir, since bundleRelease runs with
+            // working-directory: mobile/android. file() from inside this
+            // module's own build.gradle resolves relative to mobile/android
+            // /app instead, so this must go through rootProject explicitly.
+            def keystoreFile = rootProject.file('release.keystore')
+            if (keystoreFile.exists()) {
+                storeFile keystoreFile
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 }

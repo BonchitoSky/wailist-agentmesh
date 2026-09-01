@@ -30,6 +30,11 @@ var allowedRequestHeaders = strings.Join([]string{
 	"X-Relay-Method",
 	"X-Relay-Body",
 	handlers.NativeClientHeader,
+	// readonly.go's EDITOR_CLIENT_KEY bypass reads this off incoming
+	// requests; omitting it here means a browser-based caller's preflight
+	// rejects the header before the server ever sees it, silently defeating
+	// the bypass for any such caller.
+	editorKeyHeaderKey,
 }, ", ")
 
 // allowedOrigins parses CORS_ORIGIN, which accepts a comma-separated list.
@@ -75,6 +80,19 @@ func corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		case allowed[reqOrigin]:
 			w.Header().Set("Access-Control-Allow-Origin", reqOrigin)
+			allowCreds = true
+		case reqOrigin == "" && len(origins) == 1:
+			// No Origin header at all -- not an unrecognised origin, an ABSENT
+			// one. A cross-origin browser request always carries one; this is
+			// either a same-origin request, a non-browser caller that ignores
+			// CORS headers regardless, or a request that had its Origin
+			// stripped somewhere in transit before reaching here. The prior
+			// version of this middleware (before multi-origin support)
+			// answered a single configured origin unconditionally, with no
+			// comparison at all, so this restores that behaviour for exactly
+			// the one case it covered -- never for a MISMATCHED origin, which
+			// is a real different caller and must still be denied below.
+			w.Header().Set("Access-Control-Allow-Origin", origins[0])
 			allowCreds = true
 		default:
 			// Unrecognised origin: send the first configured one, which the

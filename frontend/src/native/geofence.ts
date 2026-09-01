@@ -12,14 +12,20 @@
 import { Network } from "@capacitor/network";
 import type { PluginListenerHandle } from "@capacitor/core";
 import { Geofence } from "./nativeGeofence";
-import { pushFix, Unauthorized } from "./api";
+import { pushFix } from "./api";
 import { pending, remove, type Fix } from "./queue";
 
 let flushing = false;
 
-// Module-scoped so a repeated start() replaces its listener instead of
-// stacking another one, and stop() can remove it.
+// Module-scoped, not per-workflow: GeofencingClient.addGeofences() is
+// additive, so more than one workflow can have an armed fence at the same
+// time, and stopping ONE of them must not silence flush-on-reconnect for
+// the others still armed. Tracked by workflow id (not a call counter) so
+// re-saving the SAME workflow's radius -- which calls start() again with no
+// stop() in between -- doesn't inflate the count and leak the listener past
+// its one real stop() call.
 let networkListener: PluginListenerHandle | null = null;
+const armedWorkflows = new Set<string>();
 
 // Sends whatever is queued, oldest first, stopping at the first failure.
 //
@@ -36,11 +42,12 @@ export async function flush(): Promise<void> {
       try {
         await pushFix(fix);
         sent.push(fix);
-      } catch (err) {
+      } catch {
         // Unauthorized means nothing will succeed until the user signs in
-        // again; everything else is worth retrying later. Either way the
-        // queue is kept -- the crossings happened, and they still matter.
-        if (err instanceof Unauthorized) break;
+        // again; everything else (a 429, a 5xx) is worth retrying later.
+        // Both stop the flush the same way: the queue is kept either way --
+        // the crossings happened, and they still matter -- so there is
+        // nothing to actually do differently between the two today.
         break;
       }
     }
@@ -79,17 +86,21 @@ export async function start(opts: StartOptions): Promise<boolean> {
   // The other half of the offline queue: without this a backlog sits there
   // until the next crossing happens to occur.
   //
-  // The handle is kept so the listener can be removed. Deliberately NOT
-  // Network.removeAllListeners(), which would also tear down listeners
-  // belonging to any other code using the same plugin -- fixing our own leak
-  // by reaching into everyone else's is not a fix.
-  await networkListener?.remove();
-  networkListener = await Network.addListener(
-    "networkStatusChange",
-    (status) => {
-      if (status.connected) void flush();
-    },
-  );
+  // Registered once, not once per armed workflow: the handle is kept so a
+  // second (or fifth) start() call doesn't stack another listener.
+  // Deliberately NOT Network.removeAllListeners() in stop() below, which the
+  // review suggested -- that would also tear down listeners belonging to any
+  // other code using the same plugin, and fixing our own leak by reaching
+  // into everyone else's is not a fix.
+  armedWorkflows.add(opts.workflowId);
+  if (!networkListener) {
+    networkListener = await Network.addListener(
+      "networkStatusChange",
+      (status) => {
+        if (status.connected) void flush();
+      },
+    );
+  }
 
   // Anything the native receiver queued while the app was closed.
   await flush();
@@ -98,8 +109,15 @@ export async function start(opts: StartOptions): Promise<boolean> {
 
 export async function stop(workflowId: string): Promise<void> {
   await Geofence.removeGeofence({ id: workflowId });
-  // Nothing left to flush for, so stop listening. Leaving it attached would
-  // wake the app on every network change for a feature the user turned off.
-  await networkListener?.remove();
-  networkListener = null;
+  armedWorkflows.delete(workflowId);
+  // Only once NO workflow has an armed fence left: leaving the listener up
+  // for one still-armed workflow while tearing it down for another that just
+  // stopped would silence flush-on-reconnect for the one still running.
+  // Nothing left to flush for once the set is empty, though, and leaving the
+  // listener attached then would wake the app on every network change for a
+  // feature every workflow has turned off.
+  if (armedWorkflows.size === 0 && networkListener) {
+    await networkListener.remove();
+    networkListener = null;
+  }
 }

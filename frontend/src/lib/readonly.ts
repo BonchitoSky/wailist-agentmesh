@@ -80,10 +80,24 @@ export function isWriteBlocked(
   return WRITE_RULES.some((r) => r.method === m && r.pattern.test(p));
 }
 
-// For callers outside React, which is really just the fetch guard in lib/api.
+// For callers outside React, which is really just the fetch guards below.
 // A one-shot reading is the right shape there: it answers "may this call go
 // out, right now", and nothing needs to re-render when the answer changes.
 // Components must use useReadOnly() instead.
 export function isReadOnlyNow(): boolean {
   return isHandheldNow();
+}
+
+// Defence in depth for the API layer, shared by every module that calls this
+// backend directly from the WEB bundle (lib/api.ts, lib/tendril.ts). Not for
+// native/api.ts: that file runs only inside the native Android shell, which
+// isHandheldNow() classifies as handheld unconditionally by design (see
+// lib/device.ts) -- gating it on this same check would block every native
+// write permanently rather than just a web viewer's.
+export function assertWritable(method: string, path: string): void {
+  if (isWriteBlocked(method, path, isReadOnlyNow())) {
+    throw new Error(
+      "Workflows can only be edited in the AgentMesh desktop app.",
+    );
+  }
 }

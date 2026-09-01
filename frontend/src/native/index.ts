@@ -56,7 +56,13 @@ export const shell: NativeShell = {
   },
 
   async clearGeofence(workflowId) {
-    await stop(workflowId);
+    // Server first, same reasoning as setGeofence above but in the removal
+    // direction: if this throws, the device keeps watching a boundary the
+    // server still has armed, which is consistent (if now stale to the user's
+    // intent) rather than the alternative -- disarming the OS watch first and
+    // then failing to tell the server, which leaves the server believing a
+    // fence is live that will never fire again.
     await clearGeofence(workflowId);
+    await stop(workflowId);
   },
 };

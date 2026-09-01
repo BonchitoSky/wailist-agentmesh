@@ -11,6 +11,7 @@ import com.google.android.gms.location.Geofence;
 import com.google.android.gms.location.GeofencingEvent;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.text.SimpleDateFormat;
@@ -104,10 +105,22 @@ public class GeofenceReceiver extends BroadcastReceiver {
     private void append(Context context, String workflowId, Location location) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         synchronized (LOCK) {
+            // A corrupt backlog must not cost the crossing that just happened --
+            // that would lose the one event this whole receiver exists for, to
+            // protect a backlog that is already lost anyway. Falling back to an
+            // empty array recovers exactly the way queue.ts's parseFixes() does
+            // on the JS side: keep going with a fresh queue rather than refusing
+            // to record anything ever again.
+            String raw = prefs.getString(QUEUE_KEY, "[]");
+            JSONArray queue;
             try {
-                String raw = prefs.getString(QUEUE_KEY, "[]");
-                JSONArray queue = new JSONArray(raw == null ? "[]" : raw);
+                queue = new JSONArray(raw == null ? "[]" : raw);
+            } catch (JSONException e) {
+                Log.e(TAG, "native queue was corrupt, starting a fresh one", e);
+                queue = new JSONArray();
+            }
 
+            try {
                 JSONObject fix = new JSONObject();
                 fix.put("workflowId", workflowId);
                 fix.put("lat", location.getLatitude());
@@ -132,8 +145,16 @@ public class GeofenceReceiver extends BroadcastReceiver {
         }
     }
 
+    // Millisecond precision, not whole seconds: queue.ts's remove() dedups
+    // sent fixes on `${workflowId}@${recordedAt}`, and a GPS-jitter bounce at
+    // the fence boundary can produce an ENTER and EXIT for the same workflow
+    // within the same second. A second-precision timestamp gives both an
+    // identical dedup key, so if one succeeds and the other fails, removing
+    // the sent one by key also silently deletes the still-unacknowledged
+    // other. The backend parses this as RFC3339Nano, which accepts the
+    // fractional-seconds component natively -- no backend change needed.
     private String iso8601(long millis) {
-        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US);
+        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US);
         fmt.setTimeZone(TimeZone.getTimeZone("UTC"));
         return fmt.format(new Date(millis));
     }

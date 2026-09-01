@@ -11,7 +11,7 @@ import {
   Settlement,
 } from "./types";
 import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
-import { isWriteBlocked, isReadOnlyNow } from "./readonly";
+import { assertWritable } from "./readonly";
 import { IS_NATIVE, authHeaders } from "./nativeAuth";
 
 // In the browser, always route through /api so the cookie stays same-site.
@@ -36,7 +36,11 @@ export const BASE =
 // them all through here means the native shell's bearer header is added once
 // rather than at thirty call sites, and the web request is unchanged --
 // authHeaders() returns nothing at all off-device.
-async function apiFetch(
+// Exported so any module making its own calls to this backend -- lib/tendril.ts
+// is the only one today -- goes through the same auth path instead of
+// hand-rolling `fetch(..., { credentials: "include" })`, which silently drops
+// the native bearer header and 401s on every native-app call.
+export async function apiFetch(
   input: string,
   init: RequestInit = {},
 ): Promise<Response> {
@@ -54,19 +58,6 @@ async function apiFetch(
     ...init,
     ...(Object.keys(headers).length ? { headers } : {}),
   });
-}
-
-// Defence in depth for read-only mode. Every authoring control is hidden from
-// the UI, but a stale bundle, a deep link, or a console call must not be able
-// to put a graph write on the wire either. This throws before the request is
-// built, and sits outside the `if (BASE)` branches so mock mode behaves the
-// same as a real backend rather than quietly permitting more.
-function assertWritable(method: string, path: string): void {
-  if (isWriteBlocked(method, path, isReadOnlyNow())) {
-    throw new Error(
-      "Workflows can only be edited in the AgentMesh desktop app.",
-    );
-  }
 }
 
 // -- Auth ------------------------------------------------------------------
@@ -554,7 +545,7 @@ export const runs = {
 
   resume: async (runId: string): Promise<{ runId: string }> => {
     if (BASE) {
-      const res = await fetch(`${BASE}/runs/${runId}/resume`, {
+      const res = await apiFetch(`${BASE}/runs/${runId}/resume`, {
         method: "POST",
         credentials: "include",
       });

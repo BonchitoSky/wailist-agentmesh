@@ -71,6 +71,13 @@ export function CanvasGraph({
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<ViewState>(DEFAULT_VIEW);
+  // Mirrors `view` for addNodeAt below to read without depending on it: `view`
+  // updates on every pointer-move during a pan/zoom/drag, and a callback that
+  // depends on it gets a new identity on every one of those ticks.
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
   const [panning, setPanning] = useState(false);
   const panRef = useRef({ active: false, sx: 0, sy: 0, ox: 0, oy: 0 });
   const dragRef = useRef<{
@@ -319,25 +326,30 @@ export function CanvasGraph({
     const nodeEl = target.closest("[data-node]") as HTMLElement | null;
     const onPort = !!target.closest("[data-port]");
 
-    // While the graph is editable a drag that starts on a node belongs to
-    // that node, exactly as it does for the mouse. With nothing to drag,
-    // panning from anywhere is what a viewer expects -- otherwise a graph
-    // whose nodes fill the screen has no background left to grab.
-    if (editable && nodeEl && !onPort) {
+    // A tap on a node always selects it, editable or not -- same as
+    // startNodeDrag's mouse path: "Selecting still opens the inspector; only
+    // the move is withheld." While the graph is editable a drag that starts
+    // on a node belongs to that node, exactly as it does for the mouse. With
+    // nothing to drag, panning from anywhere is what a viewer expects --
+    // otherwise a graph whose nodes fill the screen has no background left
+    // to grab.
+    if (nodeEl && !onPort) {
       const id = nodeEl.getAttribute("data-node");
       const n = id ? workflow.nodes.find((x) => x.id === id) : undefined;
       if (n) {
         setSelectedId(n.id);
-        touchRef.current = {
-          mode: "node",
-          sx: t.clientX,
-          sy: t.clientY,
-          startView: view,
-          startDist: 0,
-          nodeId: n.id,
-          ox: n.x,
-          oy: n.y,
-        };
+        touchRef.current = editable
+          ? {
+              mode: "node",
+              sx: t.clientX,
+              sy: t.clientY,
+              startView: view,
+              startDist: 0,
+              nodeId: n.id,
+              ox: n.x,
+              oy: n.y,
+            }
+          : { ...touchRef.current, mode: "none" };
         return;
       }
     }
@@ -443,7 +455,7 @@ export function CanvasGraph({
   const addNodeAt = useCallback(
     (meta: Partial<WorkflowNode>, px: number, py: number) => {
       const t = NODE_TYPES[meta.type!];
-      const w = screenToWorld(view, px, py);
+      const w = screenToWorld(viewRef.current, px, py);
       const id = `n_${Date.now()}`;
       const node = {
         id,
@@ -454,7 +466,7 @@ export function CanvasGraph({
       setWorkflow((wf) => ({ ...wf, nodes: [...wf.nodes, node] }));
       setSelectedId(id);
     },
-    [view, setWorkflow, setSelectedId],
+    [setWorkflow, setSelectedId],
   );
 
   useEffect(() => {

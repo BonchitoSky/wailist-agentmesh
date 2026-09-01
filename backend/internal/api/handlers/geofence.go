@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"net/http"
@@ -90,6 +91,13 @@ func (p *pingLimiter) allow(workflowID string, now time.Time) bool {
 	// on the sweep minute should not have its own accept/reject decision --
 	// already made above -- wait behind a full map scan before its HTTP
 	// response can proceed.
+	//
+	// No context.Context here, unlike this repo's looping background
+	// goroutines (e.g. StartLeaseReaper's ticker loop): this one is bounded
+	// and one-shot, not a forever-loop that needs a shutdown signal to stop.
+	// It iterates an in-memory map bounded by "workflows pinged in the last
+	// 10 minutes" and returns; there is no I/O, no blocking call, and nothing
+	// to leak if the process exits while it is mid-sweep.
 	if needsSweep {
 		go p.sweep(now)
 	}
@@ -194,6 +202,20 @@ func (d *Deps) ClearGeofence(w http.ResponseWriter, r *http.Request) {
 // anyone who learned that id both fire someone's workflow and locate their
 // fence by bisecting coordinates against the response.
 func (d *Deps) LocationPing(w http.ResponseWriter, r *http.Request) {
+	// Rate-limited on the raw path id, before the DB fetch below -- keyed by
+	// workflow id string, not by anything ownership-derived, so this reveals
+	// nothing about whether the id is valid or belongs to the caller. A phone
+	// flushing a queued burst has every fix after the first within the 5s
+	// window rejected here, before it can pay for a full GetWorkflow (which
+	// also unmarshals the entire node/edge graph) and body decode only to be
+	// dropped by the same check moments later.
+	id := chi.URLParam(r, "id")
+	if !locationPings.allow(id, time.Now()) {
+		w.Header().Set("Retry-After", strconv.Itoa(int(minPingInterval.Seconds())))
+		respond.Error(w, http.StatusTooManyRequests, "location fixes for this workflow are arriving too fast")
+		return
+	}
+
 	wf, ok := d.geofenceOwnedWorkflow(w, r)
 	if !ok {
 		return
@@ -235,12 +257,6 @@ func (d *Deps) LocationPing(w http.ResponseWriter, r *http.Request) {
 			respond.Error(w, http.StatusBadRequest, "recordedAt is in the future")
 			return
 		}
-	}
-
-	if !locationPings.allow(wf.ID, time.Now()) {
-		w.Header().Set("Retry-After", strconv.Itoa(int(minPingInterval.Seconds())))
-		respond.Error(w, http.StatusTooManyRequests, "location fixes for this workflow are arriving too fast")
-		return
 	}
 
 	inside := geo.Inside(*wf.GeofenceLat, *wf.GeofenceLng, *wf.GeofenceRadiusM, *body.Lat, *body.Lng)
@@ -306,10 +322,13 @@ func (d *Deps) startGeofenceRun(
 		return "", nil
 	}
 
-	input, _ := json.Marshal(map[string]any{
+	input, err := json.Marshal(map[string]any{
 		"trigger": "geofence", "direction": direction,
 		"lat": lat, "lng": lng, "recordedAt": fixAt,
 	})
+	if err != nil {
+		return "", fmt.Errorf("marshal geofence run input: %w", err)
+	}
 	run, err := d.Store.CreateRunWithCooldown(ctx, wf.ID, "geofence", input, runTriggerCooldown)
 	if err != nil {
 		return "", err
