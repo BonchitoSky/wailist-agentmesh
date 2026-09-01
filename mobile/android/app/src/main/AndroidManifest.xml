@@ -40,6 +40,18 @@
         <receiver
             android:name=".GeofenceReceiver"
             android:exported="false" />
+
+        <!-- Re-registers the active fence after a reboot -- GeofencingClient
+             does not persist registrations across one. Not exported: only the
+             system can send a protected broadcast, so BOOT_COMPLETED never
+             needs an exported receiver to reach it. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 
     <!-- Permissions -->

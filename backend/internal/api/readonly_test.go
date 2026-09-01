@@ -20,6 +20,19 @@ func TestBlocksWrite(t *testing.T) {
 		{"deploy", http.MethodPost, "/workflows/wf_123/deploy", true},
 		{"build", http.MethodPost, "/workflows/wf_123/build", true},
 
+		// Schedule and geofence configuration change what triggers a workflow,
+		// same category of authoring as the five above. Must mirror WRITE_RULES
+		// in frontend/src/lib/readonly.ts one for one.
+		{"set schedule", http.MethodPut, "/workflows/wf_123/schedule", true},
+		{"clear schedule", http.MethodDelete, "/workflows/wf_123/schedule", true},
+		{"set geofence", http.MethodPut, "/workflows/wf_123/geofence", true},
+		{"clear geofence", http.MethodDelete, "/workflows/wf_123/geofence", true},
+		// GET, but find-or-creates a workflow row server-side (see the comment
+		// on readOnlyBlocked), so it belongs on this list despite the verb.
+		{"tendril console", http.MethodGet, "/tendril/console", true},
+		// The read-only counterpart never creates anything, so it stays open.
+		{"tendril console exists", http.MethodGet, "/tendril/console/exists", false},
+
 		// Operating a workflow somebody else built stays available -- this is
 		// the line the whole feature draws.
 		{"run", http.MethodPost, "/workflows/wf_123/run", false},

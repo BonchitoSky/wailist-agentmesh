@@ -15,6 +15,23 @@ import (
 
 const authCookieName = "agentmesh_token"
 
+// allowedRequestHeaders backs Access-Control-Allow-Headers below. Built from
+// handlers.NativeClientHeader rather than a hand-typed literal for that one
+// entry: a future rename there is a compile error here instead of a CORS
+// preflight silently rejecting every native request until someone notices.
+// The x402/relay headers have no equivalent shared constant elsewhere in the
+// codebase yet, so they stay literal for now rather than inventing one just
+// for this list.
+var allowedRequestHeaders = strings.Join([]string{
+	"Content-Type",
+	"Authorization",
+	"Payment-Signature",
+	"X-Payment",
+	"X-Relay-Method",
+	"X-Relay-Body",
+	handlers.NativeClientHeader,
+}, ", ")
+
 // allowedOrigins parses CORS_ORIGIN, which accepts a comma-separated list.
 //
 // A list rather than a single value because this API is now called by two
@@ -79,7 +96,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		// browser-based agent or crawler can complete a paid call at all --
 		// the preflight rejects the payment header before the request is
 		// ever sent.
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Payment-Signature, X-Payment, X-Relay-Method, X-Relay-Body")
+		w.Header().Set("Access-Control-Allow-Headers", allowedRequestHeaders)
 		// Response headers are invisible to browser JS unless exposed:
 		// Payment-Required carries the 402 challenge (base64 JSON), and the
 		// three settlement headers carry the inbound/outbound tx ids the run

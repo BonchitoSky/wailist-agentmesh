@@ -1,4 +1,14 @@
 import { BASE } from "@/lib/api";
+import { isWriteBlocked, isReadOnlyNow } from "@/lib/readonly";
+
+// console() is a GET that creates a workflow row on first call -- WRITE_RULES
+// lists it as a write for exactly that reason, so it needs the same
+// defence-in-depth guard as any other write, despite the verb.
+function assertWritable(method: string, path: string): void {
+  if (isWriteBlocked(method, path, isReadOnlyNow())) {
+    throw new Error("Workflows can only be edited in the AgentMesh desktop app.");
+  }
+}
 
 // Tendril charges a flat 0.01 USDC to open a lease; the hours themselves meter
 // against credit at the machine's hourly rate. Kept in sync with the backend's
@@ -111,6 +121,7 @@ export const tendril = {
   // minting a fresh duplicate one every time -- workflowsApi.create would
   // do the latter, since it always inserts.
   async console(): Promise<string> {
+    assertWritable("GET", "/tendril/console");
     const res = await fetch(`${BASE}/tendril/console`, {
       credentials: "include",
     });

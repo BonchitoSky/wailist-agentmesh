@@ -91,10 +91,10 @@ export function WorkflowsPage() {
   // open the same row instead of workflowsApi.create minting a fresh
   // duplicate one every time.
   // tendril.console() finds-OR-CREATES the console row. Creating one is
-  // authoring, and it is a GET, so isWriteBlocked cannot catch it -- this is
-  // the one place the distinction has to be drawn by hand. Read-only asks the
-  // non-creating variant and has nowhere to go if the desktop app has not
-  // opened this user's console yet.
+  // authoring even though it is a GET; isWriteBlocked's WRITE_RULES lists it
+  // explicitly for that reason. This branch picks the non-creating variant up
+  // front so a viewer never issues the blocked call at all, and has nowhere
+  // to go if the desktop app has not opened this user's console yet.
   const handleLoadTendrilWorkflow = useCallback(async () => {
     if (creatingTendril) return;
     setCreatingTendril(true);

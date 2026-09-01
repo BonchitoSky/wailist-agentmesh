@@ -1,6 +1,6 @@
 "use client";
 import { useEffect } from "react";
-import { IS_NATIVE, setAuthToken } from "@/lib/nativeAuth";
+import { IS_NATIVE, setAuthToken, markAuthReady } from "@/lib/nativeAuth";
 
 // Restores the session the native shell persisted, once, on first mount.
 //
@@ -13,6 +13,30 @@ import { IS_NATIVE, setAuthToken } from "@/lib/nativeAuth";
 // on device it loads once. A static import would pull @capacitor/* into every
 // page of the web app to satisfy a branch that never runs there.
 //
+// boot() talking to the Capacitor bridge is the one step here with no
+// built-in timeout of its own -- a WebView-bridge call that never calls back
+// (a known failure mode, not a hypothetical one) would otherwise leave
+// authReady unresolved forever and useAuth stuck showing a permanent loading
+// spinner instead of ever falling back to signed-out. Racing it against a
+// timeout turns "hangs forever" into "fails after 10s", which the existing
+// .catch/.finally below already handle correctly.
+const BOOT_TIMEOUT_MS = 10_000;
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("native boot timed out")), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 // Renders nothing. Mounted in the root layout because the session has to be
 // restored before any page makes its first authenticated call, not when some
 // particular screen happens to appear.
@@ -20,8 +44,7 @@ export function NativeBoot() {
   useEffect(() => {
     if (!IS_NATIVE) return;
     let cancelled = false;
-    void import("@/native")
-      .then(({ boot }) => boot())
+    void withTimeout(import("@/native").then(({ boot }) => boot()), BOOT_TIMEOUT_MS)
       .then((token) => {
         if (!cancelled && token) setAuthToken(token);
       })
@@ -30,6 +53,17 @@ export function NativeBoot() {
         // viewer still works signed out; the alternative is a blank screen
         // with the reason visible only in logcat.
         console.error("native shell failed to boot", err);
+      })
+      .finally(() => {
+        // Unconditional, unlike the setAuthToken call above: authReady is a
+        // module-level, one-shot signal shared with every mount of this
+        // component, not per-mount state. Gating it on `cancelled` would
+        // permanently starve useAuth's auth.me() call if this effect were
+        // ever cleaned up before boot() settled -- not reachable today with
+        // NativeBoot mounted once in the root layout, but nothing enforces
+        // that invariant here, and a signal that can hang forever is cheap
+        // to just not build in the first place.
+        markAuthReady();
       });
     return () => {
       cancelled = true;

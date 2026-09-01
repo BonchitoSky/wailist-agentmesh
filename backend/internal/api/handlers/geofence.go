@@ -52,22 +52,58 @@ const minPingInterval = 5 * time.Second
 // Store.CreateRunWithCooldown, which is DB-backed and correct across replicas.
 // Worth not confusing the two: a run must never double-fire, whereas a ping
 // accepted twice costs one indexed UPDATE and changes nothing.
+// pingEntryTTL bounds how long a workflow's entry survives without another
+// ping. Well above minPingInterval so an active client never gets swept out
+// from under itself; its purpose is only to stop the map growing forever with
+// one permanent entry per workflow that has ever pinged.
+const pingEntryTTL = 10 * time.Minute
+
+// How often allow() bothers scanning the whole map for expired entries.
+// Amortizes the O(n) sweep across many calls instead of paying it, and
+// holding the lock for it, on every single accepted ping.
+const pingSweepInterval = time.Minute
+
 type pingLimiter struct {
-	mu   sync.Mutex
-	last map[string]time.Time
+	mu        sync.Mutex
+	last      map[string]time.Time
+	lastSweep time.Time
 }
 
 func (p *pingLimiter) allow(workflowID string, now time.Time) bool {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.last == nil {
 		p.last = make(map[string]time.Time)
 	}
 	if prev, ok := p.last[workflowID]; ok && now.Sub(prev) < minPingInterval {
+		p.mu.Unlock()
 		return false
 	}
 	p.last[workflowID] = now
+	needsSweep := now.Sub(p.lastSweep) > pingSweepInterval
+	if needsSweep {
+		p.lastSweep = now
+	}
+	p.mu.Unlock()
+
+	// Run off the request path, not inline: the O(n) sweep still needs the
+	// same mutex for correctness, but the caller whose ping happened to land
+	// on the sweep minute should not have its own accept/reject decision --
+	// already made above -- wait behind a full map scan before its HTTP
+	// response can proceed.
+	if needsSweep {
+		go p.sweep(now)
+	}
 	return true
+}
+
+func (p *pingLimiter) sweep(now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for id, t := range p.last {
+		if now.Sub(t) > pingEntryTTL {
+			delete(p.last, id)
+		}
+	}
 }
 
 var locationPings pingLimiter

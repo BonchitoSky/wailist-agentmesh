@@ -24,7 +24,7 @@ func TestWebCallerGetsNoToken(t *testing.T) {
 func TestNativeCallerGetsTheToken(t *testing.T) {
 	for _, client := range []string{"android", "Android", "  ANDROID  ", "ios"} {
 		req := httptest.NewRequest(http.MethodPost, "/auth/signin", nil)
-		req.Header.Set(nativeClientHeader, client)
+		req.Header.Set(NativeClientHeader, client)
 
 		if !wantsBearerToken(req) {
 			t.Fatalf("client %q should be treated as native", client)
@@ -42,7 +42,7 @@ func TestNativeCallerGetsTheToken(t *testing.T) {
 func TestUnknownClientFallsBackToWebBehaviour(t *testing.T) {
 	for _, client := range []string{"", "web", "andriod", "curl", "browser"} {
 		req := httptest.NewRequest(http.MethodPost, "/auth/signin", nil)
-		req.Header.Set(nativeClientHeader, client)
+		req.Header.Set(NativeClientHeader, client)
 		if wantsBearerToken(req) {
 			t.Fatalf("client %q must not be treated as native", client)
 		}

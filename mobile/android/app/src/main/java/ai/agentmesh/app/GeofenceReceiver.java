@@ -46,10 +46,29 @@ public class GeofenceReceiver extends BroadcastReceiver {
     private static final String TAG = "AgentMeshGeofence";
 
     // The store @capacitor/preferences uses on Android. Writing here rather
-    // than to a private file of our own is what lets the existing TypeScript
-    // queue pick these up unchanged.
-    private static final String PREFS = "CapacitorStorage";
-    private static final String QUEUE_KEY = "agentmesh.geofence.queue";
+    // than to a private file of our own is what lets the TypeScript side pick
+    // these up without a bridge call.
+    //
+    // Package-private, not private: GeofencePlugin.drainNativeQueue() reads
+    // and clears this same key under LOCK below, so both sides need the exact
+    // file/key pair rather than each hand-maintaining its own copy that could
+    // drift.
+    static final String PREFS = "CapacitorStorage";
+
+    // Deliberately NOT the same key queue.ts's own read-modify-write cycle
+    // uses (agentmesh.geofence.queue). This process can be torn down the
+    // instant onReceive returns, with no coordination possible with the
+    // WebView's JS.
+    static final String QUEUE_KEY = "agentmesh.geofence.native_queue";
+
+    // Serializes this receiver's append() against GeofencePlugin's
+    // drainNativeQueue(). Both run in the app's main process (neither
+    // component declares android:process), so a plain in-process monitor is
+    // enough -- no cross-process lock needed. Without it, a read-then-write
+    // on either side can interleave with the other's write and silently
+    // drop a crossing; see drainNativeQueue()'s doc comment for the shape
+    // that bug used to take.
+    static final Object LOCK = new Object();
 
     @Override
     public void onReceive(Context context, Intent intent) {
@@ -84,30 +103,32 @@ public class GeofenceReceiver extends BroadcastReceiver {
 
     private void append(Context context, String workflowId, Location location) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        try {
-            String raw = prefs.getString(QUEUE_KEY, "[]");
-            JSONArray queue = new JSONArray(raw == null ? "[]" : raw);
+        synchronized (LOCK) {
+            try {
+                String raw = prefs.getString(QUEUE_KEY, "[]");
+                JSONArray queue = new JSONArray(raw == null ? "[]" : raw);
 
-            JSONObject fix = new JSONObject();
-            fix.put("workflowId", workflowId);
-            fix.put("lat", location.getLatitude());
-            fix.put("lng", location.getLongitude());
-            if (location.hasAccuracy()) {
-                fix.put("accuracyM", location.getAccuracy());
+                JSONObject fix = new JSONObject();
+                fix.put("workflowId", workflowId);
+                fix.put("lat", location.getLatitude());
+                fix.put("lng", location.getLongitude());
+                if (location.hasAccuracy()) {
+                    fix.put("accuracyM", location.getAccuracy());
+                }
+                // The OS's observation time, not now. The server orders fixes by
+                // this and ignores anything older than the last crossing it
+                // handled, which is what stops a late flush re-firing a run.
+                fix.put("recordedAt", iso8601(location.getTime()));
+                queue.put(fix);
+
+                // commit(), not apply(): this process may be torn down the moment
+                // onReceive returns, and an asynchronous write is not guaranteed
+                // to have reached disk by then. Losing the one event the whole
+                // feature exists for is not an acceptable trade for a few ms.
+                prefs.edit().putString(QUEUE_KEY, queue.toString()).commit();
+            } catch (Exception e) {
+                Log.e(TAG, "could not queue the crossing", e);
             }
-            // The OS's observation time, not now. The server orders fixes by
-            // this and ignores anything older than the last crossing it
-            // handled, which is what stops a late flush re-firing a run.
-            fix.put("recordedAt", iso8601(location.getTime()));
-            queue.put(fix);
-
-            // commit(), not apply(): this process may be torn down the moment
-            // onReceive returns, and an asynchronous write is not guaranteed
-            // to have reached disk by then. Losing the one event the whole
-            // feature exists for is not an acceptable trade for a few ms.
-            prefs.edit().putString(QUEUE_KEY, queue.toString()).commit();
-        } catch (Exception e) {
-            Log.e(TAG, "could not queue the crossing", e);
         }
     }
 

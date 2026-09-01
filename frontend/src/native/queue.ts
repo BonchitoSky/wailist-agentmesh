@@ -10,6 +10,7 @@
 // backlog cannot re-fire a crossing that was already handled. That is why
 // recordedAt is captured here, at observation time, and never at send time.
 import { Preferences } from "@capacitor/preferences";
+import { Geofence } from "./nativeGeofence";
 
 const QUEUE_KEY = "agentmesh.geofence.queue";
 
@@ -33,17 +34,21 @@ export interface Fix {
   recordedAt: string;
 }
 
-async function read(): Promise<Fix[]> {
-  const { value } = await Preferences.get({ key: QUEUE_KEY });
+// A corrupt queue must not brick the trigger. Losing the backlog is
+// recoverable; refusing to record anything ever again is not.
+function parseFixes(value: string | null): Fix[] {
   if (!value) return [];
   try {
     const parsed: unknown = JSON.parse(value);
     return Array.isArray(parsed) ? (parsed as Fix[]) : [];
   } catch {
-    // A corrupt queue must not brick the trigger. Losing the backlog is
-    // recoverable; refusing to record anything ever again is not.
     return [];
   }
+}
+
+async function read(): Promise<Fix[]> {
+  const { value } = await Preferences.get({ key: QUEUE_KEY });
+  return parseFixes(value);
 }
 
 async function write(fixes: Fix[]): Promise<void> {
@@ -55,7 +60,26 @@ export async function enqueue(fix: Fix): Promise<void> {
   await write(all.slice(-MAX_QUEUED));
 }
 
+// Migrates whatever GeofenceReceiver.java queued while the app was dead into
+// the main queue above. drainNativeQueue() reads and clears the native side's
+// queue in one atomic native call (synchronized against
+// GeofenceReceiver.append() on the Java side), so there is no read-then-write
+// window here for a concurrent append to land in and get silently dropped --
+// unlike a plain @capacitor/preferences read/write pair, which cannot
+// coordinate with a write happening outside the WebView at all. Anything
+// GeofenceReceiver appends after this call's clear starts a fresh queue and
+// is picked up whole on the next drainNative().
+async function drainNative(): Promise<void> {
+  const { value } = await Geofence.drainNativeQueue();
+  const snapshot = parseFixes(value);
+  if (snapshot.length === 0) return;
+
+  const all = [...(await read()), ...snapshot];
+  await write(all.slice(-MAX_QUEUED));
+}
+
 export async function pending(now = Date.now()): Promise<Fix[]> {
+  await drainNative();
   const fresh = (await read()).filter(
     (f) => now - Date.parse(f.recordedAt) < MAX_AGE_MS,
   );

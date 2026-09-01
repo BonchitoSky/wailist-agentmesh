@@ -27,6 +27,13 @@ export interface NativeGeofence {
   requestPermission(): Promise<PermissionResult>;
   /** This app's settings page -- the only way back after a refusal. */
   openSettings(): Promise<void>;
+  /**
+   * Atomically reads and clears GeofenceReceiver's native-side queue.
+   * Native, not @capacitor/preferences, because that queue is also written
+   * by GeofenceReceiver outside any WebView -- reading it any other way
+   * reintroduces the race this method exists to close. See queue.ts.
+   */
+  drainNativeQueue(): Promise<{ value: string }>;
 }
 
 export const Geofence = registerPlugin<NativeGeofence>("Geofence");
