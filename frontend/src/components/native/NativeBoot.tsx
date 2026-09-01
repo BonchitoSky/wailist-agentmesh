@@ -1,6 +1,6 @@
 "use client";
 import { useEffect } from "react";
-import { IS_NATIVE, setAuthToken } from "@/lib/nativeAuth";
+import { IS_NATIVE, setAuthToken, markAuthReady } from "@/lib/nativeAuth";
 
 // Restores the session the native shell persisted, once, on first mount.
 //
@@ -30,6 +30,17 @@ export function NativeBoot() {
         // viewer still works signed out; the alternative is a blank screen
         // with the reason visible only in logcat.
         console.error("native shell failed to boot", err);
+      })
+      .finally(() => {
+        // Unconditional, unlike the setAuthToken call above: authReady is a
+        // module-level, one-shot signal shared with every mount of this
+        // component, not per-mount state. Gating it on `cancelled` would
+        // permanently starve useAuth's auth.me() call if this effect were
+        // ever cleaned up before boot() settled -- not reachable today with
+        // NativeBoot mounted once in the root layout, but nothing enforces
+        // that invariant here, and a signal that can hang forever is cheap
+        // to just not build in the first place.
+        markAuthReady();
       });
     return () => {
       cancelled = true;

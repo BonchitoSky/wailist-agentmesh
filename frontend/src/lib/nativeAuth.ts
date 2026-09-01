@@ -20,6 +20,23 @@ export function setAuthToken(next: string | null): void {
   token = next;
 }
 
+// Resolves once NativeBoot has finished restoring (or failed to restore) the
+// persisted session. useAuth's first auth.me() call awaits this on native so
+// it never races the token restoration and asks "am I signed in?" before the
+// answer is even loaded -- which would show the sign-in screen to an
+// already-authenticated user until the next re-render happens to ask again.
+// Resolved immediately on the web, where there is nothing to wait for.
+let markReady: () => void = () => {};
+export const authReady: Promise<void> = IS_NATIVE
+  ? new Promise((resolve) => {
+      markReady = resolve;
+    })
+  : Promise.resolve();
+
+export function markAuthReady(): void {
+  markReady();
+}
+
 export function getAuthToken(): string | null {
   return token;
 }

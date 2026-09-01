@@ -58,6 +58,11 @@ const WRITE_RULES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
   { method: "DELETE", pattern: /^\/workflows\/[^/]+$/ },
   { method: "POST", pattern: /^\/workflows\/[^/]+\/deploy$/ },
   { method: "POST", pattern: /^\/workflows\/[^/]+\/build$/ },
+  { method: "PUT", pattern: /^\/workflows\/[^/]+\/schedule$/ },
+  { method: "DELETE", pattern: /^\/workflows\/[^/]+\/schedule$/ },
+  { method: "PUT", pattern: /^\/workflows\/[^/]+\/geofence$/ },
+  { method: "DELETE", pattern: /^\/workflows\/[^/]+\/geofence$/ },
+  { method: "GET", pattern: /^\/tendril\/console$/ },
 ];
 
 // `path` is the API path as written at the call site (leading slash, no

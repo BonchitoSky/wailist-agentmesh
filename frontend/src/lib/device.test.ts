@@ -118,7 +118,7 @@ const DEVICES: Array<{
     why: "rung 3 -- a laptop is a laptop, touchscreen or not",
   },
   {
-    name: "Claude Code browser pane (measured)",
+    name: "embedded dev-tool browser pane (measured)",
     signals: {
       // Measured on a fresh tab at 1280px: a touch-capable webview that would
       // fail any pointer-based check.

@@ -52,9 +52,21 @@ const minPingInterval = 5 * time.Second
 // Store.CreateRunWithCooldown, which is DB-backed and correct across replicas.
 // Worth not confusing the two: a run must never double-fire, whereas a ping
 // accepted twice costs one indexed UPDATE and changes nothing.
+// pingEntryTTL bounds how long a workflow's entry survives without another
+// ping. Well above minPingInterval so an active client never gets swept out
+// from under itself; its purpose is only to stop the map growing forever with
+// one permanent entry per workflow that has ever pinged.
+const pingEntryTTL = 10 * time.Minute
+
+// How often allow() bothers scanning the whole map for expired entries.
+// Amortizes the O(n) sweep across many calls instead of paying it, and
+// holding the lock for it, on every single accepted ping.
+const pingSweepInterval = time.Minute
+
 type pingLimiter struct {
-	mu   sync.Mutex
-	last map[string]time.Time
+	mu        sync.Mutex
+	last      map[string]time.Time
+	lastSweep time.Time
 }
 
 func (p *pingLimiter) allow(workflowID string, now time.Time) bool {
@@ -67,6 +79,14 @@ func (p *pingLimiter) allow(workflowID string, now time.Time) bool {
 		return false
 	}
 	p.last[workflowID] = now
+	if now.Sub(p.lastSweep) > pingSweepInterval {
+		for id, t := range p.last {
+			if now.Sub(t) > pingEntryTTL {
+				delete(p.last, id)
+			}
+		}
+		p.lastSweep = now
+	}
 	return true
 }
 

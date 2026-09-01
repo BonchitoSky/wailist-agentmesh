@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { auth, AuthUser } from "@/lib/api";
-import { IS_NATIVE, setAuthToken } from "@/lib/nativeAuth";
+import { IS_NATIVE, setAuthToken, authReady } from "@/lib/nativeAuth";
 
 const UI_COOKIE = "agentmesh_ui";
 const TTL = 60 * 60 * 24 * 7; // 7 days -- matches backend JWT TTL
@@ -20,8 +20,12 @@ export function useAuth() {
   const [user, setUser] = useState<AuthUser | null>(null);
 
   useEffect(() => {
-    auth
-      .me()
+    // On native, wait for NativeBoot to finish restoring (or fail to
+    // restore) the persisted token before asking who's signed in -- calling
+    // auth.me() first would race it and 401 with no Authorization header
+    // attached yet.
+    authReady
+      .then(() => auth.me())
       .then((u) => {
         setUICookie();
         setSignedIn(true);
@@ -51,7 +55,11 @@ export function useAuth() {
 
   const signUp = useCallback(
     async (email: string, password: string, name: string, org: string) => {
-      await auth.signUp(email, password, name, org);
+      const token = await auth.signUp(email, password, name, org);
+      if (token && IS_NATIVE) {
+        setAuthToken(token);
+        void import("@/native").then(({ shell }) => shell.onSignedIn(token));
+      }
       setUICookie();
       setSignedIn(true);
     },
@@ -60,6 +68,10 @@ export function useAuth() {
 
   const signOut = useCallback(async () => {
     await auth.signOut();
+    if (IS_NATIVE) {
+      setAuthToken(null);
+      void import("@/native").then(({ shell }) => shell.onSignedOut());
+    }
     clearUICookie();
     setSignedIn(false);
     setUser(null);

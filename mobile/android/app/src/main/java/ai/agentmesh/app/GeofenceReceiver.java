@@ -46,10 +46,19 @@ public class GeofenceReceiver extends BroadcastReceiver {
     private static final String TAG = "AgentMeshGeofence";
 
     // The store @capacitor/preferences uses on Android. Writing here rather
-    // than to a private file of our own is what lets the existing TypeScript
-    // queue pick these up unchanged.
+    // than to a private file of our own is what lets the TypeScript side pick
+    // these up without a bridge call.
     private static final String PREFS = "CapacitorStorage";
-    private static final String QUEUE_KEY = "agentmesh.geofence.queue";
+
+    // Deliberately NOT the same key queue.ts's own read-modify-write cycle
+    // uses (agentmesh.geofence.queue). This process can be torn down the
+    // instant onReceive returns, with no coordination possible with the
+    // WebView's JS -- if both sides read-modified-wrote the same array key,
+    // whichever finished last would silently clobber the other's write. This
+    // receiver only ever appends here; queue.ts's drainNative() migrates
+    // entries into the main queue in a way that tolerates a concurrent
+    // append instead of racing it.
+    private static final String QUEUE_KEY = "agentmesh.geofence.native_queue";
 
     @Override
     public void onReceive(Context context, Intent intent) {

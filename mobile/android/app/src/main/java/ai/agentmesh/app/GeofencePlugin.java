@@ -1,7 +1,6 @@
 package ai.agentmesh.app;
 
 import android.Manifest;
-import android.app.PendingIntent;
 import android.content.Intent;
 import android.net.Uri;
 import android.provider.Settings;
@@ -17,9 +16,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
-import com.google.android.gms.location.Geofence;
 import com.google.android.gms.location.GeofencingClient;
-import com.google.android.gms.location.GeofencingRequest;
 import com.google.android.gms.location.LocationServices;
 
 import java.util.Collections;
@@ -144,19 +141,6 @@ public class GeofencePlugin extends Plugin {
         call.resolve(out);
     }
 
-    private PendingIntent transitionIntent() {
-        Intent intent = new Intent(getContext(), GeofenceReceiver.class);
-        // FLAG_MUTABLE is required: the OS writes the transition details into
-        // this intent before delivering it. An immutable one arrives empty,
-        // which fails as a geofence that registers cleanly and then never
-        // reports anything -- the worst kind of bug to diagnose.
-        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            flags |= PendingIntent.FLAG_MUTABLE;
-        }
-        return PendingIntent.getBroadcast(getContext(), 0, intent, flags);
-    }
-
     @PluginMethod
     public void addGeofence(PluginCall call) {
         String id = call.getString("id");
@@ -173,31 +157,20 @@ public class GeofencePlugin extends Plugin {
             return;
         }
 
-        Geofence fence = new Geofence.Builder()
-                .setRequestId(id)
-                .setCircularRegion(lat, lng, radius.floatValue())
-                .setExpirationDuration(Geofence.NEVER_EXPIRE)
-                .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER | Geofence.GEOFENCE_TRANSITION_EXIT)
-                .build();
-
-        GeofencingRequest request = new GeofencingRequest.Builder()
-                // No initial trigger. By default the OS reports the current
-                // state the moment a fence is registered, so setting one while
-                // already inside it fires an "entry" the user never made. The
-                // server treats a first fix as a baseline for the same reason:
-                // both layers have to agree that being somewhere is not the
-                // same as arriving there.
-                .setInitialTrigger(0)
-                .addGeofences(Collections.singletonList(fence))
-                .build();
-
-        try {
-            client.addGeofences(request, transitionIntent())
-                    .addOnSuccessListener(unused -> call.resolve())
-                    .addOnFailureListener(e -> call.reject("could not register the geofence: " + e.getMessage()));
-        } catch (SecurityException e) {
-            call.reject("location permission was revoked: " + e.getMessage());
-        }
+        // Shared with BootReceiver so a boot-time re-registration builds the
+        // exact same request this live call does.
+        GeofenceRegistrar.register(getContext(), client, id, lat, lng, radius, (success, error) -> {
+            if (!success) {
+                call.reject("could not register the geofence: " + error);
+                return;
+            }
+            // Persisted so BootReceiver can re-register this fence:
+            // GeofencingClient does not survive a reboot on its own, and
+            // BootReceiver has no WebView to ask for these values the way
+            // this call did.
+            GeofenceStore.save(getContext(), id, lat, lng, radius);
+            call.resolve();
+        });
     }
 
     @PluginMethod
@@ -208,7 +181,10 @@ public class GeofencePlugin extends Plugin {
             return;
         }
         client.removeGeofences(Collections.singletonList(id))
-                .addOnSuccessListener(unused -> call.resolve())
+                .addOnSuccessListener(unused -> {
+                    GeofenceStore.remove(getContext(), id);
+                    call.resolve();
+                })
                 .addOnFailureListener(e -> call.reject("could not remove the geofence: " + e.getMessage()));
     }
 }

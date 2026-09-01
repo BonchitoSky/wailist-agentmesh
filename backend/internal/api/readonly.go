@@ -59,6 +59,13 @@ var readOnlyBlocked = []struct {
 	{http.MethodDelete, regexp.MustCompile(`^/workflows/[^/]+$`)},
 	{http.MethodPost, regexp.MustCompile(`^/workflows/[^/]+/deploy$`)},
 	{http.MethodPost, regexp.MustCompile(`^/workflows/[^/]+/build$`)},
+	{http.MethodPut, regexp.MustCompile(`^/workflows/[^/]+/schedule$`)},
+	{http.MethodDelete, regexp.MustCompile(`^/workflows/[^/]+/schedule$`)},
+	{http.MethodPut, regexp.MustCompile(`^/workflows/[^/]+/geofence$`)},
+	{http.MethodDelete, regexp.MustCompile(`^/workflows/[^/]+/geofence$`)},
+	// GET, but find-or-creates a workflow row server-side, so it belongs on
+	// this list despite the general rule that reads are exempt.
+	{http.MethodGet, regexp.MustCompile(`^/tendril/console$`)},
 }
 
 // blocksWrite reports whether read-only mode rejects this method and path.

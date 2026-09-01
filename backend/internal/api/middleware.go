@@ -79,7 +79,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		// browser-based agent or crawler can complete a paid call at all --
 		// the preflight rejects the payment header before the request is
 		// ever sent.
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Payment-Signature, X-Payment, X-Relay-Method, X-Relay-Body")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Payment-Signature, X-Payment, X-Relay-Method, X-Relay-Body, X-AgentMesh-Client")
 		// Response headers are invisible to browser JS unless exposed:
 		// Payment-Required carries the 402 challenge (base64 JSON), and the
 		// three settlement headers carry the inbound/outbound tx ids the run

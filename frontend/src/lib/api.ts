@@ -104,7 +104,7 @@ export const auth = {
     password: string,
     name: string,
     org: string,
-  ): Promise<void> => {
+  ): Promise<string | null> => {
     if (BASE) {
       const res = await apiFetch(`${BASE}/auth/signup`, {
         method: "POST",
@@ -114,13 +114,14 @@ export const auth = {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "sign up failed");
-      return;
+      return data.token ?? null;
     }
     void email;
     void password;
     void name;
     void org;
     await delay(500);
+    return null;
   },
 
   me: async (): Promise<AuthUser> => {

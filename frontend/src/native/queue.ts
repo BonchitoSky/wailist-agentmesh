@@ -13,6 +13,15 @@ import { Preferences } from "@capacitor/preferences";
 
 const QUEUE_KEY = "agentmesh.geofence.queue";
 
+// GeofenceReceiver.java writes here, never to QUEUE_KEY above. It runs with no
+// WebView and cannot call into this module, so a crossing landing while the
+// app is dead has to go through SharedPreferences instead -- and if it used
+// QUEUE_KEY, its read-modify-write could race the one below and silently
+// clobber whichever side wrote second. A separate key sidesteps needing a
+// cross-process lock: Java only ever appends here, and drainNative() below is
+// written to be safe against that append landing mid-drain.
+const NATIVE_QUEUE_KEY = "agentmesh.geofence.native_queue";
+
 // Bounded so a phone that is offline for a week cannot grow this without
 // limit. The oldest fixes are the least interesting -- the server ignores
 // anything older than the last crossing it handled anyway -- so the cap drops
@@ -33,17 +42,21 @@ export interface Fix {
   recordedAt: string;
 }
 
-async function read(): Promise<Fix[]> {
-  const { value } = await Preferences.get({ key: QUEUE_KEY });
+// A corrupt queue must not brick the trigger. Losing the backlog is
+// recoverable; refusing to record anything ever again is not.
+function parseFixes(value: string | null): Fix[] {
   if (!value) return [];
   try {
     const parsed: unknown = JSON.parse(value);
     return Array.isArray(parsed) ? (parsed as Fix[]) : [];
   } catch {
-    // A corrupt queue must not brick the trigger. Losing the backlog is
-    // recoverable; refusing to record anything ever again is not.
     return [];
   }
+}
+
+async function read(): Promise<Fix[]> {
+  const { value } = await Preferences.get({ key: QUEUE_KEY });
+  return parseFixes(value);
 }
 
 async function write(fixes: Fix[]): Promise<void> {
@@ -55,7 +68,35 @@ export async function enqueue(fix: Fix): Promise<void> {
   await write(all.slice(-MAX_QUEUED));
 }
 
+// Migrates whatever GeofenceReceiver.java queued while the app was dead into
+// the main queue above, then re-reads NATIVE_QUEUE_KEY and writes back only
+// the tail that arrived after the snapshot was taken -- not an empty array.
+// Java only ever appends (JSONArray.put), so the live value is always the
+// snapshot plus zero or more new entries at the end; truncating to that tail
+// instead of clearing outright means a crossing delivered in the exact window
+// between the snapshot read and this write is kept, not lost.
+async function drainNative(): Promise<void> {
+  const { value } = await Preferences.get({ key: NATIVE_QUEUE_KEY });
+  const snapshot = parseFixes(value);
+  if (snapshot.length === 0) return;
+
+  const all = [...(await read()), ...snapshot];
+  await write(all.slice(-MAX_QUEUED));
+
+  const { value: current } = await Preferences.get({ key: NATIVE_QUEUE_KEY });
+  const remaining = parseFixes(current).slice(snapshot.length);
+  if (remaining.length === 0) {
+    await Preferences.remove({ key: NATIVE_QUEUE_KEY });
+  } else {
+    await Preferences.set({
+      key: NATIVE_QUEUE_KEY,
+      value: JSON.stringify(remaining),
+    });
+  }
+}
+
 export async function pending(now = Date.now()): Promise<Fix[]> {
+  await drainNative();
   const fresh = (await read()).filter(
     (f) => now - Date.parse(f.recordedAt) < MAX_AGE_MS,
   );
