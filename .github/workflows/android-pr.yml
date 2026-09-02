@@ -69,12 +69,6 @@ jobs:
           NEXT_PUBLIC_API_URL: https://ci.invalid
         run: npm run sync
 
-      # gradlew is committed mode 100644; without this Gradle is simply not
-      # executable on the runner.
-      - name: Make the Gradle wrapper executable
-        working-directory: mobile/android
-        run: chmod +x gradlew
-
       # assembleDebug rather than a lint or a compile task: the manifest merge
       # and the packaging step are exactly where the failure this job exists
       # for shows up.
