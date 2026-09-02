@@ -111,6 +111,21 @@ jobs:
           name: agentmesh-release-apk
           path: apk
 
+      # Release is titled "agentmesh <version>" (tag minus the android-v
+      # prefix), not the raw tag -- android-v0.0.1 reads as an internal ref,
+      # not a release name. Anything still on a 0.x version is pre-beta by
+      # convention, so it's flagged prerelease automatically; drop the 0.
+      # prefix once there's a real 1.0.0 to cut.
+      - name: Compute the release name and prerelease flag
+        id: relname
+        run: |
+          version="${GITHUB_REF_NAME#android-v}"
+          echo "name=agentmesh $version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            0.*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       # The .apk, unlike the .aab, needs no store review to matter -- it's
       # a real signed installable, so a tag push attaches it directly to a
       # GitHub Release for sideload distribution (demo builds, testers
@@ -123,6 +138,8 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: apk/*.apk
+          name: ${{ steps.relname.outputs.name }}
+          prerelease: ${{ steps.relname.outputs.prerelease }}
           # The tag itself already went through review before being pushed
           # (see the "gated on an explicit release tag" note above); no
           # extra approval step belongs here.
