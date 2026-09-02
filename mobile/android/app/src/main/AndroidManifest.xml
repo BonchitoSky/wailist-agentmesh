@@ -59,7 +59,7 @@
         </receiver>
     </application>
 
-    <!-- Permissions -- deliberate probe for #129, reverted in the next commit -->
+    <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
 
