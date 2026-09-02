@@ -37,10 +37,14 @@ jobs:
             frontend/package-lock.json
             mobile/package-lock.json
 
+      # 21, not 17: Capacitor 7's capacitor-android module sets its source
+      # release to 21, and javac rejects it outright on an older JDK
+      # ("invalid source release: 21"). A local build can pass on a newer JDK
+      # and hide this -- CI is the thing that pins it.
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
           cache: gradle
 
       - name: Install frontend dependencies
