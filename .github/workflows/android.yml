@@ -14,13 +14,16 @@ concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: false
 
-permissions:
-  contents: write # only needed to attach the APK to a GitHub Release on a tag push
-
 jobs:
   bundle:
     name: android / signed bundle
     runs-on: ubuntu-latest
+    # No contents: write here -- this job handles the keystore secrets, and
+    # the third-party release action runs in a separate job below instead
+    # of sharing this filesystem/env, on the principle that a step trusted
+    # with repo-write shouldn't also share a runner with the signing key.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -91,17 +94,35 @@ jobs:
       # location gets a manual review, and a release should be a decision
       # somebody makes, not a side effect of pushing a tag. Take the .aab
       # artefact above to the internal-testing track by hand.
-      #
-      # The .apk, unlike the .aab, needs no store review to matter -- it's
-      # a real signed installable, so a tag push also attaches it directly
-      # to a GitHub Release for sideload distribution (demo builds, testers
-      # without a Play internal-testing slot). Skipped on a manual
-      # workflow_dispatch run, which has no tag to name a release after.
-      - name: Attach the signed APK to a GitHub Release
-        if: startsWith(github.ref, 'refs/tags/android-v')
-        uses: softprops/action-gh-release@v2
+
+  release:
+    name: android / attach APK to release
+    needs: bundle
+    if: startsWith(github.ref, 'refs/tags/android-v')
+    runs-on: ubuntu-latest
+    # Only this job gets contents: write, and only for the release step --
+    # it never touches the keystore or any other secret, so a compromised
+    # or malicious third-party action here has no signing key to reach for.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          files: mobile/android/app/build/outputs/apk/release/*.apk
+          name: agentmesh-release-apk
+          path: apk
+
+      # The .apk, unlike the .aab, needs no store review to matter -- it's
+      # a real signed installable, so a tag push attaches it directly to a
+      # GitHub Release for sideload distribution (demo builds, testers
+      # without a Play internal-testing slot).
+      - name: Attach the signed APK to a GitHub Release
+        # Pinned to a commit SHA (v2.6.2), not a mutable @v2 tag -- this
+        # step holds contents: write, so a tag it trusts blindly is a
+        # supply-chain foothold. Bump via Dependabot / by hand, not by
+        # re-floating @v2.
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: apk/*.apk
           # The tag itself already went through review before being pushed
           # (see the "gated on an explicit release tag" note above); no
           # extra approval step belongs here.
