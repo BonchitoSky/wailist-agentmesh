@@ -91,3 +91,6 @@ frontend/next-env.d.ts
 
 # graphify knowledge-graph output (local cache + generated viz, not part of the shipped project)
 /graphify-out/
+
+# root-level plans folder: scratch planning docs, not part of shipped project
+/plans/
