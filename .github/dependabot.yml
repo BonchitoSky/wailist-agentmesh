@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Tracks pinned-SHA actions (softprops/action-gh-release etc.) so a bump
+  # is a reviewable PR, not a silent re-float of a mutable tag.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
