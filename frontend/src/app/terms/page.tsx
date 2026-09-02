@@ -114,6 +114,9 @@ export default function TermsPage() {
             flexWrap: "wrap",
           }}
         >
+          <Link href="/privacy" style={linkStyle}>
+            Privacy Policy →
+          </Link>
           <Link href="/refund-policy" style={linkStyle}>
             Cancellation &amp; Refund Policy →
           </Link>
