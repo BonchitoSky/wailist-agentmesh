@@ -1,4 +1,4 @@
-package com.getcapacitor.myapp;
+package ai.agentmesh.app;
 
 import static org.junit.Assert.*;
 
