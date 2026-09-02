@@ -5,6 +5,13 @@ AGENTS.md
 CLAUDE.md
 .claude/
 
+# Android signing keystore -- real key material, never belongs in git no
+# matter where it's generated (mobile/android/.gitignore already covers it
+# scoped to that dir; this catches one dropped at the repo root instead).
+release.keystore
+*.jks
+*.keystore
+
 # dependencies
 /frontend/node_modules
 /frontend/.pnpm-store
