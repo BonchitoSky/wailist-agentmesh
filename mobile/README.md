@@ -127,6 +127,49 @@ does not nag, the feature simply shows as off, and everything else keeps
 working. Google Play reviews background-location use specifically and will ask
 to see that disclosure.
 
+## WebView hardening
+
+Two things, and one of them is a trap.
+
+**WebView debugging is off in release builds, and on in debug builds.** That is
+already true without configuring anything: Capacitor defaults
+`android.webContentsDebuggingEnabled` to whether the app is debuggable
+(`CapConfig` reads `FLAG_DEBUGGABLE`), which is exactly the behaviour wanted.
+
+**Do not set that key in `capacitor.config.ts`.** It looks like the obvious
+hardening and it is a regression either way: `false` also removes
+`chrome://inspect` from debug builds, for no gain, since release was already
+closed; `true` ships a release whose WebView, network traffic and storage are
+readable by anyone with a USB cable. The file is one static value baked in at
+`cap sync` time and cannot vary by build type, so there is no correct value to
+put there. `MainActivity` re-asserts the safe answer natively after
+`super.onCreate`, so a future edit to the config cannot ship an inspectable
+release by accident.
+
+**A Content-Security-Policy ships in the native bundle only.** It is a `<meta>`
+tag rather than a header, because the bundle is files on the device and there
+is no server to send one; it is gated on `NEXT_PUBLIC_NATIVE_CLIENT` so the web
+app, which sits behind Vercel's own headers, never sees it. Built by
+`frontend/src/lib/csp.ts`.
+
+The directive that earns its keep is `connect-src`, scoped to the API origin
+this build was compiled against -- **both `https://` and `wss://`**, since the
+Tendril terminal opens a WebSocket and a policy naming only the https origin
+silently blocks it. `font-src` is closed entirely, which is safe because the
+fonts are self-hosted, and is worth keeping closed so a future dependency
+cannot quietly reintroduce a font-CDN fetch.
+
+What it does not do, stated plainly: `script-src` and `style-src` both carry
+`'unsafe-inline'`. Next's static export inlines its hydration payload, and the
+nonce that would replace it must be minted per response by a server there is
+none of; the app also styles with inline `style` attributes throughout. So this
+is not a defence against XSS in the app's own code, and should not be described
+as one.
+
+`frame-ancestors` is deliberately absent: a `<meta>`-delivered policy ignores
+it by specification, and including it only produces a console error on every
+launch.
+
 ## Release
 
 Not on the Railway/Vercel push pipeline. Signed AAB via Gradle, gated on a
