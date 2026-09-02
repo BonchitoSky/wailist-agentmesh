@@ -9,14 +9,14 @@ importers:
   .:
     dependencies:
       '@capacitor/core':
-        specifier: ^7.6.8
-        version: 7.6.8
+        specifier: ^8.5.0
+        version: 8.5.1
       '@capacitor/network':
-        specifier: ^7.0.4
-        version: 7.0.4(@capacitor/core@7.6.8)
+        specifier: ^8.0.1
+        version: 8.0.1(@capacitor/core@8.5.1)
       '@capacitor/preferences':
-        specifier: ^7.0.4
-        version: 7.0.4(@capacitor/core@7.6.8)
+        specifier: ^8.0.1
+        version: 8.0.1(@capacitor/core@8.5.1)
       '@cashfreepayments/cashfree-js':
         specifier: ^1.0.7
         version: 1.0.7
@@ -165,18 +165,18 @@ packages:
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
 
-  '@capacitor/core@7.6.8':
-    resolution: {integrity: sha512-x1xfxvNcTSnj6OoYaAB0n0a0HRvi5f2YjcVnMLxpMhbHDgGDAzzN9z8cnPCYV+SKTvqGF1hezHm82Op32XaAGg==}
+  '@capacitor/core@8.5.1':
+    resolution: {integrity: sha512-IOQ7ynG1qgrJ/RLuCO3WgyRGmkmmG/cdStRR4ftU2dWEN1FdtLrnI/XpZmZuUsOEHEnzBRJY/PmRH8eTLiXfhA==}
 
-  '@capacitor/network@7.0.4':
-    resolution: {integrity: sha512-fNhN3968AQWMnzasPJ0B8e+nyk7+R6V9PWIBQWSQRHrKndDgWRHpxkjEzJPgnJr3EjnKLjbwO+UYy+EwBlGs3A==}
+  '@capacitor/network@8.0.1':
+    resolution: {integrity: sha512-9xK/FHFmzKGanB6BdoSZOzXk8vF0OFVQSQ4PAsIrzAzLuXHryO317qy8dcHVpgxYeuZq2noI0My9z1DvVDi/9w==}
     peerDependencies:
-      '@capacitor/core': '>=7.0.0'
+      '@capacitor/core': '>=8.0.0'
 
-  '@capacitor/preferences@7.0.4':
-    resolution: {integrity: sha512-TJhkwaI2RCs/iDC9PjNczZV4h6JM4gUtTuKMeFdy0OwGgFEHf4TrtW2mFMc1TnPDalYQ91p9NT+UKgiJs9/xtg==}
+  '@capacitor/preferences@8.0.1':
+    resolution: {integrity: sha512-T6no3ebi79XJCk91U3Jp/liJUwgBdvHR+s6vhvPkPxSuch7z3zx5Rv1bdWM6sWruNx+pViuEGqZvbfCdyBvcHQ==}
     peerDependencies:
-      '@capacitor/core': '>=7.0.0'
+      '@capacitor/core': '>=8.0.0'
 
   '@cashfreepayments/cashfree-js@1.0.7':
     resolution: {integrity: sha512-WRhjGdUgkPdWbq0YoMsi6hRqyT4XTIGUMNnATQsfz0GIDFP2sjtVon/kcihDVtO6pzEZrjded62Do9xK2VkjPQ==}
@@ -2603,17 +2603,17 @@ snapshots:
     dependencies:
       css-tree: 3.2.1
 
-  '@capacitor/core@7.6.8':
+  '@capacitor/core@8.5.1':
     dependencies:
       tslib: 2.8.1
 
-  '@capacitor/network@7.0.4(@capacitor/core@7.6.8)':
+  '@capacitor/network@8.0.1(@capacitor/core@8.5.1)':
     dependencies:
-      '@capacitor/core': 7.6.8
+      '@capacitor/core': 8.5.1
 
-  '@capacitor/preferences@7.0.4(@capacitor/core@7.6.8)':
+  '@capacitor/preferences@8.0.1(@capacitor/core@8.5.1)':
     dependencies:
-      '@capacitor/core': 7.6.8
+      '@capacitor/core': 8.5.1
 
   '@cashfreepayments/cashfree-js@1.0.7': {}
 
