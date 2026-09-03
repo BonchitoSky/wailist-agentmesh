@@ -39,7 +39,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22, not 20: Capacitor 8's CLI hard-fails on anything older
+          # ("The Capacitor CLI requires NodeJS >=22.0.0"), and it fails
+          # after the web bundle is built, so the job burns two minutes
+          # before saying so.
+          node-version: 22
           cache: npm
           cache-dependency-path: |
             frontend/package-lock.json
