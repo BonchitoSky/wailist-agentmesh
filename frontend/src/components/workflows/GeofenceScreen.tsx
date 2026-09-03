@@ -43,6 +43,12 @@ type Status =
   | { kind: "error"; message: string }
   | { kind: "saved" };
 
+// The two refusal states `requestBackgroundLocation` (native/permissions.ts)
+// can leave a screen in. Kept separate from Status: whether the server has a
+// fence and whether the OS is watching it are two different facts, and a
+// permission refusal must not read as a save that failed.
+type PermissionState = "denied" | "denied-permanently";
+
 // Long enough to get a real fix rather than the last cached one, short enough
 // that a phone indoors with no sky in view gives up and says so.
 const FIX_TIMEOUT_MS = 15_000;
@@ -57,6 +63,12 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
   const [accuracyM, setAccuracyM] = useState<number | null>(null);
   const [radiusM, setRadiusM] = useState<number>(150);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  // Whether the OS is actually watching the zone just saved. null on web
+  // (the question does not apply there) and before the first native save in
+  // this session -- shell.setGeofence is the only thing that learns the
+  // answer, so there is nothing honest to show before it has run once.
+  const [deviceArmed, setDeviceArmed] = useState<boolean | null>(null);
+  const [permission, setPermission] = useState<PermissionState | null>(null);
 
   // The zone as the server currently has it, or null if there is none. All
   // three fields move together -- a partly configured zone means nothing.
@@ -154,14 +166,27 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
       return;
     }
     setStatus({ kind: "saving" });
+    // Stale until the native path below learns otherwise. A save that fails
+    // outright leaves this at whatever a previous session last reported,
+    // which is fine -- the error notice takes over the message either way.
+    setDeviceArmed(null);
     const fence = { lat: here.lat, lng: here.lng, radiusM: check.radiusM };
     try {
       if (IS_NATIVE) {
         // The shell's path: it writes to the server first and only then arms
         // Android's GeofencingClient, so a rejected zone never leaves the
         // device watching a boundary the server will not act on.
+        //
+        // The return is whether the OS actually armed the fence -- false
+        // means background location was never granted (permissions.ts's
+        // requestBackgroundLocation is never called anywhere else in this
+        // app, so that is the common case for a first save). Discarding it
+        // would report success on a trigger that will never fire.
         const { shell } = await import("@/native");
-        await shell.setGeofence(workflowId, fence);
+        const armed = await shell.setGeofence(workflowId, fence);
+        if (!liveRef.current) return;
+        setDeviceArmed(armed);
+        if (armed) setPermission(null);
       } else {
         await workflows.setGeofence(workflowId, fence);
       }
@@ -194,6 +219,39 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
     }
   }, [here, radiusM, workflowId]);
 
+  // Asks for background location and, if granted, re-arms the OS watch for
+  // the zone the server already has. The server write from the save above
+  // already succeeded -- shell.setGeofence's PUT is idempotent -- so this
+  // only needs to redo the native half.
+  //
+  // Not exposed on web: requestBackgroundLocation lives in native/permissions
+  // and calls a plugin that only exists inside the Capacitor shell.
+  const requestAccess = useCallback(async () => {
+    if (!IS_NATIVE) return;
+    const perms = await import("@/native/permissions");
+    if (permission === "denied-permanently") {
+      // Android will not show the system dialog again after an outright
+      // refusal -- Settings is the only way back.
+      await perms.openSettings();
+      return;
+    }
+    const result = await perms.requestBackgroundLocation();
+    if (!liveRef.current) return;
+    if (result !== "granted") {
+      setPermission(result);
+      return;
+    }
+    setPermission(null);
+    if (!saved) return;
+    const { shell } = await import("@/native");
+    const armed = await shell.setGeofence(workflowId, {
+      lat: saved.centre.lat,
+      lng: saved.centre.lng,
+      radiusM: saved.radiusM,
+    });
+    if (liveRef.current) setDeviceArmed(armed);
+  }, [permission, saved, workflowId]);
+
   const clear = useCallback(async () => {
     setStatus({ kind: "clearing" });
     try {
@@ -217,6 +275,9 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
           : w,
       );
       setStatus({ kind: "idle" });
+      // Nothing left to be armed or refused about once the zone is gone.
+      setDeviceArmed(null);
+      setPermission(null);
     } catch (err: unknown) {
       if (!liveRef.current) return;
       setStatus({
@@ -339,7 +400,32 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
       {status.kind === "error" && (
         <Notice tone="danger">{status.message}</Notice>
       )}
-      {status.kind === "saved" && (
+      {/* Two different facts get two different notices: the server can hold
+          a fence the phone is not watching, and telling the user "saved"
+          when nothing will ever fire is the exact bug this screen exists to
+          not have. deviceArmed is only ever false here on native -- the web
+          branch of save() never touches it, so it stays at its initial
+          null. */}
+      {status.kind === "saved" && deviceArmed === false && (
+        <Notice tone="danger">
+          Zone saved, but this phone is not watching it yet.{" "}
+          {permission === "denied-permanently"
+            ? "Location access was refused, and Android will not ask again from inside the app."
+            : "AgentMesh needs “Allow all the time” location access to notice a crossing while it's closed."}
+          <div style={{ marginTop: 8 }}>
+            <button
+              type="button"
+              onClick={requestAccess}
+              style={{ ...ghostBtn, ...touchTarget }}
+            >
+              {permission === "denied-permanently"
+                ? "Open Settings"
+                : "Turn on location access"}
+            </button>
+          </div>
+        </Notice>
+      )}
+      {status.kind === "saved" && deviceArmed !== false && (
         <Notice tone="ok">
           Zone saved. The next reading sets the starting point, so being here
           right now will not count as an arrival you did not make.
