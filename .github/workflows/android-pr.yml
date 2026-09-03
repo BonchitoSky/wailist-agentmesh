@@ -16,6 +16,14 @@ on:
       # it is shipped by this app and nothing else.
       - "mobile/**"
       - "frontend/src/native/**"
+      # A Capacitor plugin can be added or bumped without touching a line
+      # under frontend/src/native, and it still changes what the APK
+      # bundles -- so the frontend manifest and both lockfiles trigger this
+      # too. mobile/package.json and its lockfile are already covered by
+      # mobile/**.
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "frontend/pnpm-lock.yaml"
       - ".github/workflows/android-pr.yml"
 
 concurrency:
