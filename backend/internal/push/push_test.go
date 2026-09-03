@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -236,8 +237,11 @@ func (f *fakeStore) DeleteDeviceTokenByValue(_ context.Context, token string) er
 }
 
 // Points the package at a fake FCM and a fake token endpoint for one test,
-// restoring the real ones afterwards.
-func withFakeFCM(t *testing.T, fcmStatus int) *fakeStore {
+// restoring the real ones afterwards. errorCode, when non-empty, is sent
+// back as error.details[].errorCode in FCM's real HTTP v1 shape -- send()
+// reads that field, not the bare HTTP status, to decide whether a token is
+// dead.
+func withFakeFCM(t *testing.T, fcmStatus int, errorCode string) *fakeStore {
 	t.Helper()
 	_, pemKey := testKey(t)
 
@@ -249,6 +253,10 @@ func withFakeFCM(t *testing.T, fcmStatus int) *fakeStore {
 
 	fcmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(fcmStatus)
+		if fcmStatus < 300 || errorCode == "" {
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"error":{"status":"UNKNOWN","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":%q}]}}`, errorCode)
 	}))
 	t.Cleanup(fcmSrv.Close)
 
@@ -279,19 +287,33 @@ func withFakeFCM(t *testing.T, fcmStatus int) *fakeStore {
 
 func TestDeliver(t *testing.T) {
 	t.Run("a rejected token is dropped", func(t *testing.T) {
-		// 404 UNREGISTERED: the app was uninstalled or the token rotated.
-		// Keeping the row would mean retrying a guaranteed failure forever.
-		store := withFakeFCM(t, http.StatusNotFound)
+		// 404 with errorCode UNREGISTERED: the app was uninstalled or the
+		// token rotated. Keeping the row would mean retrying a guaranteed
+		// failure forever.
+		store := withFakeFCM(t, http.StatusNotFound, "UNREGISTERED")
 		Deliver(context.Background(), store, "u1", Notification{Title: "t", Body: "b"})
 		if len(store.deleted) != 1 || store.deleted[0] != "tok_live" {
 			t.Fatalf("deleted = %v, want [tok_live]", store.deleted)
 		}
 	})
 
+	// The regression this guards: an earlier version treated EVERY 400 as a
+	// dead token. INVALID_ARGUMENT covers a malformed request field at least
+	// as often as a malformed token -- a payload bug on our side must not
+	// delete a live registration, let alone every registration a run's send
+	// loop touches.
+	t.Run("a malformed-request response keeps the token", func(t *testing.T) {
+		store := withFakeFCM(t, http.StatusBadRequest, "INVALID_ARGUMENT")
+		Deliver(context.Background(), store, "u1", Notification{Title: "t", Body: "b"})
+		if len(store.deleted) != 0 {
+			t.Fatalf("deleted = %v, want nothing dropped", store.deleted)
+		}
+	})
+
 	t.Run("a transient failure keeps the token", func(t *testing.T) {
 		// 503 is FCM having a bad day, not a verdict on the token. Dropping it
 		// would cost the user their registration over somebody else's outage.
-		store := withFakeFCM(t, http.StatusServiceUnavailable)
+		store := withFakeFCM(t, http.StatusServiceUnavailable, "UNAVAILABLE")
 		Deliver(context.Background(), store, "u1", Notification{Title: "t", Body: "b"})
 		if len(store.deleted) != 0 {
 			t.Fatalf("deleted = %v, want nothing dropped", store.deleted)
@@ -299,7 +321,7 @@ func TestDeliver(t *testing.T) {
 	})
 
 	t.Run("a rate limit keeps the token", func(t *testing.T) {
-		store := withFakeFCM(t, http.StatusTooManyRequests)
+		store := withFakeFCM(t, http.StatusTooManyRequests, "QUOTA_EXCEEDED")
 		Deliver(context.Background(), store, "u1", Notification{Title: "t", Body: "b"})
 		if len(store.deleted) != 0 {
 			t.Fatalf("deleted = %v, want nothing dropped", store.deleted)
@@ -307,7 +329,7 @@ func TestDeliver(t *testing.T) {
 	})
 
 	t.Run("a success drops nothing", func(t *testing.T) {
-		store := withFakeFCM(t, http.StatusOK)
+		store := withFakeFCM(t, http.StatusOK, "")
 		Deliver(context.Background(), store, "u1", Notification{Title: "t", Body: "b"})
 		if len(store.deleted) != 0 {
 			t.Fatalf("deleted = %v, want nothing dropped", store.deleted)
@@ -315,7 +337,7 @@ func TestDeliver(t *testing.T) {
 	})
 
 	t.Run("no devices means nothing is sent", func(t *testing.T) {
-		store := withFakeFCM(t, http.StatusOK)
+		store := withFakeFCM(t, http.StatusOK, "")
 		store.tokens = nil
 		// Must not panic and must not reach the network.
 		Deliver(context.Background(), store, "u1", Notification{Title: "t", Body: "b"})
@@ -323,12 +345,48 @@ func TestDeliver(t *testing.T) {
 }
 
 func TestNotifyRunFinishedRespectsTheRule(t *testing.T) {
-	store := withFakeFCM(t, http.StatusNotFound)
+	store := withFakeFCM(t, http.StatusNotFound, "UNREGISTERED")
 	// A manual success must not send at all, so the 404 above should never be
 	// reached and nothing should be dropped.
 	NotifyRunFinished(context.Background(), store, "u1", "wf_1", "wf", "run_1", "manual", models.RunStatusSuccess)
 	if len(store.deleted) != 0 {
 		t.Fatalf("a manual success reached FCM; deleted = %v", store.deleted)
+	}
+}
+
+// fcmErrorCode reads the field that actually distinguishes a dead token from
+// a malformed request -- error.details[].errorCode -- and falls back to
+// error.status when a response carries no details at all.
+func TestFcmErrorCode(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			"UNREGISTERED in details",
+			`{"error":{"status":"NOT_FOUND","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"UNREGISTERED"}]}}`,
+			"UNREGISTERED",
+		},
+		{
+			"INVALID_ARGUMENT in details, distinct from UNREGISTERED",
+			`{"error":{"status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.firebase.fcm.v1.FcmError","errorCode":"INVALID_ARGUMENT"}]}}`,
+			"INVALID_ARGUMENT",
+		},
+		{
+			"falls back to top-level status with no details",
+			`{"error":{"status":"UNAVAILABLE"}}`,
+			"UNAVAILABLE",
+		},
+		{"empty body", ``, ""},
+		{"not JSON at all", `<html>502 Bad Gateway</html>`, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := fcmErrorCode([]byte(c.body)); got != c.want {
+				t.Fatalf("fcmErrorCode(%q) = %q, want %q", c.body, got, c.want)
+			}
+		})
 	}
 }
 

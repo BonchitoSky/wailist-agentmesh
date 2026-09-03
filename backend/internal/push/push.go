@@ -21,6 +21,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -195,8 +196,11 @@ func Deliver(ctx context.Context, store TokenStore, userID string, n Notificatio
 }
 
 // send posts one message. The bool reports whether FCM considers the token
-// permanently dead, which is a different question from whether the send failed:
-// a timeout is worth retrying next time, an unregistered token never is.
+// permanently dead, which is a different question from whether the send
+// failed: a timeout is worth retrying next time, an unregistered token never
+// is. Decided from FCM's own error code in the response body (see
+// fcmErrorCode), not from the HTTP status alone -- a 400 covers a malformed
+// request as often as a malformed token.
 func send(ctx context.Context, projectID, accessToken, deviceToken string, n Notification) (dead bool, err error) {
 	body, err := json.Marshal(map[string]any{
 		"message": map[string]any{
@@ -237,13 +241,57 @@ func send(ctx context.Context, projectID, accessToken, deviceToken string, n Not
 		return false, nil
 	}
 
-	// 404 UNREGISTERED and 400 INVALID_ARGUMENT are the two verdicts meaning
-	// "this token will never work again". Everything else -- 401, 429, 5xx --
-	// is transient or ours to fix, and must not cost the user a registration.
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
-		return true, fmt.Errorf("fcm rejected the token (%d)", resp.StatusCode)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+
+	// FCM's own verdict, not the HTTP status, decides whether a token is
+	// dead. A 400 is INVALID_ARGUMENT by Google's error table, and that
+	// covers a malformed request field -- our bug -- at least as often as a
+	// malformed token; only an errorCode of UNREGISTERED (which Google
+	// returns as a 404) means the app instance is gone and the token will
+	// never work again. Treating every 400 as dead, as an earlier version of
+	// this did, would delete a live registration on every account the first
+	// time a payload bug shipped -- a fleet-wide loss over a bug that had
+	// nothing to do with any one token.
+	code := fcmErrorCode(respBody)
+	dead = code == "UNREGISTERED"
+	return dead, fmt.Errorf("fcm returned %d (%s): %s", resp.StatusCode, code, truncate(string(respBody), 300))
+}
+
+// fcmErrorCode extracts FCM HTTP v1's error code from a failed response body.
+//
+// The code that actually distinguishes "this token is gone" from "this
+// request was malformed" lives in error.details[].errorCode (an
+// FcmError-typed detail), not in the top-level HTTP status or error.status --
+// the shape documented at
+// https://firebase.google.com/docs/reference/fcm/rest/v1/ErrorCode. Falls
+// back to error.status when Google ever sends a response with no details, so
+// a shape this package has not seen still surfaces something rather than an
+// empty string.
+func fcmErrorCode(body []byte) string {
+	var parsed struct {
+		Error struct {
+			Status  string `json:"status"`
+			Details []struct {
+				ErrorCode string `json:"errorCode"`
+			} `json:"details"`
+		} `json:"error"`
 	}
-	return false, fmt.Errorf("fcm returned %d", resp.StatusCode)
+	if json.Unmarshal(body, &parsed) != nil {
+		return ""
+	}
+	for _, d := range parsed.Error.Details {
+		if d.ErrorCode != "" {
+			return d.ErrorCode
+		}
+	}
+	return parsed.Error.Status
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // Overridden in tests to point at an httptest server. A var rather than a
