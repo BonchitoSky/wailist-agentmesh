@@ -148,9 +148,15 @@ release by accident.
 
 **A Content-Security-Policy ships in the native bundle only.** It is a `<meta>`
 tag rather than a header, because the bundle is files on the device and there
-is no server to send one; it is gated on `NEXT_PUBLIC_NATIVE_CLIENT` so the web
+is no server to send one; it is gated on `IS_NATIVE` (which `lib/nativeAuth.ts`
+derives from the `NEXT_PUBLIC_NATIVE_CLIENT=1` set by `build:web`) so the web
 app, which sits behind Vercel's own headers, never sees it. Built by
 `frontend/src/lib/csp.ts`.
+
+`connect-src` names the origin from `NEXT_PUBLIC_API_URL`, so a build with
+that unset or malformed would produce an app whose every request is blocked,
+reporting it only to a console nobody is reading. `npm run sync` therefore runs
+`scripts/check-api-url.mjs` first and refuses to build without a usable one.
 
 The directive that earns its keep is `connect-src`, scoped to the API origin
 this build was compiled against -- **both `https://` and `wss://`**, since the
