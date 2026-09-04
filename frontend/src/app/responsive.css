@@ -57,11 +57,12 @@
 
    `0px` (not `0`) is deliberate — env() fallbacks must carry a unit.
 
-   The four resolved values are also published as shorthands, because a bar that
-   has to grow by the inset needs it inside a calc() rather than as padding, and
-   repeating the whole var/env/floor chain inline is where a typo hides. This is
-   the one place in this file that is not an `.am-*` class; it defines new custom
-   properties rather than overriding any existing rule. */
+   The top and bottom values are also published as custom properties, because a
+   bar that has to GROW by the inset needs it inside a calc() rather than as
+   padding, and repeating the whole var/env/floor chain inline is where a typo
+   hides. Only those two: nothing yet needs to compute against the side insets.
+   This is the one place in this file that is not an `.am-*` class; it defines
+   new custom properties rather than overriding any existing rule. */
 :root {
   --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
   --safe-bottom: var(
@@ -89,6 +90,7 @@
   padding-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
   padding-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
 }
+
 /* ── Touch ──────────────────────────────────────────────────────────────────
    Scoped to `pointer: coarse` rather than to a width, for the same reason
    lib/device.ts is: a laptop dragged narrow is still driven by a mouse, and
@@ -177,7 +179,7 @@
 }
 
 /* The grip is 14px of visible bar in a 44px target — the minimum a thumb can
-   reliably hit, per the same rule .pw-reveal follows. */
+   reliably hit, which is the 44px floor the touch block above sets. */
 .am-sheet-grip {
   flex-shrink: 0;
   height: 44px;
@@ -267,7 +269,7 @@
 
 /* The rail's segmented switch is sized for a pointer (26px) because in its own
    column that is all it ever meets. Inside the bottom sheet it is tapped, so it
-   takes the full 44px target -- the same floor .pw-reveal and .am-sheet-grip
+   takes the full 44px target -- the same floor .am-sheet-grip
    hold to. Scoped to the sheet so the desktop rail keeps its density. */
 .am-studio-sheet .rail-switch__seg {
   min-height: 44px;
