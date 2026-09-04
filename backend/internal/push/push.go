@@ -178,6 +178,15 @@ func Deliver(ctx context.Context, store TokenStore, userID string, n Notificatio
 		return
 	}
 
+	// Sequential and uncapped. One person's devices is a handful, and this
+	// already runs on its own goroutine off finishRun, so the latency costs
+	// nobody anything today.
+	//
+	// TODO(#132): cap this if the shape ever changes -- a per-user device list
+	// long enough to matter, or a caller that fans out to many users at once,
+	// would turn one finished run into an unbounded burst of serial HTTPS
+	// requests. Store.DeviceTokensForUser's comment already anticipates a cap;
+	// this is the place that would need one.
 	for _, d := range tokens {
 		dead, err := send(ctx, creds.ProjectID, accessToken, d.Token, n)
 		if err != nil {
