@@ -100,8 +100,8 @@ export default function PrivacyPage() {
           <Section n="1" title="What this covers">
             <P>
               This policy covers the {COMPANY} web application at agent-mesh.app
-              and the {COMPANY} Android app. Where the two differ — and on
-              location, they differ considerably — the difference is stated.
+              and the {COMPANY} Android app. Where the two differ (and on
+              location, they differ considerably) the difference is stated.
             </P>
           </Section>
 
@@ -137,8 +137,8 @@ export default function PrivacyPage() {
             <Notice>
               <strong>We do not keep a record of where you have been.</strong>{" "}
               When your device reports a position, it is used to answer one
-              question — are you inside the zone you chose, or outside it — and
-              then discarded. What our servers retain is that answer and the
+              question, whether you are inside the zone you chose or outside it,
+              and then discarded. What our servers retain is that answer and the
               time it was given. There is no history of coordinates for us to
               search, hand over, or lose.
             </Notice>
@@ -147,8 +147,7 @@ export default function PrivacyPage() {
               signal is held on the phone until it can be sent, so it is not
               lost. Those pending readings do include your position. They never
               leave the device except to report that one crossing, and each is
-              deleted as soon as it is sent — or within a day if it never can
-              be.
+              deleted as soon as it is sent, or within a day if it never can be.
             </P>
             <P>
               <strong>Turning it off.</strong> Remove the zone in the app, or
@@ -182,7 +181,7 @@ export default function PrivacyPage() {
               for notifications, payment and blockchain infrastructure for
               billing, and the AI model providers your workflows are configured
               to call. A workflow that calls an external model or tool sends
-              that provider whatever the workflow gives it — you choose those
+              that provider whatever the workflow gives it. You choose those
               connections, and their own privacy policies apply to them.
             </P>
           </Section>
