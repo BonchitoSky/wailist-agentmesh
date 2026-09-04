@@ -459,7 +459,20 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
           </div>
         </Notice>
       )}
-      {status.kind === "saved" && deviceArmed !== false && (
+      {/* A save from a phone's web browser is not the same event as a save
+          from the app and must not wear the same green notice. The server
+          stores the zone and then waits for position reports a plain browser
+          never sends: no GeofencingClient, and nothing running once the tab
+          closes. Saying "saved" here, beside copy about the next reading,
+          promises a reading that is not coming. */}
+      {status.kind === "saved" && !IS_NATIVE && (
+        <Notice tone="info">
+          Zone recorded, but nothing is watching it yet. Crossings are noticed
+          by the AgentMesh app on your Android phone; install it and sign in,
+          and this zone starts working with no further setup.
+        </Notice>
+      )}
+      {status.kind === "saved" && IS_NATIVE && deviceArmed !== false && (
         <Notice tone="ok">
           Zone saved. The next reading sets the starting point, so being here
           right now will not count as an arrival you did not make.
