@@ -30,6 +30,15 @@
   height: 100dvh;
 }
 
+/* The same fix for a page whose content GROWS past the screen -- an infinite
+   list, say. `height` would clip it; `min-height` gives the short page a full
+   screen and lets the long one run on. Two classes rather than one because the
+   difference is the scroll model, not the value. */
+.am-viewport-min {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
 /* ── Safe areas ─────────────────────────────────────────────────────────────
    The app targets Android SDK 35, so from Android 15 the WebView draws behind
    the status and navigation bars and the page is responsible for keeping its
