@@ -7,6 +7,7 @@ import { useReadOnly } from "@/hooks/useReadOnly";
 import {
   MAX_RADIUS_M,
   MIN_RADIUS_M,
+  accuracyTooVague,
   checkRadius,
   distanceM,
   formatCoords,
@@ -165,6 +166,22 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
       setStatus({ kind: "error", message: check.message });
       return;
     }
+    // A fix carries its own error bar, and this screen was showing it without
+    // acting on it. When the bar is wider than the zone, the centre can sit
+    // entirely outside the circle the user believes they drew. Refused rather
+    // than warned: widening the zone past the accuracy is always available,
+    // and a misplaced zone does not fail visibly, it fires in the wrong place.
+    if (accuracyTooVague(accuracyM, check.radiusM)) {
+      setStatus({
+        kind: "error",
+        message: `This fix is only accurate to about ${formatDistance(
+          accuracyM,
+        )}, which is wider than the ${formatDistance(
+          check.radiusM,
+        )} zone. Widen the zone, or find a clearer view of the sky and locate again.`,
+      });
+      return;
+    }
     setStatus({ kind: "saving" });
     // Stale until the native path below learns otherwise. A save that fails
     // outright leaves this at whatever a previous session last reported,
@@ -217,7 +234,7 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
         message: err instanceof Error ? err.message : "could not save the zone",
       });
     }
-  }, [here, radiusM, workflowId]);
+  }, [accuracyM, here, radiusM, workflowId]);
 
   // Asks for background location and, if granted, re-arms the OS watch for
   // the zone the server already has. The server write from the save above
@@ -332,6 +349,16 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
               <p style={{ ...copy, marginTop: 4 }}>
                 Accurate to about {formatDistance(accuracyM)}.
               </p>
+            )}
+            {/* Said next to the fix it describes rather than only on save:
+                the fix is the thing that is wrong, and the user can act on it
+                (locate again, or widen the zone) before reaching the button. */}
+            {accuracyTooVague(accuracyM, radiusM) && (
+              <Notice tone="danger">
+                This fix is vaguer than the zone is wide, so the centre could be
+                anywhere within {formatDistance(accuracyM)} of here. Widen the
+                zone, or locate again with a clearer view of the sky.
+              </Notice>
             )}
           </>
         ) : (
