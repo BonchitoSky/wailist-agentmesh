@@ -126,14 +126,23 @@ let pending: Promise<string | null> | null = null;
 
 export async function loadToken(): Promise<string | null> {
   if (!pending) {
-    pending = migrateToken(secureStore, legacyStore).catch((err) => {
+    const attempt: Promise<string | null> = migrateToken(
+      secureStore,
+      legacyStore,
+    ).catch((err) => {
       // A store that cannot be read means signed out, not a crash. Reset so
       // the next call retries rather than caching the failure for the life of
       // the process.
-      pending = null;
+      //
+      // Only if this attempt is still the current one. A saveToken() that
+      // lands while the migration is in flight replaces `pending` with the
+      // freshly saved token; this handler must not then null out a memo it no
+      // longer owns and throw away that answer.
+      if (pending === attempt) pending = null;
       console.error("secure token storage unavailable", err);
       return null;
     });
+    pending = attempt;
   }
   return pending;
 }
@@ -150,7 +159,6 @@ export async function saveToken(token: string): Promise<void> {
 // expired or been revoked otherwise sits there failing every request forever,
 // with the app unable to explain why.
 export async function clearToken(): Promise<void> {
-  pending = Promise.resolve(null);
   // Both stores, not just the secure one. An install that failed to migrate
   // still has the old key, and signing out has to mean signed out everywhere
   // rather than leaving something for the next launch to migrate back in.
@@ -161,7 +169,24 @@ export async function clearToken(): Promise<void> {
   // after the user asked for it to be gone -- which the caller has to hear
   // about rather than see reported as a successful sign-out.
   const legacyRemoved = legacyStore.remove().catch(() => {});
-  await secureStore.remove();
+  try {
+    await secureStore.remove();
+  } catch (err) {
+    // The token is still on disk, so the in-memory view must not say
+    // otherwise. Claiming "signed out" here is the worse half of the bug: the
+    // caller does hear the rejection, but the next launch reads the token
+    // straight back out of the secure store and silently signs the user in
+    // again -- exactly what sign-out was supposed to prevent.
+    //
+    // Reset to null rather than to a guessed value: the store is the only
+    // thing that knows what survived, and the next loadToken() re-derives the
+    // answer from it instead of trusting a memo written during a failure.
+    pending = null;
+    await legacyRemoved;
+    throw err;
+  }
+  // Flipped only once the destructive remove has actually resolved.
+  pending = Promise.resolve(null);
   await legacyRemoved;
 }
 

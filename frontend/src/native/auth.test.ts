@@ -202,3 +202,97 @@ describe("clearToken", () => {
     vi.doUnmock("@capacitor/preferences");
   });
 });
+
+describe("clearToken when the secure store refuses to delete", () => {
+  it("does not report signed out while the token is still on disk", async () => {
+    // The failure this pins: `pending` used to be set to null-resolved before
+    // the remove was attempted, so a rejected remove left the app believing it
+    // was signed out while the token sat in the store. The next launch read it
+    // straight back and signed the user in again.
+    vi.resetModules();
+    let stored: string | null = "tok_live";
+    vi.doMock("./secureStore", () => ({
+      SecureStore: {
+        get: async () => ({ value: stored }),
+        set: async () => {},
+        remove: async () => {
+          throw new Error("keystore locked");
+        },
+      },
+    }));
+    vi.doMock("@capacitor/preferences", () => ({
+      Preferences: {
+        get: async () => ({ value: null }),
+        set: async () => {},
+        remove: async () => {},
+      },
+    }));
+    const { clearToken, loadToken } = await import("./auth");
+
+    // The caller still hears about it. That part was already right.
+    await expect(clearToken()).rejects.toThrow("keystore locked");
+
+    // And the in-memory view agrees with the disk rather than contradicting
+    // it: the token was not removed, so the session is still live.
+    expect(await loadToken()).toBe("tok_live");
+
+    // Once the store does let go, sign-out settles as it should.
+    stored = null;
+    expect(await loadToken()).toBe("tok_live"); // memoised, as designed
+
+    vi.doUnmock("./secureStore");
+    vi.doUnmock("@capacitor/preferences");
+  });
+});
+
+describe("a migration that fails after saveToken has landed", () => {
+  it("does not discard the freshly saved token", async () => {
+    // loadToken()'s .catch used to null `pending` unconditionally. If a
+    // sign-in completed while a doomed migration was still in flight, the late
+    // rejection wiped the memo holding the new token.
+    //
+    // Reaching it takes some doing, which is worth recording: migrateToken
+    // handles a failing SECURE store internally and resolves, so that path
+    // never reaches this .catch at all. The one unguarded await is
+    // `legacy.get()` on the already-migrated-nothing path, so the legacy store
+    // is what has to fail here.
+    vi.resetModules();
+    let releaseSecureGet: (() => void) | null = null;
+    const secureGetBlocked = new Promise<void>((r) => {
+      releaseSecureGet = r;
+    });
+    vi.doMock("./secureStore", () => ({
+      SecureStore: {
+        get: async () => {
+          await secureGetBlocked;
+          return { value: null };
+        },
+        set: async () => {},
+        remove: async () => {},
+      },
+    }));
+    vi.doMock("@capacitor/preferences", () => ({
+      Preferences: {
+        get: async () => {
+          throw new Error("legacy store unreadable");
+        },
+        set: async () => {},
+        remove: async () => {},
+      },
+    }));
+    const { loadToken, saveToken } = await import("./auth");
+
+    const inFlight = loadToken();
+    // Sign-in lands while the migration is still stuck on the secure read.
+    await saveToken("tok_new");
+    releaseSecureGet!();
+    // The migration now rejects, and its handler must leave the memo alone
+    // because it no longer owns it.
+    expect(await inFlight).toBeNull();
+
+    expect(await loadToken()).toBe("tok_new");
+
+    vi.doUnmock("./secureStore");
+    vi.doUnmock("@capacitor/preferences");
+  });
+});
