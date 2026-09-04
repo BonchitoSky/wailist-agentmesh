@@ -313,7 +313,14 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
     status.kind === "saving" ||
     status.kind === "clearing" ||
     status.kind === "locating";
-  const canSave = Boolean(here) && !busy && radiusCheck.ok;
+  // workflow !== null, not merely "no load error": until the fetch returns
+  // there is no way to know whether this workflow exists, belongs to this
+  // user, or is deployed, and a PUT sent on that ignorance can only produce an
+  // error the user cannot act on. The failed load is the case that matters --
+  // it leaves this null for good, and the form was previously fully live
+  // behind the error notice, offering to save into a workflow it could not
+  // read.
+  const canSave = Boolean(here) && workflow !== null && !busy && radiusCheck.ok;
 
   if (!allowed) {
     // Unreachable as things stand -- "workflow.geofence" is permitted for
