@@ -144,6 +144,62 @@
   }
 }
 
+/* ── Route transitions ──────────────────────────────────────────────────────
+   Applied by components/nav/RouteTransition.tsx, which decides when and in
+   which direction. See that file for why this is a keyframe on the arriving
+   screen rather than the View Transitions API.
+
+   16px, not a full-width slide. The travel only has to say WHICH WAY the screen
+   came from; a screen-width push with no outgoing frame to push against reads
+   as the content sliding around inside a static window, which is worse than not
+   moving at all. Paired with a fade so the short distance still registers.
+
+   220ms sits in the app's standard-UI band (150-250ms) and under its 300ms cap
+   for anything the user is waiting on. var(--ease) is the house entrance curve. */
+@keyframes route-in-forward {
+  from {
+    opacity: 0;
+    transform: translate3d(16px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes route-in-back {
+  from {
+    opacity: 0;
+    transform: translate3d(-16px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.route-enter-fwd {
+  animation: route-in-forward 0.22s var(--ease);
+}
+.route-enter-back {
+  animation: route-in-back 0.22s var(--ease);
+}
+
+/* Not decoration, so it goes entirely rather than being shortened: someone who
+   has asked for less motion is not asking for faster motion.
+
+   With no animation there is no animationend, so the class is never cleaned off
+   the wrapper. That is deliberate and harmless -- it paints nothing, and the
+   next navigation strips both classes before adding one. Worth writing down,
+   because "the class is still on the element" looks like a leak to anyone
+   reading the DOM rather than this comment. */
+@media (prefers-reduced-motion: reduce) {
+  .route-enter-fwd,
+  .route-enter-back {
+    animation: none;
+  }
+}
+
 /* ── Studio, compact ────────────────────────────────────────────────────── */
 /* The studio is a three-column desktop IDE: palette | graph | rail. Read-only
    already drops the palette, but the rail's 320px still leaves ~55px of graph
