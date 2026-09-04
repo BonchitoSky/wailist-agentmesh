@@ -24,9 +24,22 @@ export function apiOrigin(apiUrl: string | undefined): string | null {
   try {
     return new URL(raw).origin;
   } catch {
-    // A malformed URL is the build's problem, not the policy's. Returning null
-    // yields a policy permitting only 'self', which fails loudly and
-    // immediately rather than silently permitting something unintended.
+    // A malformed URL is the build's problem, not the policy's: returning null
+    // yields a policy permitting only 'self', which is at least never a policy
+    // permitting something unintended.
+    //
+    // It is NOT loud, and an earlier version of this comment claimed it was.
+    // A connect-src that has collapsed to 'self' blocks every request to the
+    // backend and says so only in a console nobody is watching on a phone --
+    // precisely the silent failure this file warns about for the missing wss://
+    // case. Being right about the risk elsewhere in the file and wrong here is
+    // how a comment stops being worth reading.
+    //
+    // The volume is supplied at build time instead: mobile/scripts/
+    // check-api-url.mjs refuses to build a native bundle without a usable
+    // NEXT_PUBLIC_API_URL, so this branch should be unreachable in any app that
+    // ships. It stays defensive because the web build has no such guard and
+    // does not need one -- an unset URL is a supported mock mode there.
     return null;
   }
 }
