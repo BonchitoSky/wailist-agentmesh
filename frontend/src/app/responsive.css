@@ -89,6 +89,59 @@
   padding-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
   padding-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
 }
+/* ── Touch ──────────────────────────────────────────────────────────────────
+   Scoped to `pointer: coarse` rather than to a width, for the same reason
+   lib/device.ts is: a laptop dragged narrow is still driven by a mouse, and
+   none of this should apply to it.
+
+   These are the small tells that read as "web page in a WebView" rather than
+   "app", and each is a one-line fix that the app has simply never had. */
+@media (pointer: coarse) {
+  /* The default is a translucent grey rectangle, drawn on the element's box
+     rather than its rounded corners, and after a delay -- so a tap on a card
+     flashes a square behind it. Removing it is only correct when something
+     replaces it, which is what the :active rule below is for: taking away the
+     feedback and leaving nothing would be worse than the ugly default. */
+  a,
+  button,
+  [role="button"],
+  summary {
+    -webkit-tap-highlight-color: transparent;
+    /* Without this the browser reserves the tap for a possible double-tap
+       zoom, so every press is acknowledged late. It is the single biggest
+       reason a touch web app feels a beat behind a native one. Not applied
+       globally: the canvas sets `touch-action: none` deliberately, and pinch
+       to zoom must keep working on ordinary content. */
+    touch-action: manipulation;
+  }
+
+  /* The replacement acknowledgement. 0.97 and not lower: the press should read
+     as the surface giving slightly, not as the control shrinking. Duration is
+     at the fast end of the app's 100-150ms micro-interaction band, because
+     this one fires under the user's finger. */
+  a:active,
+  button:not(:disabled):active,
+  [role="button"]:active {
+    transform: scale(0.97);
+    transition: transform 0.1s var(--ease);
+  }
+
+  /* Stops the whole page rubber-banding past its ends, which is the giveaway
+     that this is a document being scrolled rather than a screen. `contain`
+     rather than `none`: inner scrollers keep their own behaviour. */
+  body {
+    overscroll-behavior-y: contain;
+  }
+}
+
+@media (pointer: coarse) and (prefers-reduced-motion: reduce) {
+  a:active,
+  button:not(:disabled):active,
+  [role="button"]:active {
+    transform: none;
+  }
+}
+
 /* ── Studio, compact ────────────────────────────────────────────────────── */
 /* The studio is a three-column desktop IDE: palette | graph | rail. Read-only
    already drops the palette, but the rail's 320px still leaves ~55px of graph
