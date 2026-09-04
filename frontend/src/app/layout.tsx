@@ -62,9 +62,22 @@ export const metadata: Metadata = {
 // Next injects this by default, but the app is now explicitly responsive, so the
 // contract is stated rather than inherited. `maximumScale` is deliberately left
 // unset: capping zoom locks out anyone who needs to magnify text.
+//
+// `viewportFit: "cover"` is not decoration. mobile/android targets SDK 35, and
+// from Android 15 edge-to-edge is enforced for anything targeting it: the WebView
+// draws behind the status and navigation bars whether or not the page is ready
+// for it. Without this opt-in the safe-area insets read as zero, so the top nav
+// sits underneath the status bar. Android 16 removes the opt-out entirely, so
+// there is no version of this app that goes back to the old behaviour. Anything
+// touching a screen edge pairs this with the .am-safe-* classes in responsive.css.
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  viewportFit: "cover",
+  // The literal value of --bg. A theme colour has to be a colour, not a var():
+  // the browser reads this meta tag to paint chrome outside the document, where
+  // the page's custom properties do not exist. Keep in step with globals.css.
+  themeColor: "#08070c",
 };
 
 export default function RootLayout({

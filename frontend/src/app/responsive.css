@@ -30,10 +30,55 @@
   height: 100dvh;
 }
 
+/* ── Safe areas ─────────────────────────────────────────────────────────────
+   The app targets Android SDK 35, so from Android 15 the WebView draws behind
+   the status and navigation bars and the page is responsible for keeping its
+   own content clear of them. `viewport-fit=cover` in layout.tsx opts in; these
+   classes are the other half.
+
+   Two sources, in this order, and the order matters:
+
+     var(--safe-area-inset-top, env(safe-area-inset-top, 0px))
+
+   Capacitor (>= 8.3.2; this app is on 8.5) injects the `--safe-area-inset-*`
+   custom properties itself, precisely because Android WebView below version 140
+   reports wrong values from `env()`. So the injected variable is preferred, the
+   standard `env()` is the fallback for a plain browser, and `0px` is the floor
+   for anything that has neither.
+
+   `0px` (not `0`) is deliberate — env() fallbacks must carry a unit.
+
+   The four resolved values are also published as shorthands, because a bar that
+   has to grow by the inset needs it inside a calc() rather than as padding, and
+   repeating the whole var/env/floor chain inline is where a typo hides. This is
+   the one place in this file that is not an `.am-*` class; it defines new custom
+   properties rather than overriding any existing rule. */
+:root {
+  --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --safe-bottom: var(
+    --safe-area-inset-bottom,
+    env(safe-area-inset-bottom, 0px)
+  );
+}
+
+.am-safe-top {
+  padding-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+}
+
 /* Bottom-docked bars sit under the home indicator on notched phones without
-   this. `0px` (not `0`) is deliberate — env() fallbacks must carry a unit. */
+   this. */
 .am-safe-bottom {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-bottom: var(
+    --safe-area-inset-bottom,
+    env(safe-area-inset-bottom, 0px)
+  );
+}
+
+/* Landscape, where a cutout moves to a side. Rarely the deciding factor in
+   portrait, and free to include. */
+.am-safe-x {
+  padding-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+  padding-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
 }
 /* ── Studio, compact ────────────────────────────────────────────────────── */
 /* The studio is a three-column desktop IDE: palette | graph | rail. Read-only

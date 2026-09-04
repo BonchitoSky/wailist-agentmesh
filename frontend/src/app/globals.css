@@ -739,16 +739,24 @@ body {
   --nav-h: 56px;
 }
 
+/* The bar is --nav-h tall, and then sits below the status bar rather than under
+   it. From Android 15 the WebView draws edge to edge (see layout.tsx), so the
+   shell has to reserve --safe-top on top of its own height and paint its
+   background up through it -- otherwise the brand and the actions render behind
+   the clock. `box-sizing: border-box` is global, so the padding comes out of the
+   grown height and the bar row keeps its full --nav-h. --safe-top resolves to
+   0px on a desktop browser, where every calc() here collapses to the old value. */
 .appnav {
   position: relative;
-  height: var(--nav-h);
+  height: calc(var(--nav-h) + var(--safe-top));
   flex-shrink: 0;
   z-index: 60;
 }
 .appnav__shell {
   position: relative;
   z-index: 2;
-  height: var(--nav-h);
+  height: calc(var(--nav-h) + var(--safe-top));
+  padding-top: var(--safe-top);
   background: var(--bg-elev-1);
   border-bottom: 1px solid var(--border);
 }
@@ -799,7 +807,8 @@ body {
 
 .appnav__sheet {
   position: fixed;
-  top: var(--nav-h);
+  /* Below the whole bar, inset included, or the sheet starts underneath it. */
+  top: calc(var(--nav-h) + var(--safe-top));
   left: 0;
   right: 0;
   bottom: 0;
