@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -54,7 +55,12 @@ func (d *Deps) RegisterDevice(w http.ResponseWriter, r *http.Request) {
 
 	rec, err := d.Store.RegisterDeviceToken(ctx, userID, token, strings.TrimSpace(body.Platform))
 	if err != nil {
-		respond.Error(w, http.StatusInternalServerError, err.Error())
+		// Logged rather than returned. A store error can carry a constraint
+		// name or a fragment of the statement, and this endpoint is reachable
+		// by anything holding a session -- the caller can do nothing with the
+		// detail, and the operator is the one who needs it.
+		log.Printf("devices: registering a token for user %s failed: %v", userID, err)
+		respond.Error(w, http.StatusInternalServerError, "could not register this device")
 		return
 	}
 
@@ -89,7 +95,8 @@ func (d *Deps) UnregisterDevice(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := d.Store.DeleteDeviceToken(ctx, userID, token); err != nil {
-		respond.Error(w, http.StatusInternalServerError, err.Error())
+		log.Printf("devices: removing a token for user %s failed: %v", userID, err)
+		respond.Error(w, http.StatusInternalServerError, "could not unregister this device")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
