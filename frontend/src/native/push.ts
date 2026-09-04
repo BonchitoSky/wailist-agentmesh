@@ -8,6 +8,7 @@
 // google-services.json is in place -- without that the Android build does not
 // include FCM at all, register() fails, and every function below reports it
 // honestly rather than pretending. See mobile/README.md.
+import type { PluginListenerHandle } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { registerDevice, unregisterDevice } from "./api";
 
@@ -23,8 +24,8 @@ import { registerDevice, unregisterDevice } from "./api";
 export const PUSH_DISCLOSURE = {
   title: "Tell me when a workflow finishes",
   body:
-    "AgentMesh can notify you when a workflow you did not start finishes — " +
-    "one triggered by arriving somewhere, or by a schedule — and whenever a " +
+    "AgentMesh can notify you when a workflow you did not start finishes: " +
+    "one triggered by arriving somewhere, or by a schedule, and whenever a " +
     "run fails.\n\n" +
     "Runs you start yourself do not notify, since you are already looking " +
     "at them.",
@@ -96,7 +97,12 @@ export async function disablePush(): Promise<void> {
       console.error("push: could not unregister this device", err);
     });
   }
-  await PushNotifications.removeAllListeners().catch(() => {});
+  // NOT removeAllListeners(). The tap listener is attached once by boot() and
+  // is not part of any one session: removing it here left a sign-out followed
+  // by a sign-in, with no restart in between, unable to route a tapped
+  // notification anywhere until the next cold start. registerForToken now
+  // removes the two listeners it owns as soon as it settles, so there is
+  // nothing of this function's to tidy up.
   await PushNotifications.unregister().catch(() => {});
 }
 
@@ -111,10 +117,31 @@ export async function disablePush(): Promise<void> {
 function registerForToken(): Promise<string | null> {
   return new Promise((resolve) => {
     let settled = false;
+    // Removed as soon as this call settles. The `settled` guard already made
+    // a stale listener harmless, but harmless is not the same as gone: every
+    // enable/disable cycle used to leave two more attached, and the process
+    // outlives many of them.
+    const handles: PluginListenerHandle[] = [];
+    const drop = (h: PluginListenerHandle) => {
+      void h.remove().catch(() => {});
+    };
+    // addListener resolves its handle asynchronously, so a fast registration
+    // (or the timeout) can settle before the handle exists. Whoever loses that
+    // race removes it -- otherwise the listener outlives the promise it
+    // belongs to, which is the leak this is fixing.
+    const track = (pending: Promise<PluginListenerHandle>) => {
+      void pending
+        .then((h) => {
+          if (settled) drop(h);
+          else handles.push(h);
+        })
+        .catch(() => {});
+    };
     const finish = (value: string | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      handles.splice(0).forEach(drop);
       resolve(value);
     };
 
@@ -124,17 +151,23 @@ function registerForToken(): Promise<string | null> {
     // notification the user never asked for.
     const timer = setTimeout(() => finish(null), REGISTRATION_TIMEOUT_MS);
 
-    void PushNotifications.addListener("registration", (t) => finish(t.value));
-    void PushNotifications.addListener("registrationError", (err) => {
-      console.error("push: FCM registration failed", err);
-      finish(null);
-    });
+    track(
+      PushNotifications.addListener("registration", (t) => finish(t.value)),
+    );
+    track(
+      PushNotifications.addListener("registrationError", (err) => {
+        console.error("push: FCM registration failed", err);
+        finish(null);
+      }),
+    );
     void PushNotifications.register().catch((err) => {
       console.error("push: register() rejected", err);
       finish(null);
     });
   });
 }
+
+let tapListener: PluginListenerHandle | null = null;
 
 /**
  * Routes a tapped notification to the run it is about.
@@ -148,7 +181,11 @@ function registerForToken(): Promise<string | null> {
  * router mounted yet to push onto.
  */
 export async function listenForTaps(): Promise<void> {
-  await PushNotifications.addListener(
+  // Idempotent. boot() is the only caller today, but a second attachment
+  // would route one tap twice, and this is now the listener that has to
+  // survive a whole process rather than a single sign-in.
+  if (tapListener) return;
+  tapListener = await PushNotifications.addListener(
     "pushNotificationActionPerformed",
     (action) => {
       const data = (action.notification.data ?? {}) as Record<string, string>;
