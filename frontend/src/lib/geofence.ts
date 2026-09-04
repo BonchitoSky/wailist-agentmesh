@@ -122,3 +122,33 @@ export function formatCoords(p: Point): string {
 export function isInside(centre: Point, radiusM: number, at: Point): boolean {
   return distanceM(centre, at) <= radiusM;
 }
+
+/**
+ * Whether a position fix is too vague to centre a zone of this size on.
+ *
+ * A fix carries its own error bar: `coords.accuracy` is metres of radius at
+ * 68% confidence, and indoors or off cell towers it reaches hundreds or
+ * thousands. When that circle is wider than the zone, the true position can
+ * sit entirely outside the zone the user believes they drew, and MIN_RADIUS_M
+ * is nowhere near large enough to absorb it.
+ *
+ * This is a predicate rather than a warning string because it decides whether
+ * a save is allowed: a misplaced zone does not fail visibly, it fires at the
+ * wrong place, and every firing costs a run. An unknown accuracy (null) is not
+ * treated as bad -- a browser that declines to report one is not evidence of a
+ * poor fix.
+ */
+// A type predicate, not a plain boolean: returning true necessarily means the
+// accuracy was a real number, and callers all go on to format it into the
+// message they show. Without this every call site needs a second null check
+// that can never fire.
+export function accuracyTooVague(
+  accuracyM: number | null,
+  radiusM: number,
+): accuracyM is number {
+  // null and NaN mean "not reported", which is not evidence of a poor fix.
+  // Infinity is the opposite: a claim of unbounded error, and it must fail --
+  // so this cannot be written as a single !Number.isFinite bail-out.
+  if (accuracyM === null || Number.isNaN(accuracyM)) return false;
+  return accuracyM > radiusM;
+}

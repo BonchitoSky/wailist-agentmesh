@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   MIN_RADIUS_M,
   MAX_RADIUS_M,
+  accuracyTooVague,
   checkRadius,
   distanceM,
   formatCoords,
@@ -151,5 +152,37 @@ describe("formatCoords", () => {
     expect(formatCoords({ lat: -33.8688, lng: 151.2093 })).toBe(
       "-33.86880, 151.20930",
     );
+  });
+});
+
+describe("accuracyTooVague", () => {
+  it("accepts a fix tighter than the zone, and the exact boundary", () => {
+    expect(accuracyTooVague(10, 150)).toBe(false);
+    // Equal is allowed: the error circle is the zone, not wider than it.
+    expect(accuracyTooVague(150, 150)).toBe(false);
+  });
+
+  it("rejects a fix one metre wider than the zone", () => {
+    expect(accuracyTooVague(151, 150)).toBe(true);
+  });
+
+  it("rejects the indoor case this exists for", () => {
+    // A fix off cell towers rather than GPS, against the smallest zone the
+    // radius floor permits.
+    expect(accuracyTooVague(2_000, MIN_RADIUS_M)).toBe(true);
+  });
+
+  it("does not treat an unreported accuracy as a bad fix", () => {
+    // coords.accuracy is required by the spec but not every browser is honest
+    // about it. Absence is not evidence, and must not block a save.
+    expect(accuracyTooVague(null, MIN_RADIUS_M)).toBe(false);
+    expect(accuracyTooVague(Number.NaN, MIN_RADIUS_M)).toBe(false);
+  });
+
+  it("rejects an infinite accuracy rather than letting it through", () => {
+    // Infinity is not finite, so the null-ish guard would swallow it if the
+    // check were written as a bare !Number.isFinite bail-out. It is a real
+    // claim of total uncertainty and must fail.
+    expect(accuracyTooVague(Number.POSITIVE_INFINITY, MAX_RADIUS_M)).toBe(true);
   });
 });
