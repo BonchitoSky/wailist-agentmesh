@@ -121,12 +121,17 @@ jobs:
         # one already-configured keystore, so build both every run.
         # The properties are omitted entirely on a dispatch run, so Gradle
         # falls back to the defaults rather than being handed empty strings.
+        #
+        # An array rather than a string: unquoted $args would rely on word
+        # splitting to become two arguments, which happens to work for digits
+        # and dotted versions but is one odd character away from not.
         run: |
-          args=""
+          args=()
           if [ -n "${{ steps.version.outputs.code }}" ]; then
-            args="-PagentmeshVersionCode=${{ steps.version.outputs.code }} -PagentmeshVersionName=${{ steps.version.outputs.name }}"
+            args+=("-PagentmeshVersionCode=${{ steps.version.outputs.code }}")
+            args+=("-PagentmeshVersionName=${{ steps.version.outputs.name }}")
           fi
-          ./gradlew bundleRelease assembleRelease $args
+          ./gradlew bundleRelease assembleRelease "${args[@]}"
 
       - uses: actions/upload-artifact@v4
         with:
