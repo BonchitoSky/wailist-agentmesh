@@ -39,7 +39,7 @@ export function checkRadius(radiusM: number): RadiusCheck {
   if (rounded < MIN_RADIUS_M) {
     return {
       ok: false,
-      message: `A zone must be at least ${MIN_RADIUS_M} m across its radius — anything tighter flickers as GPS drifts, and every flicker starts a run.`,
+      message: `A zone must be at least ${MIN_RADIUS_M} m across its radius: anything tighter flickers as GPS drifts, and every flicker starts a run.`,
     };
   }
   if (rounded > MAX_RADIUS_M) {
