@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 
 const EFFECTIVE = "3 September 2026";
 const COMPANY = "AgentMesh";
-const CONTACT = "privacy@agentmesh.ai";
+const CONTACT = "privacy@agent-mesh.app";
 
 export default function PrivacyPage() {
   return (
