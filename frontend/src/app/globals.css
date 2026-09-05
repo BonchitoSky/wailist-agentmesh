@@ -625,6 +625,31 @@ body {
   .wf-row-actions {
     justify-content: flex-start;
   }
+  /* The caption has to sit ABOVE the value, which means the cell has to stack.
+     Most cells are blocks and did; the Status cell is a flex row (it centres a
+     Pill), so its ::before became a sibling flex item BESIDE the pill instead
+     of a line above it. That left Status 13px shorter than Agents beside it and
+     starting 6px lower -- the misalignment visible on the badge.
+
+     align-items matters as much as the direction: stretch is the flex default,
+     and it would run the Pill the full width of the column. */
+  .wf-row > [data-label] {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  /* And the cells have to hang from a common top edge.
+     `.wf-row { align-items: start }` above has never actually applied: the row
+     sets `alignItems: "center"` as an INLINE style, which beats any stylesheet
+     rule, so the cells were centred against each other and a taller cell (the
+     22px Pill vs 18px text) pushed its neighbour down by half the difference.
+     That is the last 2px of the badge misalignment.
+     `align-self` on the child wins where `align-items` on the parent cannot,
+     because the inline style does not set it -- and it needs no !important,
+     which the comment above resorts to for the header row. */
+  .wf-row > * {
+    align-self: start;
+  }
   .wf-row > [data-label]::before {
     content: attr(data-label);
     display: block;
