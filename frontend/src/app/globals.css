@@ -547,6 +547,11 @@ body {
    custom property redefined at :root can. */
 :root {
   --wf-page-pad: 36px 24px 80px;
+  /* Hero figures. Overridden smaller on a phone; see the 768 block. */
+  --wf-row-pad: 14px 16px;
+  --wf-row-gap: 12px;
+  --wf-balance-size: 28px;
+  --us-figure-size: 40px;
   --wf-h1: 36px;
   --wf-kpi-cols: repeat(4, 1fr);
   --wf-card-cols: repeat(3, 1fr);
@@ -591,7 +596,30 @@ body {
     --wf-kpi-cols: repeat(2, 1fr);
     --wf-card-cols: minmax(0, 1fr);
     /* Two even columns: the row stops being a table and becomes a card. */
-    --wf-row-cols: minmax(0, 1fr) minmax(0, 1fr);
+    /* Three, not two. Two columns left five stacked lines per card; three
+       fits (the widest value is the 85px status pill) and removes a whole
+       line from every row. */
+    --wf-row-cols: repeat(3, minmax(0, 1fr));
+
+    /* ── Density ───────────────────────────────────────────────────────────
+       The app used to shrink type in exactly two places, so a phone rendered
+       what is really desktop sizing: a workflow row came out ~246px tall and
+       three of them filled the screen. Spacing is supposed to scale DOWN with
+       the viewport, not stay put -- an 8pt-grid layout drops a 32px desktop
+       margin to 16px on a phone rather than keeping it.
+
+       This is the step that was missing: everything jumped straight from
+       desktop values to the ≤520 block. Padding and type only; nothing a thumb
+       aims at is touched, because density and tap-safety pull against each
+       other and tap-safety wins. */
+    --wf-page-pad: 20px 16px 56px;
+    --wf-h1: 26px;
+    /* The two loudest single elements on their screens. 28/40px is a desktop
+       hero figure; on a 343px column it is most of a card. */
+    --wf-row-pad: 10px 12px;
+    --wf-row-gap: 8px;
+    --wf-balance-size: 22px;
+    --us-figure-size: 28px;
   }
   .wf-header {
     flex-direction: column;
@@ -616,7 +644,8 @@ body {
      !important); each metric grows a caption from its data-label. */
   .wf-row {
     align-items: start;
-    row-gap: 12px;
+    /* 12 -> 8: five gaps per card, so this alone is 20px off every row. */
+    row-gap: 8px;
   }
   .wf-row > *:first-child,
   .wf-row > *:last-child {
@@ -664,8 +693,11 @@ body {
 
 @media (max-width: 520px) {
   :root {
-    --wf-page-pad: 24px 16px 64px;
-    --wf-h1: 28px;
+    /* Tighter again, not looser: this block sits AFTER the 768 one, so a
+       larger value here would silently undo it. */
+    --wf-page-pad: 16px 14px 48px;
+    /* Below the 768 step, not above it -- this block wins on a phone. */
+    --wf-h1: 24px;
     --wf-cardmeta-cols: repeat(2, 1fr);
   }
 }
@@ -677,10 +709,29 @@ body {
    horizontal scroll — it is nine columns wide and already self-contained. */
 :root {
   --us-settle-cols: minmax(0, 1.9fr) minmax(0, 1.15fr) 140px 114px 108px;
+  /* The width below which the settlements table scrolls sideways rather than
+     squeezing, and the headspace above the page header. Both collapse on a
+     phone -- see the 768 block. */
+  --us-settle-minw: 720px;
+  --us-headspace: 60px;
 }
 @media (max-width: 768px) {
   :root {
-    --us-settle-cols: minmax(0, 1fr) minmax(0, 1fr);
+    /* The <=768 collapse that lived here has been REMOVED, and measuring is
+       why. It had never applied (UsagePage hardcoded the same string and won),
+       so wiring the property up was the first time anyone saw what it does:
+       five fields in two columns wrap to three lines, taking a settlement row
+       from ~36px to 101px. Six rows then cost 833px -- more than all eighteen
+       did while scrolling sideways.
+
+       So the rule was not merely dead, it was wrong. The compact table stays,
+       and the length is cut by showing six rows with a "Show all" instead.
+       Sideways scroll is the right pattern for dense comparison data; it is
+       the vertical length that was the actual complaint. */
+    --us-headspace: 0px;
+    /* 210 -> 150: a quarter of a phone screen back, and the chart still
+       reads because preserveAspectRatio has always been none. */
+    --us-chart-h: 150px;
   }
 }
 

@@ -374,7 +374,9 @@ export function WorkflowsPage() {
               <div
                 style={{
                   marginTop: 8,
-                  fontSize: 28,
+                  // Token, not a literal: the phone step shrinks it. This is
+                  // the largest single element on the screen at 375px.
+                  fontSize: "var(--wf-balance-size)",
                   fontWeight: 500,
                   letterSpacing: "-0.02em",
                   fontFamily: "var(--font-mono)",
@@ -1287,8 +1289,11 @@ function WorkflowRows({
           style={{
             display: "grid",
             gridTemplateColumns: "var(--wf-row-cols)",
-            gap: 12,
-            padding: "14px 16px",
+            // Tokenised for the same reason as the padding: an inline value
+            // beats the stylesheet, so a media query could never have reached
+            // it. There are five gaps per card on a phone.
+            gap: "var(--wf-row-gap)",
+            padding: "var(--wf-row-pad)",
             alignItems: "center",
             borderBottom:
               i < items.length - 1 ? "1px solid var(--border-soft)" : "none",
