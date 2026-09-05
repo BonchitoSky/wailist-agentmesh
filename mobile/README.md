@@ -118,15 +118,6 @@ paying, and it is contained rather than unknown — the server already tolerates
 late and out-of-order fixes by design, so nothing downstream changes when it
 lands.
 
-## Location permission
-
-Background location is the most-refused permission on Android, and asking cold
-gets refused far more often than explaining first. `src/permissions.ts` holds
-the disclosure shown _before_ the system dialog, and the refusal path: the app
-does not nag, the feature simply shows as off, and everything else keeps
-working. Google Play reviews background-location use specifically and will ask
-to see that disclosure.
-
 ## Push notifications
 
 Run-status notifications go out through Firebase Cloud Messaging. Everything is
@@ -169,6 +160,15 @@ shows the result. The rule lives in one tested function,
 
 **Testing needs a real device or an emulator image with Google Play services.**
 A plain AVD image has no FCM and will never receive anything.
+
+## Location permission
+
+Background location is the most-refused permission on Android, and asking cold
+gets refused far more often than explaining first. `src/permissions.ts` holds
+the disclosure shown _before_ the system dialog, and the refusal path: the app
+does not nag, the feature simply shows as off, and everything else keeps
+working. Google Play reviews background-location use specifically and will ask
+to see that disclosure.
 
 ## Release
 
