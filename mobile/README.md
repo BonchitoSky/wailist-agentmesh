@@ -83,50 +83,6 @@ and `CORS_ORIGIN` is a single origin anyway. The backend has always accepted
 `Authorization: Bearer` for non-browser clients; sign-in now returns the token
 to a caller that identifies itself with `X-AgentMesh-Client`.
 
-## Read-only is deliberate here
-
-`frontend/src/lib/device.ts` classifies this WebView as a handheld — through
-three independent rungs, so it is guaranteed rather than incidental — and the
-app therefore runs in viewer mode. **That is the intended outcome, not an
-accident**, and nothing overrides it. Running, stopping and chatting with a
-workflow are not withheld from a viewer, which is everything this app needs.
-
-## Geofencing without a paid SDK
-
-This uses **Android's own `GeofencingClient`** through a small plugin in the app
-module, rather than a commercial background-tracking SDK.
-
-The distinction that makes that viable: we do not want continuous background
-_tracking_, only "did this device cross the edge of one circle". That is
-exactly what the platform API does, it is free, and the OS batches the work
-across every app on the device — far cheaper on battery than any polling loop.
-
-The alternative (`@transistorsoft/capacitor-background-geolocation`) is a fine
-product but **requires a purchased licence for RELEASE builds**, which every
-Play Store build is. It was trialled here and removed.
-
-**Where the seam is.** When the app is running, `src/geofence.ts` flushes the
-queue. When it is _not_ — the common case for a real crossing —
-`GeofenceReceiver.java` appends the fix straight to the same queue, in the same
-storage `@capacitor/preferences` uses, and the TypeScript drains it on next
-launch without knowing native wrote it.
-
-**The honest limit:** that makes delivery _late_ (next app open) rather than
-immediate. Immediate delivery needs an HTTP POST and a WorkManager retry chain
-written natively in that receiver. That is the real remaining cost of not
-paying, and it is contained rather than unknown — the server already tolerates
-late and out-of-order fixes by design, so nothing downstream changes when it
-lands.
-
-## Location permission
-
-Background location is the most-refused permission on Android, and asking cold
-gets refused far more often than explaining first. `src/permissions.ts` holds
-the disclosure shown _before_ the system dialog, and the refusal path: the app
-does not nag, the feature simply shows as off, and everything else keeps
-working. Google Play reviews background-location use specifically and will ask
-to see that disclosure.
-
 ## WebView hardening
 
 Two things, and one of them is a trap.
@@ -175,6 +131,50 @@ as one.
 `frame-ancestors` is deliberately absent: a `<meta>`-delivered policy ignores
 it by specification, and including it only produces a console error on every
 launch.
+
+## Read-only is deliberate here
+
+`frontend/src/lib/device.ts` classifies this WebView as a handheld — through
+three independent rungs, so it is guaranteed rather than incidental — and the
+app therefore runs in viewer mode. **That is the intended outcome, not an
+accident**, and nothing overrides it. Running, stopping and chatting with a
+workflow are not withheld from a viewer, which is everything this app needs.
+
+## Geofencing without a paid SDK
+
+This uses **Android's own `GeofencingClient`** through a small plugin in the app
+module, rather than a commercial background-tracking SDK.
+
+The distinction that makes that viable: we do not want continuous background
+_tracking_, only "did this device cross the edge of one circle". That is
+exactly what the platform API does, it is free, and the OS batches the work
+across every app on the device — far cheaper on battery than any polling loop.
+
+The alternative (`@transistorsoft/capacitor-background-geolocation`) is a fine
+product but **requires a purchased licence for RELEASE builds**, which every
+Play Store build is. It was trialled here and removed.
+
+**Where the seam is.** When the app is running, `src/geofence.ts` flushes the
+queue. When it is _not_ — the common case for a real crossing —
+`GeofenceReceiver.java` appends the fix straight to the same queue, in the same
+storage `@capacitor/preferences` uses, and the TypeScript drains it on next
+launch without knowing native wrote it.
+
+**The honest limit:** that makes delivery _late_ (next app open) rather than
+immediate. Immediate delivery needs an HTTP POST and a WorkManager retry chain
+written natively in that receiver. That is the real remaining cost of not
+paying, and it is contained rather than unknown — the server already tolerates
+late and out-of-order fixes by design, so nothing downstream changes when it
+lands.
+
+## Location permission
+
+Background location is the most-refused permission on Android, and asking cold
+gets refused far more often than explaining first. `src/permissions.ts` holds
+the disclosure shown _before_ the system dialog, and the refusal path: the app
+does not nag, the feature simply shows as off, and everything else keeps
+working. Google Play reviews background-location use specifically and will ask
+to see that disclosure.
 
 ## Release
 
