@@ -617,7 +617,9 @@ body {
     /* The two loudest single elements on their screens. 28/40px is a desktop
        hero figure; on a 343px column it is most of a card. */
     --wf-row-pad: 10px 12px;
-    --wf-row-gap: 8px;
+    /* 10, not 8: eight read as clamped against the 9px captions once the
+       cells went to three columns. Still well under the 12 desktop uses. */
+    --wf-row-gap: 10px;
     --wf-balance-size: 22px;
     --us-figure-size: 28px;
   }
@@ -682,7 +684,9 @@ body {
   .wf-row > [data-label]::before {
     content: attr(data-label);
     display: block;
-    margin-bottom: 3px;
+    /* 4, not 3: the caption is 9px and the value is 12-14px, so three pixels
+       between them let the two run together at a glance. */
+    margin-bottom: 4px;
     font-family: var(--font-mono);
     font-size: 9px;
     text-transform: uppercase;

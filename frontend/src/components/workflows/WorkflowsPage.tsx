@@ -1292,8 +1292,13 @@ function WorkflowRows({
             // Tokenised for the same reason as the padding: an inline value
             // beats the stylesheet, so a media query could never have reached
             // it. There are five gaps per card on a phone.
-            gap: "var(--wf-row-gap)",
-            padding: "var(--wf-row-pad)",
+            // Fallbacks are not decoration. `var(--x)` with no fallback and no
+            // definition resolves to nothing, and `padding: <nothing>` collapses to
+            // ZERO -- the card goes from spacious to clamped with no error anywhere.
+            // The desktop values are the fallback, so the worst case is desktop
+            // spacing on a phone rather than none at all.
+            gap: "var(--wf-row-gap, 12px)",
+            padding: "var(--wf-row-pad, 14px 16px)",
             alignItems: "center",
             borderBottom:
               i < items.length - 1 ? "1px solid var(--border-soft)" : "none",
