@@ -102,8 +102,7 @@ export default function BillingPage() {
       : 0
     : amountINR;
   const overMax = effectiveINR > MAX_INR;
-  const checkoutAmountINR =
-    effectiveINR >= 1 && !overMax ? effectiveINR : 0;
+  const checkoutAmountINR = effectiveINR >= 1 && !overMax ? effectiveINR : 0;
   const canCheckout = checkoutAmountINR > 0;
   const credits = creditsForTopup(checkoutAmountINR);
   // Only call a balance "low" once we've actually read it — before the first
