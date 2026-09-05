@@ -398,6 +398,15 @@ export default function BillingPage() {
                       }}
                       style={{
                         flex: 1,
+                        // A flex item's min-width defaults to `auto`, which for
+                        // an input is its intrinsic size -- so `flex: 1` could
+                        // grow it but never shrink it below that floor. The
+                        // "≈ $x credits" hint beside it is nowrap and cannot
+                        // shrink either, so on a 375px screen the row overflowed
+                        // its own border by ~69px and the hint was cut off.
+                        // This is the property that exists to say "yes, you may
+                        // shrink".
+                        minWidth: 0,
                         height: "100%",
                         background: "transparent",
                         border: "none",
