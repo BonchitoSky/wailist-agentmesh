@@ -170,7 +170,7 @@ func (r *Runner) SetGoogleOAuth(clientID, clientSecret string) {
 // user ceiling is enforced here rather than at each call site: a limit the
 // engine only checks in some branches is worse than no limit, because the
 // settings page would still claim it applies everywhere.
-func (r *Runner) preflightCheck(ctx context.Context, wf models.Workflow, amountUSDMicros int64) error {
+func (r *Runner) preflightCheck(ctx context.Context, wf models.Workflow, run models.Run, amountUSDMicros int64) error {
 	// Skipped entirely at or below the probe floor, which keeps this off the
 	// hot path: nodes.executeFunctionCall calls checkBalance with
 	// X402ProbeFloorUSDMicros before every attached tool402 call, up to 15 times
@@ -185,15 +185,16 @@ func (r *Runner) preflightCheck(ctx context.Context, wf models.Workflow, amountU
 	// here, so the account ceiling is enforced against real spend in
 	// enforceCallCeiling, on PaymentLedger.Reserve and in reserveAndFundRun,
 	// where the true amount is known.
+	// Through enforceCallCeiling rather than its own GetUserSettings: that
+	// reads the ceiling once per run. Checking it here and there with two
+	// different reads meant the cache covered only one of the two places the
+	// ceiling is consulted, and this is the one on the hot path.
+	//
+	// Tightens models.MaxSingleX402QuoteUSDMicros; it can never loosen it, since
+	// PATCH /settings refuses a ceiling above the global cap.
 	if amountUSDMicros > models.X402ProbeFloorUSDMicros {
-		settings, err := r.store.GetUserSettings(ctx, wf.UserID)
-		if err != nil {
+		if err := r.enforceCallCeiling(ctx, wf, run, amountUSDMicros); err != nil {
 			return err
-		}
-		// Tightens models.MaxSingleX402QuoteUSDMicros; it can never loosen it,
-		// since PATCH /settings refuses a ceiling above the global cap.
-		if ceiling := settings.MaxCallSpendUSDMicros; ceiling != nil && amountUSDMicros > *ceiling {
-			return fmt.Errorf("call would spend %d micros, above the %d micros per-call limit set for this account", amountUSDMicros, *ceiling)
 		}
 	}
 
@@ -1519,12 +1520,12 @@ func (r *Runner) executeNode(
 			agentFeeUSDMicros = nodes.PlatformKeyFeeUSDMicros(nodes.ModelTier(provider.Template, resolvedModel))
 		}
 
-		if err := r.preflightCheck(ctx, wf, agentFeeUSDMicros); err != nil {
+		if err := r.preflightCheck(ctx, wf, run, agentFeeUSDMicros); err != nil {
 			return nil, err
 		}
 		aw := walletByAgent[node.ID]
 		checkBalance := func(cctx context.Context, amount int64) error {
-			return r.preflightCheck(cctx, wf, amount)
+			return r.preflightCheck(cctx, wf, run, amount)
 		}
 		attach := attachMap[node.ID]
 		rf, err := r.reserveAndFundRun(ctx, wf, run, attach)
@@ -1647,7 +1648,7 @@ func (r *Runner) executeNode(
 	case models.NodeTypeTool:
 		billable := nodes.BillableFlatFee(node.Type, node.Template)
 		if billable {
-			if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
+			if err := r.preflightCheck(ctx, wf, run, models.ByokFlatFeeUSDMicros); err != nil {
 				return nil, err
 			}
 		}
@@ -1680,7 +1681,7 @@ func (r *Runner) executeNode(
 		// see the matching comment in provider.go's executeFunctionCall. The
 		// real, exact-amount reservation happens inside ExecuteTool402V2 via
 		// ledger below.
-		if err := r.preflightCheck(ctx, wf, models.X402ProbeFloorUSDMicros); err != nil {
+		if err := r.preflightCheck(ctx, wf, run, models.X402ProbeFloorUSDMicros); err != nil {
 			return nil, err
 		}
 		// A standalone tool402 node is never run-funded (that only ever
@@ -1717,7 +1718,7 @@ func (r *Runner) executeNode(
 		}
 		// Same conservative pre-flight as tool402: one cheap balance check
 		// before any network call that could spend money.
-		if err := r.preflightCheck(ctx, wf, models.X402PlatformFeeUSDMicros); err != nil {
+		if err := r.preflightCheck(ctx, wf, run, models.X402PlatformFeeUSDMicros); err != nil {
 			return nil, err
 		}
 		usdcSigner, _ := r.walletSvc.(nodes.USDCGroupSigner)
@@ -1748,7 +1749,7 @@ func (r *Runner) executeNode(
 	case models.NodeTypeAction:
 		billable := nodes.BillableFlatFee(node.Type, node.Template)
 		if billable {
-			if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
+			if err := r.preflightCheck(ctx, wf, run, models.ByokFlatFeeUSDMicros); err != nil {
 				return nil, err
 			}
 		}
@@ -1776,7 +1777,7 @@ func (r *Runner) executeNode(
 		// automatically instead of silently being ignored by this branch.
 		billable := nodes.BillableFlatFee(node.Type, node.Template)
 		if billable {
-			if err := r.preflightCheck(ctx, wf, models.ByokFlatFeeUSDMicros); err != nil {
+			if err := r.preflightCheck(ctx, wf, run, models.ByokFlatFeeUSDMicros); err != nil {
 				return nil, err
 			}
 		}

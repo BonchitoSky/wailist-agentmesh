@@ -71,13 +71,21 @@ func setCeiling(t *testing.T, r *Runner, userID string, ceilingUSDMicros int64) 
 	}
 }
 
+
+// testRun gives each case its own run ID. The ceiling is cached per run now, so
+// a shared ID would let one case's ceiling answer another's lookup -- the cache
+// working correctly would look like the check being skipped.
+func testRun(name string) models.Run {
+	return models.Run{ID: fmt.Sprintf("ceiling-%s-%d", name, time.Now().UnixNano())}
+}
+
 // The setting has to actually stop a spend, or the settings page is claiming a
 // safety control the engine ignores.
 func TestPreflightCheckRejectsChargeAboveTheUserCeiling(t *testing.T) {
 	r, wf := ceilingFixture(t, 1_000_000)
 	setCeiling(t, r, wf.UserID, 50_000)
 
-	err := r.preflightCheck(context.Background(), wf, 60_000)
+	err := r.preflightCheck(context.Background(), wf, testRun("above-ceiling"), 60_000)
 	if err == nil {
 		t.Fatal("want a charge above the ceiling to be rejected, got nil")
 	}
@@ -92,7 +100,7 @@ func TestPreflightCheckAllowsChargeAtTheUserCeiling(t *testing.T) {
 	r, wf := ceilingFixture(t, 1_000_000)
 	setCeiling(t, r, wf.UserID, 50_000)
 
-	if err := r.preflightCheck(context.Background(), wf, 50_000); err != nil {
+	if err := r.preflightCheck(context.Background(), wf, testRun("at-ceiling"), 50_000); err != nil {
 		t.Fatalf("want a charge exactly at the ceiling to pass, got %v", err)
 	}
 }
@@ -102,7 +110,7 @@ func TestPreflightCheckAllowsChargeAtTheUserCeiling(t *testing.T) {
 func TestPreflightCheckIgnoresAnUnsetCeiling(t *testing.T) {
 	r, wf := ceilingFixture(t, 1_000_000)
 
-	if err := r.preflightCheck(context.Background(), wf, 900_000); err != nil {
+	if err := r.preflightCheck(context.Background(), wf, testRun("no-ceiling"), 900_000); err != nil {
 		t.Fatalf("want no ceiling to allow any affordable charge, got %v", err)
 	}
 }
@@ -113,7 +121,7 @@ func TestPreflightCheckStillEnforcesBalanceUnderACeiling(t *testing.T) {
 	r, wf := ceilingFixture(t, 100_000)
 	setCeiling(t, r, wf.UserID, 900_000)
 
-	err := r.preflightCheck(context.Background(), wf, 500_000)
+	err := r.preflightCheck(context.Background(), wf, testRun("balance-under-ceiling"), 500_000)
 	if err == nil || !strings.Contains(err.Error(), "insufficient credits") {
 		t.Fatalf("want an insufficient-credits error, got %v", err)
 	}
@@ -126,7 +134,7 @@ func TestPreflightCheckEnforcesBalanceAtTheProbeFloor(t *testing.T) {
 	r, wf := ceilingFixture(t, 10_000) // $0.01, under the $0.05 probe floor
 	setCeiling(t, r, wf.UserID, 900_000)
 
-	err := r.preflightCheck(context.Background(), wf, models.X402ProbeFloorUSDMicros)
+	err := r.preflightCheck(context.Background(), wf, testRun("probe-floor"), models.X402ProbeFloorUSDMicros)
 	if err == nil || !strings.Contains(err.Error(), "insufficient credits") {
 		t.Fatalf("want an insufficient-credits error at the probe floor, got %v", err)
 	}
