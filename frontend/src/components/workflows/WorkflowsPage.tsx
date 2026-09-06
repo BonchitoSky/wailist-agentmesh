@@ -45,19 +45,42 @@ export function WorkflowsPage() {
   // other. A success only clears the error if it's the one that owns it,
   // so it never wipes an unrelated action's still-relevant error.
   const [pageError, setPageError] = useState<{
-    source: "demo" | "delete" | "tendril" | "schedule";
+    source: "list" | "demo" | "delete" | "tendril" | "schedule";
     message: string;
   } | null>(null);
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
 
   // Extracted from the mount effect so pull-to-refresh can run the same fetch
   // rather than a second copy of it that could drift.
+  //
+  // The two callers want different recoveries from the same failure, which is
+  // the one thing sharing the function must not flatten. On mount there is
+  // nothing to lose, so an empty list is the honest result. On a refresh there
+  // is a list already on screen, and emptying it turns a dropped request on a
+  // phone network into "you have no workflows" -- worse than the refresh
+  // simply not happening, because the user pulled expecting the list to be
+  // updated, not removed.
+  //
+  // Either way the failure is now said out loud through the same tagged banner
+  // the delete and schedule paths use, rather than being silently rendered as
+  // an empty state. UsagePage's settlements fetch already keeps whatever
+  // loaded last for the same reason (UsagePage.tsx:322).
   const reload = useCallback(
-    () =>
+    (opts?: { keepOnError?: boolean }) =>
       workflowsApi
         .list()
-        .then(setWfList)
-        .catch(() => setWfList([]))
+        .then((rows) => {
+          setWfList(rows);
+          setPageError((prev) => (prev?.source === "list" ? null : prev));
+        })
+        .catch((e: unknown) => {
+          if (!opts?.keepOnError) setWfList([]);
+          setPageError({
+            source: "list",
+            message:
+              e instanceof Error ? e.message : "could not load your workflows",
+          });
+        })
         .finally(() => setLoading(false)),
     [],
   );
@@ -70,7 +93,7 @@ export function WorkflowsPage() {
   // together on mount for the same reason, and a refresh that updated the list
   // while leaving a stale figure above it would look like a bug.
   const refreshAll = useCallback(
-    () => Promise.all([reload(), refreshBalance()]),
+    () => Promise.all([reload({ keepOnError: true }), refreshBalance()]),
     [reload, refreshBalance],
   );
 
