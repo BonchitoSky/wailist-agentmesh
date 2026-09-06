@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MIN_LENGTH, scorePassword } from "@/lib/password/strength";
+import {
+  MAX_BYTES,
+  MIN_LENGTH,
+  passwordBytes,
+  scorePassword,
+} from "@/lib/password/strength";
 
 describe("the enforced minimum", () => {
   it("matches what the server enforces", () => {
@@ -77,5 +82,36 @@ describe("the score stays in range", () => {
       expect(score).toBeGreaterThanOrEqual(0);
       expect(score).toBeLessThanOrEqual(4);
     }
+  });
+});
+
+describe("bcrypt's byte ceiling", () => {
+  it("matches the constant the server enforces", () => {
+    expect(MAX_BYTES).toBe(72);
+  });
+
+  it("accepts exactly the limit and rejects one byte past it", () => {
+    expect(scorePassword("a".repeat(MAX_BYTES)).tooLong).toBe(false);
+    expect(scorePassword("a".repeat(MAX_BYTES + 1)).tooLong).toBe(true);
+  });
+
+  it("counts bytes, not characters", () => {
+    // 40 accented characters are 80 bytes in UTF-8: well inside any
+    // character-based check and well past what bcrypt will take. Counting
+    // pw.length here is what would let this reach the server and 400.
+    const accented = "é".repeat(40);
+    expect(accented.length).toBeLessThan(MAX_BYTES);
+    expect(passwordBytes(accented)).toBeGreaterThan(MAX_BYTES);
+    expect(scorePassword(accented).tooLong).toBe(true);
+  });
+
+  it("calls an over-long password too long, not weak", () => {
+    // A 100-character passphrase is not a weak password -- it is one bcrypt
+    // cannot take. Saying "Too short" or scoring it low would be a lie.
+    const long = "Corr3ct-Horse-Battery-Staple!".repeat(4);
+    const { label, meetsMinimum, tooLong } = scorePassword(long);
+    expect(tooLong).toBe(true);
+    expect(meetsMinimum).toBe(true);
+    expect(label).toBe("Too long");
   });
 });

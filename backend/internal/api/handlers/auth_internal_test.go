@@ -1,9 +1,13 @@
 package handlers
 
 import (
+	"bytes"
+	"errors"
 	"sort"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/agentmesh/backend/internal/models"
 )
@@ -62,5 +66,23 @@ func TestUserResponseDerivesNeedsOnboardingFromTheName(t *testing.T) {
 	named := userResponse(models.User{ID: "u1", Name: "Ada"}, models.DefaultUserSettings())
 	if named["needsOnboarding"] != false {
 		t.Error("want a named account not to be prompted again")
+	}
+}
+
+// maxPasswordBytes has to be bcrypt's real limit, not a number someone typed.
+// Pinning it against the library means a bcrypt upgrade that moved the boundary
+// fails here rather than silently reintroducing the 500 this constant exists to
+// prevent.
+//
+// No database required.
+func TestMaxPasswordBytesMatchesBcryptsActualLimit(t *testing.T) {
+	// At the limit: must hash.
+	if _, err := bcrypt.GenerateFromPassword(bytes.Repeat([]byte("a"), maxPasswordBytes), bcrypt.MinCost); err != nil {
+		t.Fatalf("bcrypt rejected a password of exactly maxPasswordBytes (%d): %v", maxPasswordBytes, err)
+	}
+	// One byte over: must be the error we are shielding callers from.
+	_, err := bcrypt.GenerateFromPassword(bytes.Repeat([]byte("a"), maxPasswordBytes+1), bcrypt.MinCost)
+	if !errors.Is(err, bcrypt.ErrPasswordTooLong) {
+		t.Fatalf("want ErrPasswordTooLong one byte past maxPasswordBytes (%d), got %v", maxPasswordBytes, err)
 	}
 }

@@ -120,6 +120,17 @@ func (d *Deps) clearAuthCookie(w http.ResponseWriter) {
 	})
 }
 
+// maxPasswordBytes is bcrypt's own hard limit. GenerateFromPassword returns
+// ErrPasswordTooLong past it, which reaches the caller as a generic 500 -- so a
+// long passphrase out of a password manager reads as "the server is broken"
+// rather than "that password is too long". Rejected up front instead, in both
+// places a password is set.
+//
+// Bytes, not characters: the limit is on the encoded input, so a passphrase
+// with accented or non-Latin characters hits it sooner than its visible length
+// suggests. len() on a Go string is already a byte count.
+const maxPasswordBytes = 72
+
 // dummyHash is used in SignIn to keep response time constant even when the email doesn't exist.
 var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-agentmesh"), bcrypt.DefaultCost)
 
@@ -152,6 +163,10 @@ func (d *Deps) SignUp(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.Password) < 8 {
 		respond.Error(w, http.StatusBadRequest, "password must be at least 8 characters")
+		return
+	}
+	if len(body.Password) > maxPasswordBytes {
+		respond.Error(w, http.StatusBadRequest, "password must be at most 72 bytes")
 		return
 	}
 	if body.Name == "" {
@@ -344,6 +359,10 @@ func (d *Deps) ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	if len(body.NewPassword) < 8 {
 		respond.Error(w, http.StatusBadRequest, "new password must be at least 8 characters")
+		return
+	}
+	if len(body.NewPassword) > maxPasswordBytes {
+		respond.Error(w, http.StatusBadRequest, "new password must be at most 72 bytes")
 		return
 	}
 

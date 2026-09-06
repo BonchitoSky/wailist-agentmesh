@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { PasswordField } from "@/components/ui/PasswordField";
-import { MIN_LENGTH, scorePassword } from "@/lib/password/strength";
+import { MAX_BYTES, MIN_LENGTH, scorePassword } from "@/lib/password/strength";
 import { auth, type AuthUser } from "@/lib/api";
 import {
   FormStatus,
@@ -177,12 +177,12 @@ function PasswordSection() {
   const [confirm, setConfirm] = useState("");
   const { state, message, fail, run } = useSaveState();
 
-  const { meetsMinimum } = scorePassword(next);
+  const { meetsMinimum, tooLong } = scorePassword(next);
   const matches = next.length > 0 && next === confirm;
   // Mismatch is only worth showing once there is something to compare against,
   // so typing the confirmation does not flash an error on every keystroke.
   const showMismatch = confirm.length > 0 && next !== confirm;
-  const canSubmit = Boolean(current) && meetsMinimum && matches;
+  const canSubmit = Boolean(current) && meetsMinimum && !tooLong && matches;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -190,6 +190,13 @@ function PasswordSection() {
     // submission can still be triggered by Enter in some browsers.
     if (!meetsMinimum) {
       fail(`New password must be at least ${MIN_LENGTH} characters.`);
+      return;
+    }
+    // bcrypt's own limit, enforced by the server. Said here so a long
+    // passphrase out of a password manager gets a straight answer rather than
+    // the 500 the backend used to return for it.
+    if (tooLong) {
+      fail(`New password must be at most ${MAX_BYTES} bytes.`);
       return;
     }
     // Caught here rather than server-side: the backend has no reason to know
@@ -254,6 +261,15 @@ function PasswordSection() {
               <Requirement met={meetsMinimum}>
                 {`At least ${MIN_LENGTH} characters`}
               </Requirement>
+              {/* Only worth a line once it is actually in play -- listing a
+                  72-byte ceiling next to an 8-character floor would read as a
+                  narrow window rather than the practical non-issue it is. */}
+              {tooLong && (
+                <Requirement met={false}>
+                  {`At most ${MAX_BYTES} bytes (long passphrases count accented
+                    and emoji characters as more than one)`}
+                </Requirement>
+              )}
               <Requirement met={matches}>Both new passwords match</Requirement>
             </ul>
           </>
