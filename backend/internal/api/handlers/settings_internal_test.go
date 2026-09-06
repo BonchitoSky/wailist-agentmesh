@@ -108,7 +108,7 @@ func TestParseSettingsPatchClearsCeilingOnExplicitNull(t *testing.T) {
 }
 
 // Defaults are what every account has before it opens the settings page, so
-// they have to match the column DEFAULTs in migration 000022.
+// they have to match the column DEFAULTs in migration 000033.
 func TestDefaultUserSettingsMatchTheMigration(t *testing.T) {
 	d := models.DefaultUserSettings()
 	if d.LowBalanceUSDMicros != 5_000_000 {
