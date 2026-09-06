@@ -1302,14 +1302,20 @@ func (s *Store) MarkCreditTransactionStatus(ctx context.Context, provider, provi
 }
 
 // ExpireStalePendingTransactions marks credit_ledger rows for provider still 'pending'
-// after olderThan as 'expired' — checkouts the user opened but never completed (closed
-// tab, abandoned QR scan, on-chain payment never sent). Scoped to a single provider so
-// callers can use a per-provider staleness window: fast checkout providers like Razorpay
-// warrant a short window, while on-chain crypto providers like NOWPayments need a much
-// longer one to avoid expiring payments still working through block confirmations. Keeps
-// 'pending' meaningful as "still in progress" rather than accumulating dead rows.
-func (s *Store) ExpireStalePendingTransactions(ctx context.Context, provider string, olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-olderThan)
+// and created before cutoff as 'expired' — checkouts the user opened but never completed
+// (closed tab, abandoned QR scan, on-chain payment never sent). Scoped to a single
+// provider so callers can use a per-provider staleness window: fast checkout providers
+// like Razorpay warrant a short window, while on-chain crypto providers like NOWPayments
+// need a much longer one to avoid expiring payments still working through block
+// confirmations. Keeps 'pending' meaningful as "still in progress" rather than
+// accumulating dead rows.
+//
+// The cutoff is an instant supplied by the caller rather than a duration subtracted from
+// time.Now() in here. The production caller wants the same thing either way, but a test
+// cannot express "sweep as of a point in time" against a method that reads the clock
+// itself — it has to age rows in the database instead, which means writing raw UPDATEs
+// against created_at from the test.
+func (s *Store) ExpireStalePendingTransactions(ctx context.Context, provider string, cutoff time.Time) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE credit_ledger SET status = 'expired'
 		WHERE status = 'pending' AND provider = $1 AND created_at < $2
