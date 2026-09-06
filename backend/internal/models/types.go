@@ -145,7 +145,29 @@ type WorkflowNode struct {
 	// out of band. Never persisted on a saved workflow — it is only ever set
 	// on the synthesized nodes payTendril builds at call time.
 	TendrilLeaseToken string `json:"-"`
+	// MaxRetries is how many additional attempts the runner makes for this
+	// node after a failure classified as safe to retry (see
+	// nodes.IsRetryable) — 0 (default) means no automatic retry. A
+	// non-retryable error is never retried regardless of this value. Clamped
+	// to MaxNodeRetries on save (see handlers.clampRetryFields) so a saved
+	// workflow can't hammer a third-party endpoint indefinitely.
+	MaxRetries int `json:"maxRetries,omitempty"`
+	// RetryBackoffMs is the delay before each retry attempt. 0 with
+	// MaxRetries > 0 means retry immediately. Clamped to
+	// MaxNodeRetryBackoffMs on save, same reasoning as MaxRetries.
+	RetryBackoffMs int `json:"retryBackoffMs,omitempty"`
 }
+
+// MaxNodeRetries and MaxNodeRetryBackoffMs bound a node's retry
+// configuration so a saved workflow can't hold a run's goroutine open
+// indefinitely retrying against a third-party endpoint -- 5 attempts at up
+// to 30s apart is generous for real transient failures (a blip, a brief
+// rate limit) without letting a single misconfigured or abusive node retry
+// for hours.
+const (
+	MaxNodeRetries        = 5
+	MaxNodeRetryBackoffMs = 30_000
+)
 
 type WorkflowEdge struct {
 	ID     string   `json:"id"`
@@ -184,6 +206,29 @@ type Workflow struct {
 	Updated     string         `json:"updated,omitempty"`
 	CreatedAt   time.Time      `json:"createdAt"`
 	UpdatedAt   time.Time      `json:"updatedAt"`
+	// ScheduleCron is a standard 5-field cron expression (UTC). Empty/nil
+	// means the workflow has no schedule -- set via SetWorkflowSchedule,
+	// never written directly through UpdateWorkflow's graph save.
+	ScheduleCron *string `json:"scheduleCron,omitempty"`
+	// ScheduleNextRunAt is when the scheduler will next fire this workflow.
+	// Advanced past `now` atomically at claim time (Store.ClaimDueSchedules)
+	// so two server replicas polling concurrently can't both fire the same
+	// tick.
+	ScheduleNextRunAt *time.Time `json:"scheduleNextRunAt,omitempty"`
+	// Geofence centre and radius. All three are set or all three are nil --
+	// a partially configured zone is meaningless, so the store writes and
+	// clears them together and the handler validates them as one unit.
+	GeofenceLat     *float64 `json:"geofenceLat,omitempty"`
+	GeofenceLng     *float64 `json:"geofenceLng,omitempty"`
+	GeofenceRadiusM *float64 `json:"geofenceRadiusM,omitempty"`
+	// GeofenceInside is tri-state: nil means no fix has been recorded yet.
+	// That is deliberately distinct from false -- see migration 000029. Only
+	// a change from a known state counts as a crossing.
+	GeofenceInside *bool `json:"geofenceInside,omitempty"`
+	// GeofenceLastFixAt is the CLIENT's timestamp for the last fix acted on,
+	// not the server's receive time. Offline pings flush in a burst, so the
+	// only ordering that means anything is the one the device observed.
+	GeofenceLastFixAt *time.Time `json:"geofenceLastFixAt,omitempty"`
 }
 
 type RunStatus string
@@ -225,6 +270,36 @@ type RunLog struct {
 	Output     any       `json:"output,omitempty"`
 	DurationMs int       `json:"durationMs,omitempty"`
 	Ts         time.Time `json:"ts"`
+	// ConfigHash is a hash of the node's functionally-relevant config at
+	// the moment this row reached LogStatusSuccess -- empty for every
+	// status other than success, and for any success row written before
+	// this field existed. Never sent to the client (see the "-" tag): it's
+	// an internal detail of Resume's skip-on-prior-success check (see
+	// engine.nodeConfigHash), not something a UI needs to render.
+	ConfigHash string `json:"-"`
+}
+
+// DeadLetterRun records a node that failed permanently -- either a
+// non-retryable error, or a retryable one that exhausted MaxRetries -- so a
+// dead-lettered run isn't just an opaque "failed" status with no way to find
+// it again. AttemptCount is every executeNode call made for this node
+// across the run, including the first.
+//
+// PaymentRisk marks a failure where real money may already have moved --
+// e.g. *nodes.ErrBalanceBlocked, where the agent's own LLM turn completed
+// and its flat fee was already debited before the attached call it then
+// tried ran into insufficient balance. Resume refuses to retry a
+// payment-risk row unless explicitly forced, since re-executing the node
+// would redo the LLM turn (and its billing) rather than just retrying the
+// part that actually failed.
+type DeadLetterRun struct {
+	ID           string    `json:"id"`
+	RunID        string    `json:"runId"`
+	NodeID       string    `json:"nodeId"`
+	Error        string    `json:"error"`
+	AttemptCount int       `json:"attemptCount"`
+	PaymentRisk  bool      `json:"paymentRisk"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 type AgentWallet struct {

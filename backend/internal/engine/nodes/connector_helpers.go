@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 
 	"github.com/agentmesh/backend/internal/models"
@@ -42,76 +41,18 @@ const messageTemplateKey = "messageTemplate"
 
 // resolveMessage is what a connector should call instead of rc.Message()
 // directly, so every one of them picks up template support for free. See
-// expandTemplate for the placeholder syntax.
+// resolveTemplate (resolve.go) for the placeholder syntax.
 func resolveMessage(node models.WorkflowNode, rc RunContexter) string {
 	tmpl := configVal(node, messageTemplateKey, "")
 	if tmpl == "" {
 		return rc.Message()
 	}
-	return expandTemplate(tmpl, rc)
+	return resolveTemplate(tmpl, rc)
 }
 
-// templatePlaceholder matches {{ result }} and {{ result.field.path }}.
-// Capture group 1 is "" for the bare form, or ".field.path" for a dotted one.
-var templatePlaceholder = regexp.MustCompile(`\{\{\s*result((?:\.[A-Za-z0-9_]+)*)\s*\}\}`)
-
-// expandTemplate replaces every {{ result }} / {{ result.field.path }}
-// placeholder in tmpl against the run's most recent output. This is the
-// direct answer to "the whole raw response gets forwarded, not just the
-// part I want" -- {{ result }} keeps today's behavior (the whole thing,
-// stringified), while {{ result.extract }} against e.g. a Wikipedia API
-// response picks just that one field out of it instead.
-//
-// A path that doesn't resolve (wrong field name, or the output isn't a JSON
-// object at that point) expands to "" rather than leaving the literal
-// placeholder text in whatever gets sent -- there's no good way to surface
-// an error mid-template, and a blank beats a broken-looking "{{ result.x }}"
-// showing up in a real Slack message or email.
-func expandTemplate(tmpl string, rc RunContexter) string {
-	return templatePlaceholder.ReplaceAllStringFunc(tmpl, func(match string) string {
-		groups := templatePlaceholder.FindStringSubmatch(match)
-		path := groups[1]
-		if path == "" {
-			return rc.Message()
-		}
-		var cur any = rc.LastOutput()
-		for _, key := range strings.Split(strings.TrimPrefix(path, "."), ".") {
-			m, ok := cur.(map[string]any)
-			if !ok {
-				return ""
-			}
-			cur, ok = m[key]
-			if !ok {
-				return ""
-			}
-		}
-		return templateValueToString(cur)
-	})
-}
-
-// templateValueToString renders one resolved template value. Mirrors
-// engine.anyToString's string/JSON-fallback behavior, duplicated here (not
-// imported) because nodes is a lower-level package engine itself imports --
-// importing back would be circular.
-func templateValueToString(v any) string {
-	if v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	b, _ := json.Marshal(v)
-	return string(b)
-}
-
-// ExpandTemplateForTest and ResolveMessageForTest are test-only exported
-// wrappers, used by connector_helpers_test.go (package nodes_test) to test
-// the unexported helpers above without exporting them from the package's
-// real API.
-func ExpandTemplateForTest(tmpl string, rc RunContexter) string {
-	return expandTemplate(tmpl, rc)
-}
-
+// ResolveMessageForTest is a test-only exported wrapper, used by
+// connector_helpers_test.go (package nodes_test) to test resolveMessage
+// without exporting it from the package's real API.
 func ResolveMessageForTest(node models.WorkflowNode, rc RunContexter) string {
 	return resolveMessage(node, rc)
 }
@@ -134,6 +75,21 @@ func newJSONRequest(ctx context.Context, method, target string, extraHeaders map
 	return req, nil
 }
 
+// newFormRequest builds a POST request with a form-urlencoded body --
+// shared by Stripe and Twilio, the two connectors whose APIs take
+// form-encoded bodies rather than JSON, so the url.Values/Content-Type
+// sequence has one implementation instead of two independently maintained
+// copies. Auth (Bearer header, Basic auth, ...) is the caller's own concern:
+// set it on the returned request before sending, the same as newJSONRequest.
+func newFormRequest(ctx context.Context, target string, form url.Values) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req, nil
+}
+
 // postJSON POSTs payload as JSON to target and returns sentinel on success.
 func postJSON(ctx context.Context, target string, extraHeaders map[string]string, payload any, sentinel, serviceName string) (any, error) {
 	req, err := newJSONRequest(ctx, http.MethodPost, target, extraHeaders, payload)
@@ -148,15 +104,47 @@ func postJSON(ctx context.Context, target string, extraHeaders map[string]string
 // redacted URL. Callers own reading and closing resp.Body — use this for
 // callers that need the raw response (doAndCheck wraps it for the common
 // sentinel-on-success case).
+//
+// A transport failure on req is wrapped Retryable when req.Method is
+// idempotent (GET/HEAD/PUT/DELETE/OPTIONS) -- the exact same
+// isIdempotentHTTPMethod reasoning callHTTP (tool.go) already applies to a
+// plain HTTP Tool node's own transport failures: nothing non-repeatable
+// can have happened server-side for one of these methods, so retrying is
+// safe. This is every connector's shared low-level HTTP call, so gating on
+// the request's own method here (rather than per-connector) automatically
+// makes every current and future GET-based connector (RSS, OpenWeatherMap,
+// Calendly, Telegram getUpdates, Google Drive downloads, ...) retryable
+// without touching each one, while every POST-based send (Slack, Jira,
+// Gmail, ...) stays correctly non-retryable -- a retry after an ambiguous
+// POST failure could double-send a message/ticket/email, which is exactly
+// what marking it Retryable would risk.
 func doValidatedRequest(req *http.Request, serviceName string) (*http.Response, error) {
 	if err := urlValidator(req.URL.String()); err != nil {
 		return nil, err
 	}
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s: request to %s failed: %w", serviceName, redactedURL(req.URL), unwrapURLError(err))
+		wrapped := fmt.Errorf("%s: request to %s failed: %w", serviceName, redactedURL(req.URL), unwrapURLError(err))
+		if isIdempotentHTTPMethod(req.Method) {
+			return nil, Retryable(wrapped)
+		}
+		return nil, wrapped
 	}
 	return resp, nil
+}
+
+// retryableIfIdempotent wraps err Retryable when method is idempotent,
+// mirroring doValidatedRequest's own transport-failure reasoning above for
+// the 5xx-with-a-response case: a >=500 status on a GET/HEAD/PUT/DELETE/
+// OPTIONS request is safe to retry the same way a dropped connection is,
+// while the identical status on a POST is not, since the server may have
+// already acted on it. Shared by getJSON/getRaw/doAndCheck below so their
+// >=500 branches can't drift from doValidatedRequest's own gating.
+func retryableIfIdempotent(err error, method string) error {
+	if isIdempotentHTTPMethod(method) {
+		return Retryable(err)
+	}
+	return err
 }
 
 // readErrorBody reads a bounded excerpt of a non-2xx response body for the
@@ -178,7 +166,14 @@ func doAndCheck(req *http.Request, sentinel, serviceName string) (any, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		apiErr := fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		// >=500 only, matching callHTTP's (tool.go) own distinction: a 4xx
+		// is a client error, retrying sends the identical broken request
+		// again, never retryable regardless of method.
+		if resp.StatusCode >= 500 {
+			return nil, retryableIfIdempotent(apiErr, req.Method)
+		}
+		return nil, apiErr
 	}
 	io.Copy(io.Discard, resp.Body)
 	return sentinel, nil
@@ -196,7 +191,11 @@ func getJSON(req *http.Request, serviceName string) (any, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		apiErr := fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		if resp.StatusCode >= 500 {
+			return nil, retryableIfIdempotent(apiErr, req.Method)
+		}
+		return nil, apiErr
 	}
 	b, err := readBounded(resp.Body, httpResponseLimit)
 	if err != nil {
@@ -309,4 +308,55 @@ func IssueTitleForTest(message string) string {
 
 func ReadBoundedForTest(r io.Reader, limit int) ([]byte, error) {
 	return readBounded(r, limit)
+}
+
+// doAndDecode is getJSON under the name the GraphQL/Monday.com call sites
+// already use — kept as a thin alias rather than two copies of the same
+// validate/status-check/readBounded/unmarshal sequence that could silently
+// drift apart on a future fix to either one.
+func doAndDecode(req *http.Request, serviceName string) (any, error) {
+	return getJSON(req, serviceName)
+}
+
+// getAndDecode GETs target and returns the decoded JSON body.
+func getAndDecode(ctx context.Context, target string, extraHeaders map[string]string, serviceName string) (any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", serviceName, err)
+	}
+	req.Header.Set("Accept", "application/json")
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
+	return doAndDecode(req, serviceName)
+}
+
+// getRaw GETs target and returns the raw body, bounded by httpResponseLimit.
+// Used by connectors whose payload is not JSON (RSS/Atom feeds).
+func getRaw(ctx context.Context, target string, extraHeaders map[string]string, serviceName string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", serviceName, err)
+	}
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
+	resp, err := doValidatedRequest(req, serviceName)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		apiErr := fmt.Errorf("%s API %d: %s", serviceName, resp.StatusCode, readErrorBody(resp))
+		if resp.StatusCode >= 500 {
+			return nil, retryableIfIdempotent(apiErr, req.Method)
+		}
+		return nil, apiErr
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
+}
+
+// GetAndDecodeForTest exposes getAndDecode to the external nodes_test package.
+func GetAndDecodeForTest(ctx context.Context, target string, h map[string]string, svc string) (any, error) {
+	return getAndDecode(ctx, target, h, svc)
 }

@@ -1,29 +1,43 @@
 import type { PaymentMethod } from "@/components/checkout/types";
 
-// Frontend-only credit wallet model. This is a mock persisted to localStorage --
-// there is no backend, so balances and history are per-browser until a real API
-// lands. Amounts paid are INR; credits are denominated in USD (via a mock FX).
+// Credit wallet model. Both fields are server-owned and neither is persisted
+// locally: balanceUSD comes from users.credit_balance_usd_micros and purchases
+// from credit_ledger, the same rows the payment webhooks write and settle. A
+// per-browser copy showed the wrong history after a sign-out or an account
+// switch while the database had it right all along.
 
-export type PurchaseStatus = "paid";
+// Mirrors credit_ledger.status. 'completed' is the only state where credits
+// were actually granted; the rest are shown so a user who paid and saw nothing
+// land can tell which of "still settling", "the gateway declined", and "we
+// stopped waiting" happened, instead of finding an empty page.
+export type PurchaseStatus =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "expired"
+  | "partial"
+  | "refunded";
 
 export interface Purchase {
   id: string;
   createdAt: string; // ISO 8601
-  amountINR: number; // amount charged
-  creditsUSD: number; // credits granted (base + bonus)
+  // Exactly one of these is set, matching how the row was paid: the Cashfree
+  // path is INR-denominated (with an FX rate recorded at purchase time), the
+  // crypto path is already USD. A renderer must handle either.
+  amountINR?: number;
+  amountUSD?: number;
+  creditsUSD: number; // credits granted
   method: PaymentMethod;
   status: PurchaseStatus;
-}
-
-export interface AutoRecharge {
-  enabled: boolean;
-  thresholdUSD: number; // recharge when balance drops below this
-  amountINR: number; // how much to top up each time
-  monthlyCapINR: number | null; // optional spend ceiling
 }
 
 export interface CreditsState {
   balanceUSD: number;
   purchases: Purchase[]; // newest first
-  autoRecharge: AutoRecharge;
+  // The account's own low-balance warning threshold, mirrored from
+  // user_settings.low_balance_usd_micros. A plain number, deliberately not the
+  // persisted autoRecharge config this store used to keep: that object was
+  // per-browser and unwired, which is why it was removed. This one is a cache
+  // of a server value, refreshed on every /auth/me.
+  lowBalanceThresholdUSD: number;
 }

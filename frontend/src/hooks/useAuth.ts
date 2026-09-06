@@ -1,7 +1,8 @@
 "use client";
 import { useCallback, useSyncExternalStore } from "react";
 import { auth, AuthUser } from "@/lib/api";
-import { setLowBalanceThresholdUSD } from "@/lib/credits/store";
+import { IS_NATIVE, setAuthToken, authReady } from "@/lib/nativeAuth";
+import { resetCredits, setLowBalanceThresholdUSD } from "@/lib/credits/store";
 import { microsToUSDNumber } from "@/components/settings/ui";
 
 const UI_COOKIE = "agentmesh_ui";
@@ -50,6 +51,11 @@ function commit(next: Snapshot): void {
 
 async function load(): Promise<void> {
   try {
+    // On native, wait for NativeBoot to finish restoring (or fail to restore)
+    // the persisted token before asking who's signed in -- calling auth.me()
+    // first would race it and 401 with no Authorization header attached yet.
+    // Already-resolved on the web.
+    await authReady;
     const u = await auth.me();
     setUICookie();
     // Applied here rather than only from the settings page: the low-balance
@@ -64,6 +70,48 @@ async function load(): Promise<void> {
     clearUICookie();
     commit({ signedIn: false, loading: false, user: null });
   }
+}
+
+// Hands a fresh session to the native shell so it survives the app being
+// closed. Inert on the web, where the token is null and the HttpOnly cookie is
+// the session. Dynamic and IS_NATIVE-guarded for the same reason as NativeBoot:
+// a browser build must not pull Capacitor in.
+function persistNativeSession(token: string | null): void {
+  if (!token || !IS_NATIVE) return;
+  setAuthToken(token);
+  // Logged, not swallowed: a failed native persist (e.g. a Keystore write
+  // error) would otherwise leave the UI showing signed-in while the shell never
+  // actually saved the token, silently failing to survive the app being killed.
+  void import("@/native")
+    .then(({ shell }) => shell.onSignedIn(token))
+    .catch((err) =>
+      console.error("native shell failed to persist sign-in", err),
+    );
+}
+
+// The local half of signing out. A module function rather than a useCallback,
+// because the state it clears is module-level now -- nothing here needs a
+// component to be mounted.
+function clearLocalSession(): void {
+  if (IS_NATIVE) {
+    setAuthToken(null);
+    // Logged for the mirror-image reason: a shared device that fails to clear
+    // the persisted token would otherwise silently keep the old user's session
+    // live in Keystore after the UI has already moved on.
+    void import("@/native")
+      .then(({ shell }) => shell.onSignedOut())
+      .catch((err) =>
+        console.error("native shell failed to clear sign-out", err),
+      );
+  }
+  clearUICookie();
+  // Balance and purchase history are module singletons that survive a
+  // client-side route change, so they have to be dropped explicitly here --
+  // otherwise the next account to sign in in this tab sees the previous one's
+  // money until its own fetch lands. resetCredits also bumps the store's epoch,
+  // which discards any refresh still in flight.
+  resetCredits();
+  commit({ signedIn: false, loading: false, user: null });
 }
 
 // Fetched from subscribe rather than during render: subscribe runs in an
@@ -89,7 +137,8 @@ export function useAuth() {
   const snap = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
   const signIn = useCallback(async (email: string, password: string) => {
-    await auth.signIn(email, password);
+    const token = await auth.signIn(email, password);
+    persistNativeSession(token);
     setUICookie();
     commit({ ...snapshot, signedIn: true });
     // Re-read the account rather than waiting for a reload. With per-component
@@ -100,7 +149,8 @@ export function useAuth() {
 
   const signUp = useCallback(
     async (email: string, password: string, name: string, org: string) => {
-      await auth.signUp(email, password, name, org);
+      const token = await auth.signUp(email, password, name, org);
+      persistNativeSession(token);
       setUICookie();
       commit({ ...snapshot, signedIn: true });
       await load();
@@ -109,9 +159,22 @@ export function useAuth() {
   );
 
   const signOut = useCallback(async () => {
-    await auth.signOut();
-    clearUICookie();
-    commit({ signedIn: false, loading: false, user: null });
+    // The local teardown runs in a finally: auth.signOut() is a network call,
+    // and letting a failed request skip the cleanup would leave the previous
+    // account's balance, purchase history and (on native) persisted token live
+    // in a UI that has already moved on. Signing out locally is the part that
+    // must not be optional -- the server-side cookie clear is best-effort by
+    // comparison.
+    try {
+      await auth.signOut();
+    } catch (err) {
+      console.error(
+        "sign-out request failed; clearing local session anyway",
+        err,
+      );
+    } finally {
+      clearLocalSession();
+    }
   }, []);
 
   // Completes the post-OAuth onboarding prompt (or a later profile edit) --

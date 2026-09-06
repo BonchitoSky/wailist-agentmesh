@@ -15,6 +15,9 @@ import {
 } from "@/lib/data";
 import { IconClose, StatusDot } from "@/components/ui";
 import { BrandLogo } from "./nodes/brandLogos";
+import { can } from "@/lib/readonly";
+import { iconBtn } from "@/components/ui/buttons";
+import { useReadOnly } from "@/hooks/useReadOnly";
 import { tools as toolsApi, oauth2, OAuthCredentialSummary } from "@/lib/api";
 import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
 import {
@@ -49,7 +52,25 @@ export function Inspector({
   width = 320,
   embedded = false,
 }: InspectorProps) {
+  // Above the early return: a hook after a conditional return is a hook
+  // that does not always run.
+  const readOnly = useReadOnly();
+
   if (!selected) return <EmptyInspector width={width} embedded={embedded} />;
+
+  // A viewer gets a description of the node, not its editor -- see
+  // ReadOnlyInspector below for why that is a separate component rather
+  // than this one with every input disabled.
+  if (!can("workflow.editGraph", readOnly)) {
+    return (
+      <ReadOnlyInspector
+        selected={selected}
+        onClose={onClose}
+        width={width}
+        embedded={embedded}
+      />
+    );
+  }
 
   const meta = nodeMeta(selected);
 
@@ -140,7 +161,11 @@ export function Inspector({
           <ProviderInspector node={selected} onUpdate={onUpdate} />
         )}
         {selected.type === "tool" && (
-          <ToolInspector node={selected} onUpdate={onUpdate} />
+          <ToolInspector
+            node={selected}
+            workflowId={workflowId}
+            onUpdate={onUpdate}
+          />
         )}
         {selected.type === "tool402" && (
           <Tool402Inspector node={selected} onUpdate={onUpdate} />
@@ -214,6 +239,232 @@ export function Inspector({
           </svg>
           Delete node
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Read-only inspector ───────────────────────────────────────────────────
+// What a node's config looks like when the client cannot change it. Not the
+// editor with its inputs disabled: a disabled field still renders as a field,
+// which reads as "you may type here, later" rather than "this is what it is".
+// Values are shown as text, so the panel describes the node instead.
+
+// Secrets are acknowledged, never rendered. The backend already returns a
+// "__enc__" sentinel rather than ciphertext, but a plaintext key left on an
+// older row must not reach the DOM either.
+const SECRET_PLACEHOLDER = "••••••••";
+
+interface ReadOnlyRow {
+  label: string;
+  value: string;
+  multiline?: boolean;
+}
+
+function readOnlyRows(n: WorkflowNode): ReadOnlyRow[] {
+  const rows: ReadOnlyRow[] = [];
+  const push = (label: string, value?: string | null, multiline?: boolean) => {
+    const v = (value ?? "").trim();
+    if (v) rows.push({ label, value: v, multiline });
+  };
+
+  push("Model", n.model);
+  push("Key", n.apiKey ? SECRET_PLACEHOLDER : undefined);
+  push("Key mode", n.keyMode);
+  push("System prompt", n.systemPrompt, true);
+  push("URL", n.url);
+  push("Method", n.method);
+  push("Endpoint", n.endpoint);
+  push("Description", n.description, true);
+  if (n.price) {
+    push("Price", [n.price, n.unit, n.asset].filter(Boolean).join(" "));
+  }
+  push("Provider", n.provider);
+  push("Source", n.source);
+  push("To", n.emailTo);
+  push("Subject", n.emailSubject);
+  push("Action", n.tendrilAction);
+  push("Hours", n.tendrilHours);
+  push("Amount", n.tendrilAmount);
+
+  for (const [k, v] of Object.entries(n.config ?? {})) push(k, v);
+  // Keys only: that a credential is configured is part of understanding the
+  // node; what it is is not.
+  for (const k of Object.keys(n.secrets ?? {})) {
+    rows.push({ label: k, value: SECRET_PLACEHOLDER });
+  }
+  return rows;
+}
+
+function ReadOnlyInspector({
+  selected,
+  onClose,
+  width = 320,
+  embedded = false,
+}: {
+  selected: WorkflowNode;
+  onClose: () => void;
+  width?: number | string;
+  embedded?: boolean;
+}) {
+  const meta = nodeMeta(selected);
+  const rows = readOnlyRows(selected);
+
+  return (
+    <div
+      style={{
+        width,
+        flexShrink: 0,
+        borderLeft: embedded ? undefined : "1px solid var(--border)",
+        background: "var(--bg-elev-1)",
+        overflow: "auto",
+        height: "100%",
+      }}
+    >
+      <div
+        style={{
+          padding: "14px 16px",
+          borderBottom: "1px solid var(--border)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            minWidth: 0,
+          }}
+        >
+          <span
+            style={{
+              width: 24,
+              height: 24,
+              borderRadius: 6,
+              background: meta.bg,
+              color: meta.fg,
+              border: "1px solid var(--border-strong)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 12,
+              flexShrink: 0,
+            }}
+          >
+            <BrandLogo template={selected.template} fallback={meta.icon} />
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 500,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {meta.title}
+            </div>
+            <div
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 10,
+                color: "var(--fg-dim)",
+              }}
+            >
+              {selected.type} · {selected.id}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close inspector"
+          title="Close"
+          style={{
+            width: 32,
+            height: 32,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            background: "transparent",
+            border: "none",
+            color: "var(--fg-dim)",
+            cursor: "pointer",
+            borderRadius: "var(--r-2)",
+          }}
+        >
+          <IconClose size={13} />
+        </button>
+      </div>
+
+      <div
+        style={{
+          padding: 16,
+          display: "flex",
+          flexDirection: "column",
+          gap: 18,
+        }}
+      >
+        {rows.length > 0 ? (
+          <Section label="config">
+            {rows.map((r) => (
+              <div
+                key={r.label}
+                style={{ display: "flex", flexDirection: "column", gap: 4 }}
+              >
+                <div
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 10,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.06em",
+                    color: "var(--fg-dim)",
+                  }}
+                >
+                  {r.label}
+                </div>
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    lineHeight: 1.55,
+                    color: "var(--fg)",
+                    fontFamily: r.multiline
+                      ? "var(--font-sans)"
+                      : "var(--font-mono)",
+                    whiteSpace: r.multiline ? "pre-wrap" : "normal",
+                    wordBreak: "break-word",
+                    // Prose wants a readable measure; a lone value does not.
+                    maxWidth: r.multiline ? "60ch" : undefined,
+                  }}
+                >
+                  {r.value}
+                </div>
+              </div>
+            ))}
+          </Section>
+        ) : (
+          <div
+            style={{ fontSize: 12, lineHeight: 1.6, color: "var(--fg-dim)" }}
+          >
+            This node has no configuration of its own.
+          </div>
+        )}
+
+        <div
+          style={{
+            fontSize: 11.5,
+            lineHeight: 1.6,
+            color: "var(--fg-dim)",
+            borderTop: "1px solid var(--border-soft)",
+            paddingTop: 14,
+          }}
+        >
+          Editing happens in the AgentMesh desktop app.
+        </div>
       </div>
     </div>
   );
@@ -500,22 +751,6 @@ function ConfigField({
   );
 }
 
-const iconBtnStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "transparent",
-  border: "1px solid var(--border-strong)",
-  borderRadius: "var(--r-2)",
-  color: "var(--fg-muted)",
-  cursor: "pointer",
-  fontSize: 12,
-  fontFamily: "var(--font-mono)",
-  flexShrink: 0,
-};
-
 const inputStyle: React.CSSProperties = {
   height: 36,
   padding: "0 10px",
@@ -630,9 +865,7 @@ function HttpHeadersField({
   return (
     <Field label="Custom headers" hint="encrypted at rest">
       {isEncrypted && (
-        <div
-          style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 6 }}
-        >
+        <div style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 6 }}>
           Headers set. Add a row below to replace them.
         </div>
       )}
@@ -664,7 +897,7 @@ function HttpHeadersField({
             />
             <button
               type="button"
-              style={iconBtnStyle}
+              style={iconBtn}
               onClick={() => removeRow(i)}
               title="Remove header"
             >
@@ -675,7 +908,7 @@ function HttpHeadersField({
         <button
           type="button"
           style={{
-            ...iconBtnStyle,
+            ...iconBtn,
             width: "auto",
             padding: "0 10px",
             alignSelf: "flex-start",
@@ -942,14 +1175,33 @@ function ProviderInspector({
 }
 
 // ── Tool Inspector ─────────────────────────────────────────────────────────
+// COMPUTE_TOOL_TEMPLATES take their settings entirely from
+// CONNECTOR_CONFIG_FIELDS (via ConnectorConfigSection) — they read Config/
+// Secrets keys, not node.url/node.method, so the generic Method/URL panel
+// below is irrelevant for them and would just confuse the editor.
+const COMPUTE_TOOL_TEMPLATES = new Set([
+  "set",
+  "json_extract",
+  "crypto",
+  "datetime",
+  "xml",
+  "template",
+  "html_extract",
+  "markdown",
+  "quickchart",
+]);
+
 function ToolInspector({
   node,
+  workflowId,
   onUpdate,
 }: {
   node: WorkflowNode;
+  workflowId: string;
   onUpdate: (n: WorkflowNode) => void;
 }) {
   const tpl = TOOL_TEMPLATES.find((t) => t.id === node.template);
+  const isComputeTool = COMPUTE_TOOL_TEMPLATES.has(node.template ?? "");
   return (
     <>
       <Section label="Tool">
@@ -973,29 +1225,31 @@ function ToolInspector({
           </>
         )}
       </Section>
-      <Section label="Config">
-        <Field label="Method">
-          <select
-            style={monoInputStyle}
-            value={node.method ?? "GET"}
-            onChange={(e) => onUpdate({ ...node, method: e.target.value })}
-          >
-            <option>GET</option>
-            <option>POST</option>
-            <option>PUT</option>
-            <option>PATCH</option>
-            <option>DELETE</option>
-          </select>
-        </Field>
-        <Field label="URL">
-          <input
-            style={monoInputStyle}
-            value={node.url ?? ""}
-            placeholder="https://api.example.com/v1/"
-            onChange={(e) => onUpdate({ ...node, url: e.target.value })}
-          />
-        </Field>
-      </Section>
+      {!isComputeTool && (
+        <Section label="Config">
+          <Field label="Method">
+            <select
+              style={monoInputStyle}
+              value={node.method ?? "GET"}
+              onChange={(e) => onUpdate({ ...node, method: e.target.value })}
+            >
+              <option>GET</option>
+              <option>POST</option>
+              <option>PUT</option>
+              <option>PATCH</option>
+              <option>DELETE</option>
+            </select>
+          </Field>
+          <Field label="URL">
+            <input
+              style={monoInputStyle}
+              value={node.url ?? ""}
+              placeholder="https://api.example.com/v1/"
+              onChange={(e) => onUpdate({ ...node, url: e.target.value })}
+            />
+          </Field>
+        </Section>
+      )}
       {node.template === "http" && (
         <Section label="Body (optional)">
           <Field
@@ -1030,7 +1284,11 @@ function ToolInspector({
         // genuinely optional -- a plain public-API call needs none of
         // them -- so this deliberately skips ConnectorConfigSection's
         // connected/not-connected status pill, which assumes the secret
-        // is required for the node to function at all.
+        // is required for the node to function at all. Also,
+        // ConnectorConfigSection looks up CONNECTOR_CONFIG_FIELDS by
+        // template id and there's deliberately no "http" entry there (a
+        // plain URL call isn't a named connector), so it would silently
+        // render nothing here -- these fields have to be inline.
         <Section label="Headers & auth (optional)">
           <HttpHeadersField node={node} onUpdate={onUpdate} />
           <SecretField
@@ -1050,6 +1308,14 @@ function ToolInspector({
           />
         </Section>
       )}
+      {/* No-op for "http" (no CONNECTOR_CONFIG_FIELDS["http"] entry, see
+          above) -- kept unconditional for any compute-tool template that
+          does register a spec here. */}
+      <ConnectorConfigSection
+        node={node}
+        workflowId={workflowId}
+        onUpdate={onUpdate}
+      />
     </>
   );
 }
@@ -1101,7 +1367,8 @@ function validateBodyTemplate(
   const missing = new Set<string>();
   for (const m of template.matchAll(BODY_PLACEHOLDER)) {
     const name = m[2].trim();
-    const isDiscoveredValue = m[1] === "param" && paramDefaults?.[name] !== undefined;
+    const isDiscoveredValue =
+      m[1] === "param" && paramDefaults?.[name] !== undefined;
     if (!known.has(name) && !isDiscoveredValue) missing.add(m[0]);
   }
   if (missing.size > 0) {
@@ -1132,7 +1399,6 @@ function bodySkeleton(fields: CustomParam[]): string {
   );
   return `{\n${lines.join(",\n")}\n}`;
 }
-
 
 function formatFileSize(base64: string): string {
   const bytes = Math.floor((base64.length * 3) / 4);
@@ -1209,7 +1475,11 @@ function Tool402Inspector({
   const bodyMode = node.bodyMode === "json" ? "json" : "params";
   const bodyTemplate = node.bodyTemplate ?? "";
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
-  const bodyError = validateBodyTemplate(bodyTemplate, custom, node.paramDefaults);
+  const bodyError = validateBodyTemplate(
+    bodyTemplate,
+    custom,
+    node.paramDefaults,
+  );
   // How the configured values will actually reach the endpoint — worth
   // stating outright, since it changes with the mode, the method, and
   // whether a file is attached (a file forces multipart, a body forces POST).
@@ -1801,7 +2071,9 @@ function Tool402Inspector({
                   <>
                     <span style={{ color: "var(--accent)" }}>✓ valid JSON</span>
                     {" — keys must match what the endpoint documents; field"}
-                    {" names are yours, they only appear inside {{…}}. A file's"}
+                    {
+                      " names are yours, they only appear inside {{…}}. A file's"
+                    }
                     {" bytes are filled in at call time, never pasted here."}
                   </>
                 ) : (
@@ -1925,6 +2197,14 @@ type ConnectorField =
       label: string;
       hint?: string;
       placeholder: string;
+      // The field's old Secrets key, for a connector whose Inspector field
+      // moved to a new key -- e.g. Stripe's stripeAPIKey (was
+      // stripeSecretKey). The backend already falls back to this key for a
+      // node saved under the old name and runs correctly either way; this
+      // is only so the "connected" status badge below doesn't call an
+      // already-working node "Not connected" just because it checks the
+      // new key alone.
+      legacyKey?: string;
     }
   | {
       kind: "config";
@@ -2402,20 +2682,126 @@ const CONNECTOR_CONFIG_FIELDS: Record<
       },
     ],
   },
+  set: {
+    label: "Edit Fields config",
+    fields: [
+      {
+        kind: "config",
+        key: "setFields",
+        label: "Fields (JSON)",
+        placeholder: '{"city":"{{ node.n1.city }}","asked":"{{ input }}"}',
+        hint: "String values may use {{ result }}, {{ input }}, {{ node.<id>.<field> }}",
+      },
+    ],
+  },
+  json_extract: {
+    label: "JSON Extract config",
+    fields: [
+      {
+        kind: "config",
+        key: "jsonPath",
+        label: "Path",
+        placeholder: "data.items.0.name",
+        hint: "Dot path; numeric segments index arrays",
+      },
+    ],
+  },
+  crypto: {
+    label: "Crypto config",
+    fields: [
+      {
+        kind: "config",
+        key: "cryptoAction",
+        label: "Action",
+        placeholder: "sha256",
+        hint: "sha256 · sha512 · sha1 · md5 · hmac-sha256 · base64 · base64decode",
+      },
+      {
+        kind: "secret",
+        key: "cryptoSecret",
+        label: "HMAC secret",
+        hint: "only for hmac-sha256",
+        placeholder: "shared secret",
+      },
+    ],
+  },
+  datetime: {
+    label: "Date & Time config",
+    fields: [
+      {
+        kind: "config",
+        key: "dtFormat",
+        label: "Format",
+        placeholder: "rfc3339",
+        hint: "rfc3339 · unix · date · time · or a Go layout",
+      },
+      {
+        kind: "config",
+        key: "dtOffset",
+        label: "Offset",
+        hint: "optional",
+        placeholder: "-24h",
+      },
+      {
+        kind: "config",
+        key: "dtZone",
+        label: "Timezone",
+        hint: "optional, IANA name",
+        placeholder: "Asia/Kolkata",
+      },
+    ],
+  },
+  template: {
+    label: "Text Template config",
+    fields: [
+      {
+        kind: "config",
+        key: "templateText",
+        label: "Template",
+        placeholder: "Result: {{ result }}",
+        hint: "Supports {{ result }}, {{ input }}, {{ node.<id>.<field> }}",
+      },
+    ],
+  },
+  stripe: {
+    label: "Stripe config",
+    fields: [
+      {
+        kind: "secret",
+        key: "stripeAPIKey",
+        label: "Secret Key",
+        placeholder: "sk_live_xxxxxxxxxxxx",
+        legacyKey: "stripeSecretKey",
+      },
+      {
+        kind: "config",
+        key: "stripeEmail",
+        label: "Customer email",
+        placeholder: "buyer@example.com",
+      },
+      {
+        kind: "config",
+        key: "stripeName",
+        label: "Customer name",
+        hint: "optional",
+        placeholder: "leave blank to omit",
+      },
+    ],
+  },
   twilio: {
     label: "Twilio config",
     fields: [
       {
         kind: "secret",
-        key: "twilioAccountSID",
-        label: "Account SID",
-        placeholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-      },
-      {
-        kind: "secret",
         key: "twilioAuthToken",
         label: "Auth Token",
         placeholder: "your Twilio auth token",
+      },
+      {
+        kind: "config",
+        key: "twilioAccountSID",
+        label: "Account SID",
+        placeholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
       },
       {
         kind: "config",
@@ -2431,26 +2817,28 @@ const CONNECTOR_CONFIG_FIELDS: Record<
       },
     ],
   },
-  stripe: {
-    label: "Stripe config",
+  mattermost: {
+    label: "Mattermost config",
     fields: [
       {
         kind: "secret",
-        key: "stripeSecretKey",
-        label: "Secret Key",
-        placeholder: "sk_live_… or sk_test_…",
+        key: "mattermostWebhookURL",
+        label: "Incoming Webhook URL",
+        placeholder: "https://mattermost.example.com/hooks/xxx",
       },
       {
         kind: "config",
-        key: "stripeEmail",
-        label: "Customer Email",
-        hint: "optional, defaults to the upstream message",
-      },
-      {
-        kind: "config",
-        key: "stripeName",
-        label: "Customer Name",
+        key: "mattermostChannel",
+        label: "Channel",
         hint: "optional",
+        placeholder: "town-square",
+      },
+      {
+        kind: "config",
+        key: "mattermostUsername",
+        label: "Post as",
+        hint: "optional",
+        placeholder: "AgentMesh",
       },
     ],
   },
@@ -2467,19 +2855,21 @@ const CONNECTOR_CONFIG_FIELDS: Record<
         kind: "config",
         key: "pagerdutySeverity",
         label: "Severity",
-        placeholder: "info (default) · warning · error · critical",
+        placeholder: "info (default)",
+        hint: "critical · error · warning · info",
+      },
+      {
+        kind: "config",
+        key: "pagerdutySource",
+        label: "Source",
+        hint: "optional",
+        placeholder: "agentmesh",
       },
     ],
   },
   zendesk: {
     label: "Zendesk config",
     fields: [
-      {
-        kind: "config",
-        key: "zendeskEmail",
-        label: "Agent Email",
-        placeholder: "agent@yourcompany.com",
-      },
       {
         kind: "secret",
         key: "zendeskAPIToken",
@@ -2492,6 +2882,29 @@ const CONNECTOR_CONFIG_FIELDS: Record<
         label: "Subdomain",
         hint: "the part before .zendesk.com",
         placeholder: "yourcompany",
+      },
+      {
+        kind: "config",
+        key: "zendeskEmail",
+        label: "Agent Email",
+        placeholder: "agent@yourcompany.com",
+      },
+    ],
+  },
+  monday: {
+    label: "Monday.com config",
+    fields: [
+      {
+        kind: "secret",
+        key: "mondayAPIKey",
+        label: "API Token",
+        placeholder: "your Monday.com v2 token",
+      },
+      {
+        kind: "config",
+        key: "mondayBoardID",
+        label: "Board ID",
+        placeholder: "123456789",
       },
     ],
   },
@@ -2559,8 +2972,254 @@ const CONNECTOR_CONFIG_FIELDS: Record<
       },
     ],
   },
-  shopify: {
+  shopify_customer: {
     label: "Shopify config",
+    fields: [
+      {
+        kind: "secret",
+        key: "shopifyAccessToken",
+        label: "Admin API Access Token",
+        placeholder: "shpat_xxxxxxxxxxxx",
+      },
+      {
+        kind: "config",
+        key: "shopifyStore",
+        label: "Store handle",
+        placeholder: "acme-store (from acme-store.myshopify.com)",
+      },
+      {
+        kind: "config",
+        key: "shopifyEmail",
+        label: "Customer email",
+        placeholder: "buyer@example.com",
+      },
+    ],
+  },
+  pipedrive: {
+    label: "Pipedrive config",
+    fields: [
+      {
+        kind: "secret",
+        key: "pipedriveAPIToken",
+        label: "API Token",
+        placeholder: "your Pipedrive API token",
+      },
+      {
+        kind: "config",
+        key: "pipedriveCompanyDomain",
+        label: "Company domain",
+        placeholder: "acme (from acme.pipedrive.com)",
+      },
+      {
+        kind: "config",
+        key: "pipedriveDealID",
+        label: "Deal ID",
+        hint: "optional",
+        placeholder: "attach the note to a deal",
+      },
+      {
+        kind: "config",
+        key: "pipedrivePersonID",
+        label: "Person ID",
+        hint: "optional",
+        placeholder: "attach the note to a person",
+      },
+    ],
+  },
+  db: {
+    label: "Postgres config",
+    fields: [
+      {
+        kind: "secret",
+        key: "pgConnString",
+        label: "Connection string",
+        placeholder: "postgres://user:pass@host:5432/dbname",
+      },
+      {
+        kind: "config",
+        key: "pgTable",
+        label: "Table",
+        placeholder: "events",
+      },
+      {
+        kind: "config",
+        key: "pgColumn",
+        label: "Output column",
+        placeholder: "payload",
+        hint: "receives the run output",
+      },
+      {
+        kind: "config",
+        key: "pgExtraColumns",
+        label: "Extra columns (JSON)",
+        hint: "optional",
+        placeholder: '{"source":"agentmesh","city":"{{ node.n1.city }}"}',
+      },
+    ],
+  },
+  html_extract: {
+    label: "HTML Extract config",
+    fields: [
+      {
+        kind: "config",
+        key: "htmlSelector",
+        label: "CSS selector",
+        placeholder: "h1.title",
+      },
+      {
+        kind: "config",
+        key: "htmlAttr",
+        label: "Attribute",
+        hint: "optional, blank = text",
+        placeholder: "href",
+      },
+      {
+        kind: "config",
+        key: "htmlMode",
+        label: "Mode",
+        placeholder: "first",
+        hint: "first · all",
+      },
+    ],
+  },
+  markdown: {
+    label: "Markdown config",
+    fields: [
+      {
+        kind: "config",
+        key: "mdGFM",
+        label: "GitHub Flavored",
+        placeholder: "true",
+        hint: "true · false — tables, strikethrough, autolinks",
+      },
+    ],
+  },
+  rss: {
+    label: "RSS config",
+    fields: [
+      {
+        kind: "config",
+        key: "rssURL",
+        label: "Feed URL",
+        placeholder: "https://example.com/feed.xml",
+      },
+      {
+        kind: "config",
+        key: "rssLimit",
+        label: "Max items",
+        hint: "optional, default 10",
+        placeholder: "10",
+      },
+    ],
+  },
+  graphql: {
+    label: "GraphQL config",
+    fields: [
+      {
+        kind: "config",
+        key: "graphqlEndpoint",
+        label: "Endpoint",
+        placeholder: "https://api.github.com/graphql",
+      },
+      {
+        kind: "config",
+        key: "graphqlQuery",
+        label: "Query",
+        placeholder: "query { viewer { login } }",
+      },
+      {
+        kind: "config",
+        key: "graphqlVariables",
+        label: "Variables (JSON)",
+        hint: "optional",
+        placeholder: '{"first":10,"search":"{{ result }}"}',
+      },
+      {
+        kind: "secret",
+        key: "graphqlAuthHeader",
+        label: "Authorization header",
+        hint: "sent verbatim — include Bearer if the API wants it",
+        placeholder: "Bearer ghp_xxxxxxxx",
+      },
+    ],
+  },
+  hackernews: {
+    label: "Hacker News config",
+    fields: [
+      {
+        kind: "config",
+        key: "hnQuery",
+        label: "Search query",
+        placeholder: "{{ result }}",
+      },
+      {
+        kind: "config",
+        key: "hnTags",
+        label: "Tags",
+        hint: "optional",
+        placeholder: "story · comment · show_hn · ask_hn",
+      },
+      {
+        kind: "config",
+        key: "hnLimit",
+        label: "Max items",
+        hint: "optional, default 10",
+        placeholder: "10",
+      },
+    ],
+  },
+  coingecko: {
+    label: "CoinGecko config",
+    fields: [
+      {
+        kind: "config",
+        key: "cgIDs",
+        label: "Coin IDs",
+        placeholder: "bitcoin,ethereum",
+      },
+      {
+        kind: "config",
+        key: "cgCurrencies",
+        label: "Currencies",
+        hint: "optional, default usd",
+        placeholder: "usd,eur",
+      },
+    ],
+  },
+  quickchart: {
+    label: "QuickChart config",
+    fields: [
+      {
+        kind: "config",
+        key: "qcConfig",
+        label: "Chart.js config (JSON)",
+        placeholder: '{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}',
+      },
+      {
+        kind: "config",
+        key: "qcWidth",
+        label: "Width",
+        hint: "optional",
+        placeholder: "600",
+      },
+      {
+        kind: "config",
+        key: "qcHeight",
+        label: "Height",
+        hint: "optional",
+        placeholder: "400",
+      },
+    ],
+  },
+  // Distinct from "shopify_customer" above (which creates a customer): this
+  // adds a note to an existing order, and keeps template id "shopify" --
+  // master's original id and behavior for this operation -- rather than
+  // "shopify_customer"'s newer id, so an already-saved order-note node
+  // keeps hitting the same backend dispatch with no config change on the
+  // user's side. See connectors_business.go's sendShopifyOrderNote doc
+  // comment.
+  shopify: {
+    label: "Shopify: Add Order Note config",
     fields: [
       {
         kind: "secret",
@@ -2770,6 +3429,12 @@ const CONNECTOR_AUTH: Record<
   },
   shopify: {
     needsLogin: true,
+    docUrl:
+      "https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens",
+    linkLabel: "Get access token",
+  },
+  shopify_customer: {
+    needsLogin: true,
     docUrl: "https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens",
     linkLabel: "Get access token",
   },
@@ -2888,7 +3553,10 @@ function ConnectorConfigSection({
     return v !== undefined && v !== "";
   };
   const connected =
-    secretFields.length > 0 && secretFields.every((f) => secretSet(f.key));
+    secretFields.length > 0 &&
+    secretFields.every(
+      (f) => secretSet(f.key) || (f.legacyKey !== undefined && secretSet(f.legacyKey)),
+    );
   const needsLogin = auth?.needsLogin ?? true;
 
   const statusTone: "ok" | "warn" | "default" = connected
@@ -3147,19 +3815,13 @@ function GoogleInspector({
           />
         </Field>
         <Field label="Operation">
-          <input
-            style={inputStyle}
-            value={tpl?.name ?? template}
-            readOnly
-          />
+          <input style={inputStyle} value={tpl?.name ?? template} readOnly />
         </Field>
       </Section>
 
       <Section label="Connected account">
         {loadingCreds ? (
-          <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
-            Loading…
-          </div>
+          <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>Loading…</div>
         ) : (
           <>
             {credentials.length === 0 ? (
@@ -3181,7 +3843,10 @@ function GoogleInspector({
                   onChange={(e) =>
                     onUpdate({
                       ...node,
-                      config: { ...node.config, oauthCredentialID: e.target.value },
+                      config: {
+                        ...node.config,
+                        oauthCredentialID: e.target.value,
+                      },
                     })
                   }
                 >
@@ -3222,8 +3887,7 @@ function GoogleInspector({
                 lineHeight: 1.5,
               }}
             >
-              One connection covers Gmail, Sheets, Calendar, and Drive
-              together.
+              One connection covers Gmail, Sheets, Calendar, and Drive together.
             </div>
           </>
         )}
@@ -3445,12 +4109,18 @@ function TendrilInspector({
   const action = node.tendrilAction ?? "rent";
 
   useEffect(() => {
-    tendrilApi.credit().then(setCredit).catch(() => setCredit(null));
+    tendrilApi
+      .credit()
+      .then(setCredit)
+      .catch(() => setCredit(null));
   }, []);
 
   useEffect(() => {
     if (action !== "rent") return;
-    tendrilApi.machines().then(setMachines).catch(() => setMachines([]));
+    tendrilApi
+      .machines()
+      .then(setMachines)
+      .catch(() => setMachines([]));
   }, [action]);
 
   const selectedMachine =
@@ -3481,8 +4151,8 @@ function TendrilInspector({
         {selectedMachine && (
           <>
             {" "}
-            — about {(creditVal / selectedMachine.pricePerHourUsd).toFixed(1)}{" "}
-            h on {selectedMachine.label || selectedMachine.id}
+            — about {(creditVal / selectedMachine.pricePerHourUsd).toFixed(1)} h
+            on {selectedMachine.label || selectedMachine.id}
           </>
         )}
         <div style={{ opacity: 0.6, marginTop: 2 }}>
@@ -3498,8 +4168,7 @@ function TendrilInspector({
             onChange={(e) =>
               onUpdate({
                 ...node,
-                tendrilAction: e.target
-                  .value as WorkflowNode["tendrilAction"],
+                tendrilAction: e.target.value as WorkflowNode["tendrilAction"],
               })
             }
           >

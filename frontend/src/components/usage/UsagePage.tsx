@@ -11,8 +11,7 @@ import {
 import { LowBalanceBanner } from "@/components/billing/LowBalanceBanner";
 import { IconSearch, Card, ghostBtnSm } from "@/components/ui";
 import { Topbar } from "@/components/Topbar";
-import { usage as usageApi, auth as authApi } from "@/lib/api";
-import { listSettlements } from "@/lib/settlements";
+import { usage as usageApi } from "@/lib/api";
 import {
   UsageRange,
   UsagePayload,
@@ -120,8 +119,9 @@ export function UsagePage() {
 
   return (
     <div
+      className="am-viewport"
       style={{
-        height: "100vh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -136,7 +136,7 @@ export function UsagePage() {
           style={{
             maxWidth: 1280,
             margin: "0 auto",
-            padding: "36px 24px 80px",
+            padding: "var(--wf-page-pad)",
           }}
         >
           {scopedWf && (
@@ -315,46 +315,23 @@ function UsageBody({
     (usd: number) => (isUSD ? `$${usd.toFixed(2)} USD` : formatMoney(usd)),
     [isUSD, formatMoney],
   );
-  const [localSettlements, setLocalSettlements] = useState<Settlement[]>([]);
-  const [tendrilSettlements, setTendrilSettlements] = useState<Settlement[]>(
-    [],
-  );
-  // Two sources, merged: workflow-run x402 payments come from the local
-  // per-user record (the server still can't scope x402_relay_settlements to
-  // a user — no user_id column on that table). Tendril top-ups aren't a
-  // workflow run at all (they're the console's direct-action button), but
-  // they DO land in a ledger that's scoped to a user from the moment it's
-  // written (tendril_credit_ledger), so /usage/settlements can report those
-  // honestly — see usage.go's UsageSettlements doc comment.
-  const settlements = useMemo(
-    () =>
-      [...tendrilSettlements, ...localSettlements].sort(
-        (a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime(),
-      ),
-    [tendrilSettlements, localSettlements],
-  );
-  // Read after mount and only for the signed-in user, so another account's
-  // history in the same browser is never shown.
-  useEffect(() => {
-    let stale = false;
-    authApi
-      .me()
-      .then((u) => {
-        if (!stale) setLocalSettlements(listSettlements(u.id));
-      })
-      .catch(() => {
-        /* signed out: leave the panel empty */
-      });
-    return () => {
-      stale = true;
-    };
-  }, []);
+  // One server-scoped source. /usage/settlements merges the user's own
+  // workflow-run x402 payments (read back from the run_logs receipts the
+  // engine persists per settlement) with their Tendril top-ups, both already
+  // scoped to the signed-in user and already sorted newest-first — see
+  // usage.go's UsageSettlements doc comment.
+  //
+  // The x402 half used to be rebuilt client-side into localStorage, which
+  // followed the browser rather than the account: the rows vanished on
+  // sign-out and did not follow the user to another device, even though the
+  // receipts were in the database the whole time.
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
   useEffect(() => {
     let stale = false;
     usageApi
       .settlements(18)
       .then((rows) => {
-        if (!stale) setTendrilSettlements(rows);
+        if (!stale) setSettlements(rows);
       })
       .catch(() => {
         /* transient failure: leave whatever loaded last */
@@ -750,85 +727,88 @@ function UsageBody({
             </span>
           }
         />
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: SETTLE_GRID,
-            gap: 14,
-            padding: "8px 10px",
-            background: "var(--bg-elev-2)",
-            borderRadius: "var(--r-2)",
-            marginTop: 4,
-            alignItems: "center",
-          }}
-        >
-          <span style={hcell}>Endpoint</span>
-          <span style={hcell}>Hash</span>
-          <span style={hcell}>Workflow</span>
-          <span style={{ ...hcell, textAlign: "right" }}>Amount</span>
-          <span style={{ ...hcell, textAlign: "right" }}>Time</span>
-        </div>
-        <div style={{ padding: "2px 0" }}>
-          {settlements.map((s, i) => (
-            <div
-              key={s.txId}
-              style={{
-                display: "grid",
-                gridTemplateColumns: SETTLE_GRID,
-                gap: 14,
-                alignItems: "center",
-                padding: "11px 10px",
-                borderBottom:
-                  i < settlements.length - 1
-                    ? "1px solid var(--border-soft)"
-                    : "none",
-                fontFamily: "var(--font-mono)",
-                fontSize: 11,
-              }}
-            >
-              <span
+        <div className="am-usage-table">
+          <div
+            style={{
+              minWidth: 720,
+              display: "grid",
+              gridTemplateColumns: SETTLE_GRID,
+              gap: 14,
+              padding: "8px 10px",
+              background: "var(--bg-elev-2)",
+              borderRadius: "var(--r-2)",
+              marginTop: 4,
+              alignItems: "center",
+            }}
+          >
+            <span style={hcell}>Endpoint</span>
+            <span style={hcell}>Hash</span>
+            <span style={hcell}>Workflow</span>
+            <span style={{ ...hcell, textAlign: "right" }}>Amount</span>
+            <span style={{ ...hcell, textAlign: "right" }}>Time</span>
+          </div>
+          <div style={{ minWidth: 720, padding: "2px 0" }}>
+            {settlements.map((s, i) => (
+              <div
+                key={s.txId}
                 style={{
-                  color: "var(--fg-muted)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
+                  display: "grid",
+                  gridTemplateColumns: SETTLE_GRID,
+                  gap: 14,
+                  alignItems: "center",
+                  padding: "11px 10px",
+                  borderBottom:
+                    i < settlements.length - 1
+                      ? "1px solid var(--border-soft)"
+                      : "none",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
                 }}
               >
-                {s.endpoint}
-              </span>
-              <a
-                href={s.explorerURL}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  color: "#E879F9",
-                  textDecoration: "underline",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {s.txId.slice(0, 13)}…
-              </a>
-              <span
-                style={{
-                  color: "var(--fg-dim)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {s.workflowId || "—"}
-              </span>
-              <span style={{ color: "var(--fg)", textAlign: "right" }}>
-                {s.amountAlgo.toFixed(6)}{" "}
-                <span style={{ color: "var(--fg-dim)" }}>ALGO</span>
-              </span>
-              <span style={{ color: "var(--fg-dim)", textAlign: "right" }}>
-                {relTime(s.ts)}
-              </span>
-            </div>
-          ))}
+                <span
+                  style={{
+                    color: "var(--fg-muted)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {s.endpoint}
+                </span>
+                <a
+                  href={s.explorerURL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: "#E879F9",
+                    textDecoration: "underline",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {s.txId.slice(0, 13)}…
+                </a>
+                <span
+                  style={{
+                    color: "var(--fg-dim)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {s.workflowId || "—"}
+                </span>
+                <span style={{ color: "var(--fg)", textAlign: "right" }}>
+                  {s.amountAlgo.toFixed(6)}{" "}
+                  <span style={{ color: "var(--fg-dim)" }}>ALGO</span>
+                </span>
+                <span style={{ color: "var(--fg-dim)", textAlign: "right" }}>
+                  {relTime(s.ts)}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </Card>
 
@@ -1001,8 +981,8 @@ function EndpointTable({
               height: 32,
               paddingLeft: 30,
               paddingRight: 12,
-              width: 240,
-              maxWidth: "100%",
+              width: "100%",
+              maxWidth: 240,
               background: "var(--bg-elev-2)",
               border: "1px solid var(--border)",
               borderRadius: "var(--r-2)",

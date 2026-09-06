@@ -20,6 +20,7 @@ func (f *fakeRC) UserInput() string           { return f.message }
 func (f *fakeRC) ToolOutputs() map[string]any { return nil }
 func (f *fakeRC) Set(string, any)             {}
 func (f *fakeRC) Get(string) (any, bool)      { return nil, false }
+func (f *fakeRC) OutputOrder() []string       { return nil }
 
 func TestWebSearchReturnsAnswerAndSources(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

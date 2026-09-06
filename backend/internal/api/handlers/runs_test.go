@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/agentmesh/backend/internal/api/handlers"
 	"github.com/agentmesh/backend/internal/engine"
@@ -39,6 +43,59 @@ func TestTriggerRun(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&resp)
 	if resp["runId"] == "" {
 		t.Fatal("no runId")
+	}
+}
+
+// TestTriggerRunCooldownRetryAfterNeverUndershoots guards against a
+// regression to %.0f-style rounding: a Retry-After that rounds the true
+// remaining cooldown DOWN (e.g. 4.6s -> "4") tells a compliant client to
+// retry before the cooldown has actually elapsed, earning it a second,
+// avoidable 429. The header must always be >= the real remaining seconds.
+func TestTriggerRunCooldownRetryAfterNeverUndershoots(t *testing.T) {
+	d := testDeps(t)
+	d.Broker = sse.NewBroker()
+	d.Wallet = wallet.NewService("0123456789abcdef0123456789abcdef",
+		"https://testnet-api.algonode.cloud", "", "testnet")
+	d.Engine = engine.NewRunner(d.Store, d.Broker, d.Wallet, "http://localhost:8080", "", "", engine.X402Config{USDCAssetID: 10458941})
+
+	wf, _ := d.Store.CreateWorkflow(t.Context(), "Cooldown Retry-After Test", "dev")
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	trigger := func() *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"message": "hello"})
+		req := httptest.NewRequest(http.MethodPost, "/workflows/"+wf.ID+"/run", bytes.NewReader(body))
+		req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev"))
+		req = withURLParam(req, "id", wf.ID)
+		w := httptest.NewRecorder()
+		d.TriggerRun(w, req)
+		return w
+	}
+
+	if w := trigger(); w.Code != http.StatusAccepted {
+		t.Fatalf("first trigger: want 202 got %d body=%s", w.Code, w.Body.String())
+	}
+	before := time.Now()
+	w := trigger()
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("second trigger: want 429 got %d body=%s", w.Code, w.Body.String())
+	}
+	elapsed := time.Since(before)
+
+	retryAfter := w.Header().Get("Retry-After")
+	if strings.Contains(retryAfter, ".") {
+		t.Fatalf("Retry-After should be a whole number of seconds, got %q", retryAfter)
+	}
+	got, err := strconv.Atoi(retryAfter)
+	if err != nil {
+		t.Fatalf("Retry-After not an integer: %q: %v", retryAfter, err)
+	}
+	// The true remaining cooldown when the header was produced was at most
+	// (5s - elapsed since the first trigger), and math.Ceil never reports
+	// less than that; %.0f-style rounding could have reported one second
+	// less whenever the true remainder had a fractional part < 0.5.
+	minAcceptable := int(math.Ceil((5*time.Second - elapsed).Seconds()))
+	if got < minAcceptable {
+		t.Fatalf("Retry-After=%d understates the remaining cooldown (want >= %d)", got, minAcceptable)
 	}
 }
 
@@ -169,5 +226,40 @@ func TestPublicTriggerRequiresCorrectWebhookSecret(t *testing.T) {
 	json.NewDecoder(gw.Body).Decode(&runResp)
 	if runResp["runId"] == "" {
 		t.Fatal("no runId")
+	}
+}
+
+// TestResumeRunNonOwnerGets404EvenWhileRunning guards the fix for a
+// self-review finding: ResumeRun used to check run.Status == running
+// before verifying the caller owns the run's workflow, so a non-owner (or
+// a caller enumerating run IDs) got a 409 "already in progress" -- leaking
+// that the run exists and is live -- instead of the generic 404 every
+// other branch (and every sibling handler) returns for a run that isn't
+// theirs. Ownership must be checked first regardless of run state.
+func TestResumeRunNonOwnerGets404EvenWhileRunning(t *testing.T) {
+	d := testDeps(t)
+	ctx := context.Background()
+
+	wf, err := d.Store.CreateWorkflow(ctx, "Resume Ownership Test", "owner-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	// CreateRun inserts with status='running' directly, so this run is
+	// live without needing a real engine to execute anything.
+	run, err := d.Store.CreateRun(ctx, wf.ID, "manual", []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/runs/"+run.ID+"/resume", nil)
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "attacker-user"))
+	req = withURLParam(req, "runId", run.ID)
+	w := httptest.NewRecorder()
+	d.ResumeRun(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("non-owner resume of a running run: want 404 (no leak) got %d body=%s", w.Code, w.Body.String())
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/agentmesh/backend/internal/engine"
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/payments"
+	"github.com/agentmesh/backend/internal/scheduler"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/tendril"
 	"github.com/agentmesh/backend/internal/wallet"
@@ -165,6 +166,7 @@ func main() {
 
 	go expireStalePendingTransactionsLoop(ctx, store)
 	runner.StartLeaseReaper(ctx, nodes.ReaperInterval)
+	go scheduler.New(store, runner, broker, mustEnv("ENCRYPTION_KEY")).Run(ctx)
 
 	deps := &handlers.Deps{
 		Store:         store,
@@ -181,6 +183,10 @@ func main() {
 		GithubClientSecret: os.Getenv("GITHUB_CLIENT_SECRET"),
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+
+		// Empty falls back to GoPlausible's facilitator (see
+		// defaultBazaarBaseURL) — set only to point at a mirror or a fake.
+		BazaarBaseURL: os.Getenv("BAZAAR_BASE_URL"),
 
 		Cashfree:      cashfreeClient,
 		CashfreeAppID: cashfreeClient.AppID,

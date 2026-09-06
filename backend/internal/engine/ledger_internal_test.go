@@ -694,3 +694,77 @@ func TestReserveAndFundRunDegradesGracefullyWithNilFacilitator(t *testing.T) {
 		t.Fatalf("want balance untouched at 1000000 (degraded before ReserveCredits), got %d", balance)
 	}
 }
+
+// TestIsPaymentRiskClassifiesEveryMoneyAlreadyMovedError is a regression
+// test for a review finding: the dead-letter PaymentRisk classification
+// used to check only *nodes.ErrBalanceBlocked, missing two other error
+// shapes that also mean real money may already have moved for this
+// attempt -- nodes.ErrSettlementIndeterminate (the run-level pre-fund
+// settle response lost before any node started) and the newer
+// *nodes.ErrPaymentAlreadyCommitted (a tool402 call that signed and sent a
+// real payment before a downstream failure). Exercised directly against
+// the classification functions rather than through a full run: building an
+// end-to-end fixture for each of these three failure shapes (agent balance
+// block, run-level pre-fund indeterminate settle, standalone tool402
+// post-payment rejection) would mostly re-test wiring these functions
+// don't touch; what actually changed is the classification logic itself.
+func TestIsPaymentRiskClassifiesEveryMoneyAlreadyMovedError(t *testing.T) {
+	balanceBlocked := &nodes.ErrBalanceBlocked{Err: errors.New("insufficient balance")}
+	settlementIndeterminate := fmt.Errorf("x402 run funding: settlement indeterminate: %w", nodes.ErrSettlementIndeterminate)
+	paymentAlreadyCommitted := &nodes.ErrPaymentAlreadyCommitted{Err: errors.New("target rejected the paid request")}
+	unrelated := errors.New("LLM connectivity error")
+
+	cases := []struct {
+		name             string
+		err              error
+		wantAgentFeeOwed bool
+		wantPaymentRisk  bool
+	}{
+		{"ErrBalanceBlocked", balanceBlocked, true, true},
+		{"ErrPaymentAlreadyCommitted", paymentAlreadyCommitted, true, true},
+		{"ErrSettlementIndeterminate", settlementIndeterminate, false, true},
+		{"unrelated error", unrelated, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isAgentFeeOwedDespiteFailure(tc.err); got != tc.wantAgentFeeOwed {
+				t.Errorf("isAgentFeeOwedDespiteFailure(%v) = %v, want %v", tc.err, got, tc.wantAgentFeeOwed)
+			}
+			if got := isPaymentRisk(tc.err); got != tc.wantPaymentRisk {
+				t.Errorf("isPaymentRisk(%v) = %v, want %v", tc.err, got, tc.wantPaymentRisk)
+			}
+		})
+	}
+}
+
+// hypotheticalFutureAgentFeeOwedError stands in for a payment-adjacent
+// error type that doesn't exist yet -- e.g. a future Tendril-lease-charged
+// failure occurring mid-agent-turn -- to prove
+// isAgentFeeOwedDespiteFailure/isPaymentRisk actually dispatch on the
+// nodes.AgentFeeOwedError INTERFACE, not a hand-maintained list of the two
+// concrete types that happen to exist today. A type genuinely new to this
+// test file, implementing nothing but the interface, must still classify
+// as true here with zero changes to runner.go's classification functions.
+type hypotheticalFutureAgentFeeOwedError struct{ msg string }
+
+func (e *hypotheticalFutureAgentFeeOwedError) Error() string { return e.msg }
+func (e *hypotheticalFutureAgentFeeOwedError) AgentFeeOwed() {}
+
+var _ nodes.AgentFeeOwedError = (*hypotheticalFutureAgentFeeOwedError)(nil)
+
+func TestIsPaymentRiskRecognizesAnyFutureAgentFeeOwedImplementation(t *testing.T) {
+	err := &hypotheticalFutureAgentFeeOwedError{msg: "a future payment-adjacent failure this test file invented"}
+	if !isAgentFeeOwedDespiteFailure(err) {
+		t.Error("isAgentFeeOwedDespiteFailure must recognize ANY type implementing nodes.AgentFeeOwedError, not just the two that exist today -- got false for a novel implementation")
+	}
+	if !isPaymentRisk(err) {
+		t.Error("isPaymentRisk must recognize ANY type implementing nodes.AgentFeeOwedError -- got false for a novel implementation")
+	}
+	// Wrapped (e.g. via fmt.Errorf("...: %w", err)) must still classify --
+	// errors.As walks Unwrap(), matching how these errors actually reach
+	// runner.go's dead-letter classification in practice.
+	wrapped := fmt.Errorf("node execution failed: %w", err)
+	if !isPaymentRisk(wrapped) {
+		t.Error("isPaymentRisk must see through fmt.Errorf(\"...: %w\", err) wrapping to a novel AgentFeeOwedError implementation")
+	}
+}

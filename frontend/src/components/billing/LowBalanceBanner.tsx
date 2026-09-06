@@ -2,13 +2,15 @@
 import { useCredits } from "@/lib/credits/store";
 import { useCurrency } from "@/lib/currency/store";
 
-// Reactive low-balance warning driven by the mock wallet: shows when the balance
-// drops below the auto-recharge threshold. Mock only -- no real recharge occurs.
+// Low-balance warning: shows once the server-reported balance falls below the
+// account's own threshold. Gated on balanceKnown, not on a render count -- an
+// unfetched balance reads as 0 and would flash this banner at every user on
+// page load.
 export function LowBalanceBanner({ onTopUp }: { onTopUp: () => void }) {
-  const { balanceUSD, autoRecharge, hydrated } = useCredits();
+  const { balanceUSD, balanceKnown, lowBalanceThresholdUSD } = useCredits();
   const { formatBalance } = useCurrency();
 
-  if (!hydrated || balanceUSD >= autoRecharge.thresholdUSD) return null;
+  if (!balanceKnown || balanceUSD >= lowBalanceThresholdUSD) return null;
 
   return (
     <div
@@ -28,10 +30,8 @@ export function LowBalanceBanner({ onTopUp }: { onTopUp: () => void }) {
       }}
     >
       <span>
-        Low balance: {formatBalance(balanceUSD)} left.
-        {autoRecharge.enabled
-          ? " Auto-recharge is on."
-          : " Top up to keep your agents running."}
+        Low balance: {formatBalance(balanceUSD)} left. Top up to keep your
+        agents running.
       </span>
       <button
         type="button"
