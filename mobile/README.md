@@ -161,6 +161,20 @@ shows the result. The rule lives in one tested function,
 **Testing needs a real device or an emulator image with Google Play services.**
 A plain AVD image has no FCM and will never receive anything.
 
+**There is no way for a user to turn notifications on yet, and that is
+deliberate.** `enablePush()` and `PUSH_DISCLOSURE` in `frontend/src/native/push.ts`
+are complete and tested, but nothing calls them: no settings toggle, no
+onboarding step, no prompt on first run. So no permission is ever requested and
+no `device_tokens` row is ever created, which means the backend send path stays
+unreachable however well configured Firebase is.
+
+The entry point is its own child of the mobile epic (#127), for a reason worth
+stating rather than leaving as an accident: where and when to ask for
+notification permission is a product decision with its own copy and its own
+placement, and Android's permission prompt is asked once -- a refusal is
+expensive to recover from. Bundling it into the plumbing would have meant
+deciding it in passing.
+
 ## Location permission
 
 Background location is the most-refused permission on Android, and asking cold
