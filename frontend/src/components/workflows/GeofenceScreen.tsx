@@ -320,7 +320,22 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
   // it leaves this null for good, and the form was previously fully live
   // behind the error notice, offering to save into a workflow it could not
   // read.
-  const canSave = Boolean(here) && workflow !== null && !busy && radiusCheck.ok;
+  // Mirrors SetGeofence's own refusal (api/handlers/geofence.go:142): a
+  // trigger on a draft would sit there looking configured and never fire.
+  // WorkflowsPage already withholds the "Zone" link for the same reason, but
+  // this screen has its own URL -- typed, bookmarked, or reached from a
+  // notification -- and without this it let the user find themselves, size a
+  // zone, press Save, and learn only from a 409 that none of it could apply.
+  // Stated as `=== "draft"` rather than `!== "deployed"` so an undefined
+  // status, which only means the workflow has not loaded yet, does not read as
+  // a refusal.
+  const notDeployed = workflow?.status === "draft";
+  const canSave =
+    Boolean(here) &&
+    workflow !== null &&
+    !notDeployed &&
+    !busy &&
+    radiusCheck.ok;
 
   if (!allowed) {
     // Unreachable as things stand -- "workflow.geofence" is permitted for
@@ -346,6 +361,14 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
       </header>
 
       {loadError && <Notice tone="danger">{loadError}</Notice>}
+
+      {notDeployed && (
+        <Notice tone="info">
+          Deploy this workflow before giving it a location trigger. A trigger on
+          a draft is saved but never fires, so this is refused rather than left
+          to look configured.
+        </Notice>
+      )}
 
       <Card style={{ marginBottom: 12 }}>
         <SectionLabel>Where</SectionLabel>
