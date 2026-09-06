@@ -12,6 +12,7 @@ import {
   distanceM,
   formatCoords,
   formatDistance,
+  isInside,
   radiusToSlider,
   sliderToRadius,
   type Point,
@@ -308,6 +309,16 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
   // How far the current reading is from the zone already saved. The one number
   // that answers "is the circle where I think it is" without a map.
   const distanceToSaved = here && saved ? distanceM(saved.centre, here) : null;
+  // Which side of the edge the current reading falls on. The distance alone
+  // leaves the reader to compare two numbers to answer the question the screen
+  // exists to answer, and the comparison is the one place an off-by-a-metre
+  // reading of "at the boundary" is easy to get wrong by eye.
+  //
+  // Descriptive only. The crossing that starts a run is decided by Android's
+  // GeofencingClient and by RecordGeofenceFix; this is never a third opinion
+  // any of them acts on, which is what isInside's own doc comment promises.
+  const insideSaved =
+    here && saved ? isInside(saved.centre, saved.radiusM, here) : null;
 
   const busy =
     status.kind === "saving" ||
@@ -441,7 +452,11 @@ export function GeofenceScreen({ workflowId }: { workflowId: string }) {
           <p style={{ ...copy, marginTop: 4 }}>
             Radius {formatDistance(saved.radiusM)}.
             {distanceToSaved !== null && (
-              <> You are {formatDistance(distanceToSaved)} from its centre.</>
+              <>
+                {" "}
+                You are {formatDistance(distanceToSaved)} from its centre,{" "}
+                {insideSaved ? "inside" : "outside"} the zone.
+              </>
             )}
           </p>
         </Card>
