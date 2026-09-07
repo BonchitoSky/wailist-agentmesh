@@ -5,6 +5,13 @@ AGENTS.md
 CLAUDE.md
 .claude/
 
+# Android signing keystore -- real key material, never belongs in git no
+# matter where it's generated (mobile/android/.gitignore already covers it
+# scoped to that dir; this catches one dropped at the repo root instead).
+release.keystore
+*.jks
+*.keystore
+
 # dependencies
 /frontend/node_modules
 /frontend/.pnpm-store
@@ -94,3 +101,9 @@ frontend/next-env.d.ts
 
 # root-level plans folder: scratch planning docs, not part of shipped project
 /plans/
+
+# Local-only Docker overrides. Compose loads docker-compose.override.yml
+# automatically with no opt-in, so a committed one silently reconfigures every
+# other developer's `docker-compose up` -- in this repo's case onto Algorand
+# mainnet with the real platform wallets, where each call spends real money.
+docker-compose.override.yml

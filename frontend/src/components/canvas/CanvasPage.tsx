@@ -16,6 +16,7 @@ import {
   useCredits,
   refreshBalance as refreshCredits,
 } from "@/lib/credits/store";
+import { LOW_BALANCE_THRESHOLD_USD } from "@/lib/credits/fx";
 import { CanvasGraph } from "./CanvasGraph";
 import { PalettePanel } from "./PalettePanel";
 import { Inspector } from "./Inspector";
@@ -28,6 +29,7 @@ import { ghostBtnSm, primaryBtnSm } from "@/components/ui/buttons";
 import { useIsCompact } from "@/hooks/useIsCompact";
 import { runBlockedMessage } from "./runBlocked";
 import { useReadOnly } from "@/hooks/useReadOnly";
+import { ShareModal } from "@/components/workflows/ShareModal";
 import {
   PALETTE,
   INSPECTOR,
@@ -104,6 +106,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
   // mount effect loads any persisted values. The row is measured via a ref so
   // clamping can reserve MIN_CANVAS and the opposite panel's width.
   const [paletteW, setPaletteW] = useState(PALETTE.default);
+  const [paletteCollapsed, setPaletteCollapsed] = useState(false);
   const [inspectorW, setInspectorW] = useState(INSPECTOR.default);
   const panelRowRef = useRef<HTMLDivElement | null>(null);
   const rowObserver = useRef<ResizeObserver | null>(null);
@@ -683,12 +686,38 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
             paletteNode below). Rendering it here while the row is stacked
             gave it a full-height column of its own and squeezed the canvas
             to zero. */}
-        {!compact && can("workflow.editGraph", readOnly) && (
+        {/* Collapsed: the column and its resize handle give way to a thin
+            rail, so the canvas gets the full ~280px back without the palette
+            disappearing with no way to bring it back. */}
+        {!compact && can("workflow.editGraph", readOnly) && paletteCollapsed && (
+          <button
+            type="button"
+            onClick={() => setPaletteCollapsed(false)}
+            title="Expand the library"
+            aria-label="Expand the library"
+            style={{
+              flexShrink: 0,
+              width: 26,
+              alignSelf: "stretch",
+              background: "var(--bg-elev-1)",
+              border: "none",
+              borderRight: "1px solid var(--border)",
+              color: "var(--fg-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            ›
+          </button>
+        )}
+
+        {!compact && can("workflow.editGraph", readOnly) && !paletteCollapsed && (
           <>
             <PalettePanel
               onDragNodeStart={onDragNodeStart}
               onAddNode={(meta) => addAtCentre.current?.(meta)}
               width={paletteW}
+              onCollapse={() => setPaletteCollapsed(true)}
             />
             <ResizeHandle
               side="left"
@@ -920,7 +949,14 @@ const nameFieldStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 500,
   fontFamily: "var(--font-sans)",
-  flex: "0 1 200px",
+  // flex-basis "auto", not a fixed px: a fixed basis caps the field at that
+  // width even when the topbar has room to spare, which is what truncated
+  // an ordinary-length name ("Demo: Prism Code Review Pipeline") into "…"
+  // on an otherwise empty row. auto sizes to the name's own text up to
+  // maxWidth, and still shrinks (flex-shrink 1) once the row actually
+  // runs out of space.
+  flex: "0 1 auto",
+  maxWidth: 480,
   // A floor, not 0. With minWidth:0 the field collapsed to 12px on a narrow
   // topbar -- the workflow name was simply gone. 120px keeps enough to read
   // and to recognise, and the text ellipsizes from there.
@@ -960,10 +996,11 @@ function CanvasTopbar({
   // Wallet balance is global (not per-node), so it lives in the topbar's
   // financial cluster. The value comes from the backend (the same row the
   // engine debits), so it is only meaningful once that fetch has landed —
-  // hence balanceKnown rather than the localStorage `hydrated` flag.
-  const { balanceUSD, autoRecharge, balanceKnown, refreshBalance } =
+  // hence balanceKnown, which separates a real $0 from "not asked yet".
+  const { balanceUSD, balanceKnown, refreshBalance } =
     useCredits();
-  const lowBalance = balanceKnown && balanceUSD < autoRecharge.thresholdUSD;
+  const lowBalance = balanceKnown && balanceUSD < LOW_BALANCE_THRESHOLD_USD;
+  const [shareOpen, setShareOpen] = useState(false);
 
   useEffect(() => {
     void refreshBalance();
@@ -1008,7 +1045,17 @@ function CanvasTopbar({
           onChange={(e) =>
             setWorkflow((wf) => ({ ...wf, name: e.target.value }))
           }
-          style={nameFieldStyle}
+          style={{
+            ...nameFieldStyle,
+            // flex-basis:auto (nameFieldStyle) sizes a plain element to its
+            // text content, but NOT a form control: an <input>'s intrinsic
+            // size is a fixed UA default (~20 characters) regardless of its
+            // value, so the read-only span above grows with the name and
+            // this input would not. An explicit ch-based width, clamped to
+            // the same floor/cap nameFieldStyle already enforces in px,
+            // makes the editable field track what's actually typed.
+            width: `${Math.min(Math.max(workflow.name.length + 2, 15), 60)}ch`,
+          }}
         />
       ) : (
         <span
@@ -1080,11 +1127,22 @@ function CanvasTopbar({
 
       {can("workflow.deploy", readOnly) && (
         <>
-          <button style={ghostBtnSm}>Share</button>
+          <button
+            style={{ ...ghostBtnSm, color: "var(--fg)" }}
+            onClick={() => setShareOpen(true)}
+          >
+            Share
+          </button>
           <button onClick={onDeploy} style={btnStyle}>
             {deployed ? "Re-deploy" : "Deploy"}
           </button>
         </>
+      )}
+      {shareOpen && (
+        <ShareModal
+          workflowId={workflow.id}
+          onClose={() => setShareOpen(false)}
+        />
       )}
       <button
         onClick={onRun}

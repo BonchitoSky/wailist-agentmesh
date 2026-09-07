@@ -5,10 +5,16 @@ import { Topbar } from "@/components/Topbar";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { CheckoutModal } from "@/components/checkout/CheckoutModal";
 import { useCredits } from "@/lib/credits/store";
-import { bonusRate, creditsForTopup } from "@/lib/credits/fx";
+import {
+  bonusRate,
+  creditsForTopup,
+  maxTopupINR,
+  MAX_TOPUP_USD,
+} from "@/lib/credits/fx";
 import { credits as creditsApi } from "@/lib/api";
 
-const PRESETS_INR = [100, 500, 1000, 2000];
+const PRESETS_INR = [1000, 5000, 10000, 20000];
+const MAX_INR = maxTopupINR();
 const LOW_BALANCE_USD = 5;
 
 const HOW_IT_WORKS = [
@@ -56,6 +62,46 @@ export default function BillingPage() {
     void refreshBalance();
   }, [refreshBalance]);
 
+  // A crypto top-up sends the browser to NOWPayments and back. This closes out
+  // that round trip. Nothing is credited here -- the IPN webhook is the only
+  // path that grants credit -- so the message says the balance will follow
+  // rather than claiming success.
+  //
+  // Written as one asynchronous routine so the effect never sets state during
+  // its own render pass.
+  const [returnState, setReturnState] = useState<{
+    tone: "pending" | "error";
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      const params = new URLSearchParams(window.location.search);
+      const outcome = params.get("crypto");
+      if (!outcome) return;
+
+      // Strip the param so a refresh doesn't re-run this.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("crypto");
+      window.history.replaceState({}, "", url.toString());
+
+      if (outcome === "cancelled" || outcome === "canceled") {
+        setReturnState({ tone: "error", message: "Checkout was cancelled." });
+        return;
+      }
+      if (outcome !== "success") return;
+
+      setReturnState({
+        tone: "pending",
+        message:
+          "Payment submitted. Crypto settles on-chain, so your balance will update once it confirms.",
+      });
+      // The credit may already have landed while the payer was redirecting
+      // back, so it is worth one look rather than making them reload.
+      await refreshBalance();
+    })();
+  }, [refreshBalance]);
+
   const [couponCode, setCouponCode] = useState("");
   const [couponState, setCouponState] = useState<
     "idle" | "loading" | "success" | "error"
@@ -95,7 +141,9 @@ export default function BillingPage() {
       ? parsedCustom
       : 0
     : amountINR;
-  const checkoutAmountINR = effectiveINR >= 1 ? effectiveINR : 0;
+  const overMax = effectiveINR > MAX_INR;
+  const checkoutAmountINR =
+    effectiveINR >= 1 && !overMax ? effectiveINR : 0;
   const canCheckout = checkoutAmountINR > 0;
   const credits = creditsForTopup(checkoutAmountINR);
   // Only call a balance "low" once we've actually read it — before the first
@@ -152,6 +200,34 @@ export default function BillingPage() {
               up anytime; testnet usage stays free.
             </p>
           </div>
+
+          {/* Outcome of a redirect checkout, above the fold: the payer has just
+              come back from another site and the first thing they need is
+              whether it worked. */}
+          {returnState && (
+            <div
+              role="status"
+              style={{
+                marginTop: 18,
+                padding: "12px 14px",
+                borderRadius: "var(--r-2)",
+                fontSize: 13,
+                lineHeight: 1.5,
+                border: `1px solid ${
+                  returnState.tone === "error"
+                    ? "var(--danger)"
+                    : "var(--border)"
+                }`,
+                background: "var(--bg-elev-1)",
+                color:
+                  returnState.tone === "error"
+                    ? "var(--danger)"
+                    : "var(--fg-muted)",
+              }}
+            >
+              {returnState.message}
+            </div>
+          )}
 
           <div className="bill-grid">
             {/* MAIN column */}
@@ -417,17 +493,19 @@ export default function BillingPage() {
                     style={{
                       margin: "8px 2px 0",
                       fontSize: 11,
-                      color: "var(--fg-dim)",
+                      color: overMax ? "var(--danger)" : "var(--fg-dim)",
                     }}
                   >
-                    Get 5% bonus credits on top-ups of ₹1000 or more.
+                    {overMax
+                      ? `Maximum top-up is $${MAX_TOPUP_USD} (about ₹${MAX_INR.toLocaleString("en-IN")}).`
+                      : "Get 5% bonus credits on top-ups of ₹1000 or more."}
                   </p>
                 </div>
 
-                {lastPurchase && (
+                {lastPurchase?.amountINR !== undefined && (
                   <button
                     type="button"
-                    onClick={() => openCheckoutFor(lastPurchase.amountINR)}
+                    onClick={() => openCheckoutFor(lastPurchase.amountINR!)}
                     style={{
                       width: "100%",
                       height: 36,

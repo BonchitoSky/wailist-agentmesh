@@ -38,6 +38,12 @@ const PORT_POS: Record<NodeType, Partial<Record<PortName, PortFn>>> = {
     in: (W, H) => ({ x: 0, y: H / 2 }),
     out: (W, H) => ({ x: W, y: H / 2 }),
   },
+  // state is a plain flow step, like action: it reads or writes one saved
+  // value and passes control on. It never attaches to an agent.
+  state: {
+    in: (W, H) => ({ x: 0, y: H / 2 }),
+    out: (W, H) => ({ x: W, y: H / 2 }),
+  },
   end: { in: (W, H) => ({ x: 0, y: H / 2 }) },
   // Flow-only like action -- Gmail/Sheets/Calendar/Drive nodes were never
   // made agent-attachable on the backend (only provider/tool/tool402 are
@@ -81,7 +87,12 @@ export function portForFrom(n: WorkflowNode, kind: EdgeKind = "flow"): PortName 
 }
 
 export function portForTo(n: WorkflowNode): PortName {
-  if (n.type === "agent" || n.type === "action" || n.type === "end")
+  if (
+    n.type === "agent" ||
+    n.type === "action" ||
+    n.type === "state" ||
+    n.type === "end"
+  )
     return "in";
   return "in";
 }
@@ -106,25 +117,44 @@ export function isValidConnection(
       to.type === "agent"
     );
   }
-  // flow: trigger/agent/action/tool/tool402/tendril → agent/action/end/tool/
-  // tool402/tendril (in port). tool402 and tool are included on both sides
-  // so an x402 endpoint or a plain tool (HTTP/calc/datetime) can sit
-  // directly in the flow chain (e.g. trigger → tool → end), not just hang
-  // off an agent as an attached tool — the runner already executes both as
-  // a standalone step (see runner.go's NodeTypeTool402 and NodeTypeTool
-  // cases). tendril mirrors it for the same reason: a standalone Tendril
-  // workflow is trigger → rent → end, not an agent-attached resource
-  // (agent-driven Tendril attach is deliberately out of scope for now).
-  // provider is deliberately excluded here -- see PORT_POS's comment on it
-  // in portUtils.ts above: a standalone provider flow step is a backend
-  // no-op, so it stays attach-only.
+  // flow: trigger/agent/action/state/tool/tool402/tendril → agent/action/
+  // state/end/tool/tool402/tendril (in port). tool402 and tool are included
+  // on both sides so an x402 endpoint or a plain tool (HTTP/calc/datetime)
+  // can sit directly in the flow chain (e.g. trigger → tool → end), not
+  // just hang off an agent as an attached tool — the runner already
+  // executes both as a standalone step (see runner.go's NodeTypeTool402 and
+  // NodeTypeTool cases). tendril mirrors it for the same reason: a
+  // standalone Tendril workflow is trigger → rent → end, not an
+  // agent-attached resource (agent-driven Tendril attach is deliberately
+  // out of scope for now). state is a plain flow step like action -- never
+  // attached to an agent. provider is deliberately excluded here -- see
+  // PORT_POS's comment on it in portUtils.ts above: a standalone provider
+  // flow step is a backend no-op, so it stays attach-only.
   if (toPort === "in") {
     return (
       (
-        ["trigger", "agent", "action", "tool", "tool402", "tendril", "google"] as NodeType[]
+        [
+          "trigger",
+          "agent",
+          "action",
+          "state",
+          "tool",
+          "tool402",
+          "tendril",
+          "google",
+        ] as NodeType[]
       ).includes(from.type) &&
       (
-        ["agent", "action", "end", "tool", "tool402", "tendril", "google"] as NodeType[]
+        [
+          "agent",
+          "action",
+          "state",
+          "end",
+          "tool",
+          "tool402",
+          "tendril",
+          "google",
+        ] as NodeType[]
       ).includes(to.type)
     );
   }

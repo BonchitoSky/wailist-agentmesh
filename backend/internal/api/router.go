@@ -61,6 +61,10 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Put("/workflows/{id}", d.UpdateWorkflow)
 		r.Delete("/workflows/{id}", d.DeleteWorkflow)
 
+		r.Get("/workflows/{id}/variables", d.ListVariables)
+		r.Put("/workflows/{id}/variables/{key}", d.SetVariable)
+		r.Delete("/workflows/{id}/variables/{key}", d.DeleteVariable)
+
 		r.Put("/workflows/{id}/schedule", d.SetSchedule)
 		r.Delete("/workflows/{id}/schedule", d.ClearSchedule)
 
@@ -89,7 +93,9 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Post("/payments/cashfree/order", d.CreateCashfreeOrder)
 		r.Post("/payments/cashfree/verify", d.VerifyCashfreePayment)
 		r.Post("/payments/nowpayments/invoice", d.CreateCryptoInvoice)
+		r.Get("/payments/providers", d.PaymentProviders)
 		r.Get("/credits/balance", d.GetCreditBalance)
+		r.Get("/credits/purchases", d.GetCreditPurchases)
 		r.Post("/credits/redeem-coupon", d.RedeemCoupon)
 
 		// Real spend reporting, read from debit_ledger (the rows the engine
@@ -108,6 +114,10 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Post("/tendril/topup", d.TendrilConsoleTopup)
 		r.Post("/tendril/rent", d.TendrilConsoleRent)
 		r.Post("/tendril/run", d.TendrilConsoleRun)
+		r.Get("/prism/endpoints", d.PrismEndpoints)
+		r.Get("/prism/console", d.PrismConsoleWorkflow)
+		r.Get("/prism/console/exists", d.PrismConsoleWorkflowExists)
+		r.Post("/prism/run", d.PrismConsoleRun)
 		r.Get("/leases", d.ListLeases)
 		r.Post("/leases/{id}/release", d.ReleaseLease)
 		r.Get("/leases/{id}/key", d.DownloadLeaseKey)

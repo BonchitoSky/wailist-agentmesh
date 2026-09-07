@@ -13,6 +13,7 @@ import {
 import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
 import { assertWritable } from "./readonly";
 import { IS_NATIVE, authHeaders } from "./nativeAuth";
+import type { PaymentMethod } from "@/components/checkout/types";
 
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
@@ -354,6 +355,58 @@ export const workflows = {
     await delay(100);
   },
 
+  // Persistent per-workflow key/value state, surviving across runs. Used
+  // for incremental sync cursors, counters, and cached tokens.
+  variables: {
+    list: async (id: string): Promise<Record<string, unknown>> => {
+      if (BASE) {
+        const res = await apiFetch(`${BASE}/workflows/${id}/variables`, {
+          credentials: "include",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "failed to load variables");
+        return data.variables ?? {};
+      }
+      await delay(120);
+      return {};
+    },
+    set: async (id: string, key: string, value: unknown): Promise<void> => {
+      assertWritable("PUT", `/workflows/${id}/variables/${key}`);
+      if (BASE) {
+        const res = await apiFetch(
+          `${BASE}/workflows/${id}/variables/${encodeURIComponent(key)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ value }),
+          },
+        );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? "failed to save variable");
+        }
+        return;
+      }
+      await delay(120);
+    },
+    remove: async (id: string, key: string): Promise<void> => {
+      assertWritable("DELETE", `/workflows/${id}/variables/${key}`);
+      if (BASE) {
+        const res = await apiFetch(
+          `${BASE}/workflows/${id}/variables/${encodeURIComponent(key)}`,
+          { method: "DELETE", credentials: "include" },
+        );
+        if (!res.ok && res.status !== 204) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? "failed to delete variable");
+        }
+        return;
+      }
+      await delay(120);
+    },
+  },
+
   // PUT /workflows/:id/schedule
   setSchedule: async (
     id: string,
@@ -440,7 +493,53 @@ export const credits = {
     await delay(120);
     throw new Error("coupons aren't available in mock mode");
   },
+
+  // Top-up history from credit_ledger — the same rows the payment webhooks
+  // write and settle, scoped server-side to the signed-in user. This replaced
+  // a localStorage copy: history kept per-browser disappeared on sign-out or a
+  // device change, and showed the previous account's purchases to the next one
+  // signing in on the same browser.
+  purchases: async (limit = 50): Promise<PurchaseRecord[]> => {
+    if (BASE) {
+      const res = await apiFetch(`${BASE}/credits/purchases?limit=${limit}`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          (data as { error?: string } | null)?.error ??
+            "purchase history fetch failed",
+        );
+      }
+      return Array.isArray(data) ? (data as PurchaseRecord[]) : [];
+    }
+    await delay(120);
+    return [];
+  },
 };
+
+// PurchaseRecord is one credit_ledger row as the API returns it (see the Go
+// models.CreditTransaction). Amounts stay in their stored units — paise for
+// the INR path, cents for the crypto one, micros for credits granted — so the
+// caller converts once, at the point of display, rather than trusting a
+// pre-rounded number.
+//
+// amountInrPaise and amountUsdCents are mutually exclusive: a Cashfree top-up
+// is INR-denominated with an FX rate attached, a crypto one is already USD, so
+// each row carries exactly one of them.
+export interface PurchaseRecord {
+  id: string;
+  provider: string;
+  providerOrderId: string;
+  providerPaymentId?: string;
+  status: string;
+  amountInrPaise?: number;
+  fxRateUsdPerInr?: number;
+  amountUsdCents?: number;
+  creditUsdMicros: number;
+  createdAt: string;
+  completedAt?: string;
+}
 
 // -- Runs -------------------------------------------------------------------
 export interface RunLogRecord {
@@ -757,6 +856,43 @@ export const payments = {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "payment verification failed");
+    return data;
+  },
+
+  // Which gateways this deployment can actually take money through, plus the
+  // live INR->USD rate. Both come from the server because both are deployment
+  // state: NOWPayments quotes in USD and can only be offered when a rate is
+  // available, and it has to be the same rate the backend uses rather than the
+  // mock constant in lib/credits/fx.ts.
+  listProviders: async (): Promise<{
+    usd_per_inr: number;
+    providers: { id: PaymentMethod; enabled: boolean; currency: string }[];
+  }> => {
+    if (!BASE) throw new Error("payments require a configured backend");
+    const res = await apiFetch(`${BASE}/payments/providers`, {
+      credentials: "include",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok)
+      throw new Error(data.error ?? "could not load payment providers");
+    return data;
+  },
+
+  // Opens a NOWPayments hosted invoice. Crypto settles on-chain with no
+  // client-side completion step, so the IPN webhook is the ONLY path that
+  // credits a crypto top-up -- there is deliberately no verify call here.
+  createCryptoInvoice: async (
+    amountUSDCents: number,
+  ): Promise<{ order_id: string; invoice_url: string }> => {
+    if (!BASE) throw new Error("payments require a configured backend");
+    const res = await apiFetch(`${BASE}/payments/nowpayments/invoice`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount_usd_cents: amountUSDCents }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error ?? "invoice creation failed");
     return data;
   },
 };

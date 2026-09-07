@@ -12,6 +12,7 @@ const (
 	NodeTypeTool     NodeType = "tool"
 	NodeTypeTool402  NodeType = "tool402"
 	NodeTypeAction   NodeType = "action"
+	NodeTypeState    NodeType = "state"
 	NodeTypeEnd      NodeType = "end"
 	NodeTypeTendril  NodeType = "tendril"
 	// NodeTypeGoogle covers Gmail/Sheets/Calendar/Drive -- grouped under one
@@ -131,6 +132,13 @@ type WorkflowNode struct {
 	// Config holds per-connector non-secret settings (list IDs, project keys, channel
 	// names, etc.) for the same connectors. Never encrypted.
 	Config map[string]string `json:"config,omitempty"`
+	// State node fields. StateOp is one of "get", "set", "increment",
+	// "delete". StateValue is the literal to store for "set" (itself
+	// subject to {{state.x}} expansion) or the numeric delta for
+	// "increment".
+	StateOp    string `json:"stateOp,omitempty"`
+	StateKey   string `json:"stateKey,omitempty"`
+	StateValue string `json:"stateValue,omitempty"`
 	// Tendril node fields. TendrilAction is "topup" | "rent" | "run" | "release";
 	// TendrilHours is how many hours of credit to guarantee before renting,
 	// as a decimal string ("1", "2", "0.5") — a string, like every other
@@ -229,6 +237,13 @@ type Workflow struct {
 	// not the server's receive time. Offline pings flush in a burst, so the
 	// only ordering that means anything is the one the device observed.
 	GeofenceLastFixAt *time.Time `json:"geofenceLastFixAt,omitempty"`
+	// IsSystem marks a row GetOrCreateSystemWorkflow finds-or-creates to back
+	// a partner console (Tendril, Prism) rather than something a user built.
+	// Set once, at INSERT, and never touched by UpdateWorkflow -- identity
+	// lives in this column, not in the name, precisely so renaming a
+	// workflow can never make it (or unmake it) a console. json:"-": this is
+	// server-internal bookkeeping, not something the frontend needs to see.
+	IsSystem bool `json:"-"`
 }
 
 type RunStatus string

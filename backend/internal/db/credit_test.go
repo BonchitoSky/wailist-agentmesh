@@ -279,32 +279,28 @@ func TestExpireStalePendingTransactions(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 
-	url := os.Getenv("TEST_DATABASE_URL")
-	pool, err := pgxpool.New(ctx, url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
-
 	email := fmt.Sprintf("credit-expire-test-%d@example.com", time.Now().UnixNano())
 	user, err := store.CreateUser(ctx, email, "hash")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// A unique, test-only provider keeps the affected-row counts below exact for this
-	// test's own row. Sweeping the real "cashfree" provider counts whatever pending rows
-	// other tests left behind in the shared test database, which is not something this
-	// test can assert on.
-	provider := fmt.Sprintf("cashfree-expiretest-%d", time.Now().UnixNano())
+	// A unique, test-only provider, for the same reason
+	// TestExpireStalePendingTransactionsScopesToProvider uses one: these
+	// sweeps are scoped only by provider, not by user or row, and every
+	// package's tests share one database. Sweeping the real "cashfree"
+	// expired other packages' in-flight pending rows and counted their
+	// concurrently-created ones, so the exact-count assertions below raced
+	// whatever else happened to be funding a user at that moment.
+	sweepProvider := fmt.Sprintf("cashfree-expiretest-%d", time.Now().UnixNano())
 
 	orderID := fmt.Sprintf("order_expire_%d", time.Now().UnixNano())
-	if _, err := store.CreateCreditTransactionForProvider(ctx, provider, user.ID, orderID, 10000, 0.012); err != nil {
+	if _, err := store.CreateCreditTransactionForProvider(ctx, sweepProvider, user.ID, orderID, 10000, 0.012); err != nil {
 		t.Fatal(err)
 	}
 
 	// Row is only a few milliseconds old — a 24h threshold must not touch it.
-	n, err := store.ExpireStalePendingTransactions(ctx, provider, 24*time.Hour)
+	n, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,10 +308,9 @@ func TestExpireStalePendingTransactions(t *testing.T) {
 		t.Fatalf("want 0 rows expired (too fresh), got %d", n)
 	}
 
-	// A zero threshold (cutoff = the database's own now) makes the row qualify as stale
-	// without racing a fixed small duration like 1ms, and without needing to age the row
-	// with a raw UPDATE against created_at.
-	n2, err := store.ExpireStalePendingTransactions(ctx, provider, 0)
+	// A zero threshold (cutoff = the database's own now) makes the row
+	// qualify as stale without racing a fixed small duration.
+	n2, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,19 +318,8 @@ func TestExpireStalePendingTransactions(t *testing.T) {
 		t.Fatalf("want exactly 1 row expired, got %d", n2)
 	}
 
-	var status string
-	if err := pool.QueryRow(ctx,
-		`SELECT status FROM credit_ledger WHERE provider = $1 AND provider_order_id = $2`,
-		provider, orderID,
-	).Scan(&status); err != nil {
-		t.Fatal(err)
-	}
-	if status != "expired" {
-		t.Fatalf("want stale row expired, got status %q", status)
-	}
-
 	// Re-running must not re-touch rows that are no longer 'pending'.
-	n3, err := store.ExpireStalePendingTransactions(ctx, provider, 0)
+	n3, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

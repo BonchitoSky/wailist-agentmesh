@@ -381,6 +381,9 @@ func nodeConfigHash(n models.WorkflowNode) string {
 		TendrilNodeID    string
 		TendrilHours     string
 		TendrilAmount    string
+		StateOp          string
+		StateKey         string
+		StateValue       string
 	}{
 		Type: n.Type, Template: n.Template, SystemPrompt: n.SystemPrompt,
 		Wallet: n.Wallet, Balance: n.Balance, Model: n.Model, KeyMode: n.KeyMode,
@@ -392,6 +395,7 @@ func nodeConfigHash(n models.WorkflowNode) string {
 		CustomParams: n.CustomParams, BodyMode: n.BodyMode, BodyTemplate: n.BodyTemplate,
 		Config: n.Config, TendrilAction: n.TendrilAction, TendrilNodeID: n.TendrilNodeID,
 		TendrilHours: n.TendrilHours, TendrilAmount: n.TendrilAmount,
+		StateOp: n.StateOp, StateKey: n.StateKey, StateValue: n.StateValue,
 	}
 	b, err := json.Marshal(relevant)
 	if err != nil {
@@ -1171,6 +1175,15 @@ func (r *Runner) execute(ctx context.Context, wf models.Workflow, run models.Run
 	}
 	rc := NewRunContext(run.ID, inputJSON)
 
+	// Workflow variables are loaded once per run. A workflow with none
+	// gets an empty map, and ExpandState is a no-op on every field, so
+	// this costs one query and changes nothing else.
+	if vars, err := r.store.GetWorkflowVariables(ctx, wf.ID); err == nil {
+		rc.SetState(vars)
+	} else {
+		log.Printf("load workflow variables: workflow=%s run=%s: %v", wf.ID, run.ID, err)
+	}
+
 	var failed int32
 
 	for stepIdx, level := range levels {
@@ -1408,11 +1421,62 @@ func (r *Runner) executeNode(
 	run models.Run,
 	wf models.Workflow,
 ) (any, error) {
+	// Resolve {{state.x}} references against this run's snapshot of the
+	// workflow's persisted variables. Applied to a fixed, explicit set of
+	// user-authored fields; ExpandState is the identity function on any
+	// string without a literal "{{state." in it, so a workflow that does
+	// not use state produces byte-identical requests to before.
+	//
+	// Deliberately NOT expanded: APIKey, EmailAPIKey, Secrets and Config —
+	// a credential must never be assembled out of mutable state.
+	//
+	// node is a value copy (executeNode takes models.WorkflowNode by
+	// value), so mutating it here cannot affect wf.Nodes or any other
+	// node's view of the graph.
+	//
+	// Always runs, even when this run has no state loaded (an empty/nil
+	// map): a workflow's very first run is exactly that case, and an
+	// unresolved {{state.x}} reference must expand to empty there too, not
+	// leak the literal placeholder into a real request -- ExpandState's own
+	// fast path (no "{{" in the string) already makes this a no-op for
+	// every field on a workflow that doesn't reference state at all.
+	state := rc.State()
+	node.URL = nodes.ExpandState(node.URL, state)
+	node.Endpoint = nodes.ExpandState(node.Endpoint, state)
+	node.SystemPrompt = nodes.ExpandState(node.SystemPrompt, state)
+	node.BodyTemplate = nodes.ExpandState(node.BodyTemplate, state)
+	node.EmailTo = nodes.ExpandState(node.EmailTo, state)
+	node.EmailSubject = nodes.ExpandState(node.EmailSubject, state)
+	node.EmailBody = nodes.ExpandState(node.EmailBody, state)
+	if len(node.ParamDefaults) > 0 {
+		expanded := make(map[string]string, len(node.ParamDefaults))
+		for k, v := range node.ParamDefaults {
+			expanded[k] = nodes.ExpandState(v, state)
+		}
+		node.ParamDefaults = expanded
+	}
+
 	switch node.Type {
 	case models.NodeTypeTrigger:
 		return rc.input, nil
 	case models.NodeTypeEnd:
 		return rc.Message(), nil
+	case models.NodeTypeState:
+		result, err := nodes.ExecuteState(ctx, node, wf.ID, r.store, rc, rc.State())
+		if err != nil {
+			return nil, err
+		}
+		// Reflect the write into this run's snapshot so a later node in
+		// the same run reads what this one just stored, without a second
+		// round-trip to the database.
+		if sr, ok := result.(nodes.StateResult); ok {
+			if sr.Op == "delete" {
+				rc.setStateKey(sr.Key, nil)
+			} else {
+				rc.setStateKey(sr.Key, sr.Value)
+			}
+		}
+		return result, nil
 	case models.NodeTypeAgent:
 		provider := attachMap[node.ID].Provider
 		platformMode := provider != nil && provider.KeyMode == "platform"

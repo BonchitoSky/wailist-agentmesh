@@ -14,9 +14,11 @@ import { Topbar } from "@/components/Topbar";
 import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
 import { useCredits } from "@/lib/credits/store";
-import { tendril } from "@/lib/tendril";
 import { DEMO_WORKFLOW } from "@/lib/data";
+import { loadTemplateWorkflow } from "@/lib/templateWorkflow";
 import { can } from "@/lib/readonly";
+import { ImportModal } from "./ImportModal";
+import { ShareModal } from "./ShareModal";
 import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import {
@@ -35,7 +37,6 @@ export function WorkflowsPage() {
   const [wfList, setWfList] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [creatingTendril, setCreatingTendril] = useState(false);
   const [creatingDemo, setCreatingDemo] = useState(false);
   // Tagged by source so the banner always shows the most recent failure --
   // two separate error strings with a fixed `a || b` precedence would let
@@ -43,9 +44,14 @@ export function WorkflowsPage() {
   // other. A success only clears the error if it's the one that owns it,
   // so it never wipes an unrelated action's still-relevant error.
   const [pageError, setPageError] = useState<{
-    source: "demo" | "delete" | "tendril" | "schedule";
+    source: "demo" | "delete" | "schedule";
     message: string;
   } | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  // The workflow being shared -- also doubles as ShareModal's open flag
+  // (non-null = open), the same "id doubles as open state" shape RowMenu's
+  // own view state already uses.
+  const [shareWorkflowId, setShareWorkflowId] = useState<string | null>(null);
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
 
   useEffect(() => {
@@ -84,68 +90,20 @@ export function WorkflowsPage() {
     }
   }, [creating, router]);
 
-  // No node graph here at all — this row is a shortcut into the direct
-  // Tendril console (WorkflowRoute matches on its id), not a workflow you
-  // build on canvas. tendril.console() finds-or-creates the ONE hidden
-  // workflow that backs every user's console, so repeated clicks always
-  // open the same row instead of workflowsApi.create minting a fresh
-  // duplicate one every time.
-  // tendril.console() finds-OR-CREATES the console row. Creating one is
-  // authoring even though it is a GET; isWriteBlocked's WRITE_RULES lists it
-  // explicitly for that reason. This branch picks the non-creating variant up
-  // front so a viewer never issues the blocked call at all, and has nowhere
-  // to go if the desktop app has not opened this user's console yet.
-  const handleLoadTendrilWorkflow = useCallback(async () => {
-    if (creatingTendril) return;
-    setCreatingTendril(true);
-    setPageError((prev) => (prev?.source === "tendril" ? null : prev));
-    try {
-      const workflowId = can("workflow.create", readOnly)
-        ? await tendril.console()
-        : await tendril.consoleWorkflowIdIfExists();
-      if (!workflowId) {
-        setPageError({
-          source: "tendril",
-          message:
-            "No Tendril console yet — open one from the AgentMesh desktop app first.",
-        });
-        setCreatingTendril(false);
-        return;
-      }
-      router.push(`/workflows/${workflowId}`);
-    } catch {
-      setCreatingTendril(false);
-    }
-  }, [creatingTendril, router, readOnly]);
-
   // Loads DEMO_WORKFLOW (lib/data.ts) into a brand-new workflow row every
-  // click -- unlike handleLoadTendrilWorkflow's find-or-create console, a
-  // demo is just a starting point the user immediately edits, so there's no
-  // "the one shared demo" identity to preserve and a fresh copy each time is
-  // correct. create() makes the empty row, then update() writes the full
-  // node/edge graph in one shot (same two-call pattern the canvas editor's
-  // own save path already uses).
+  // click -- a demo is just a starting point the user immediately edits, so
+  // there's no "the one shared demo" identity to preserve and a fresh copy
+  // each time is correct. loadTemplateWorkflow (lib/templateWorkflow.ts)
+  // owns the create()-then-update()-then-rollback-on-failure sequence,
+  // shared with each partner ConsoleCard's "try a workflow" icon.
   const handleLoadDemoWorkflow = useCallback(async () => {
     if (creatingDemo) return;
     setCreatingDemo(true);
     setPageError((prev) => (prev?.source === "demo" ? null : prev));
-    let wf: Workflow | undefined;
     try {
-      wf = await workflowsApi.create(DEMO_WORKFLOW.name);
-      // UpdateWorkflow (backend/internal/api/handlers/workflows.go) overwrites
-      // name unconditionally from the request body -- omitting it here would
-      // blank out the name create() just set.
-      await workflowsApi.update(wf.id, {
-        name: DEMO_WORKFLOW.name,
-        nodes: DEMO_WORKFLOW.nodes,
-        edges: DEMO_WORKFLOW.edges,
-      });
-      router.push(`/workflows/${wf.id}`);
+      const id = await loadTemplateWorkflow(DEMO_WORKFLOW);
+      router.push(`/workflows/${id}`);
     } catch (e) {
-      // If create() succeeded but update() failed, don't leave an empty
-      // orphaned row behind in the user's workflow list -- best-effort
-      // delete it before surfacing the error.
-      if (wf) await workflowsApi.remove(wf.id).catch(() => {});
       setPageError({
         source: "demo",
         message:
@@ -261,7 +219,9 @@ export function WorkflowsPage() {
             </div>
             <div className="wf-actions">
               {can("workflow.create", readOnly) && (
-                <button style={ghostBtn}>Import</button>
+                <button style={ghostBtn} onClick={() => setImportOpen(true)}>
+                  Import
+                </button>
               )}
               {can("workflow.create", readOnly) && (
                 <button
@@ -282,33 +242,6 @@ export function WorkflowsPage() {
                   </span>
                 </button>
               )}
-              <button
-                onClick={handleLoadTendrilWorkflow}
-                disabled={creatingTendril}
-                style={{
-                  ...ghostBtn,
-                  opacity: creatingTendril ? 0.6 : 1,
-                  position: "relative",
-                }}
-                title="Rent a real Linux machine by the hour. SSH from the console. Official — built with Tendril."
-              >
-                {creatingTendril ? "Loading…" : "Load Tendril workflow"}
-                <span
-                  style={{
-                    marginLeft: 6,
-                    fontSize: 9,
-                    fontFamily: "var(--font-mono)",
-                    color: "#E879F9",
-                    border: "1px solid #E879F9",
-                    borderRadius: 999,
-                    padding: "1px 5px",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.04em",
-                  }}
-                >
-                  Official
-                </span>
-              </button>
               {can("workflow.create", readOnly) && (
                 <button
                   onClick={handleNewWorkflow}
@@ -515,6 +448,7 @@ export function WorkflowsPage() {
               onDelete={handleDelete}
               onSetSchedule={handleSetSchedule}
               onClearSchedule={handleClearSchedule}
+              onShare={setShareWorkflowId}
             />
           ) : (
             <WorkflowGrid
@@ -542,6 +476,21 @@ export function WorkflowsPage() {
           )}
         </div>
       </div>
+      {importOpen && (
+        <ImportModal
+          onClose={() => setImportOpen(false)}
+          onImported={(id) => {
+            setImportOpen(false);
+            router.push(`/workflows/${id}`);
+          }}
+        />
+      )}
+      {shareWorkflowId && (
+        <ShareModal
+          workflowId={shareWorkflowId}
+          onClose={() => setShareWorkflowId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -628,6 +577,7 @@ function WorkflowIcon({ name }: { name: string }) {
 function RowMenu({
   workflowId,
   onDelete,
+  onShare,
   deployed,
   scheduleCron,
   onSetSchedule,
@@ -635,6 +585,7 @@ function RowMenu({
 }: {
   workflowId: string;
   onDelete: () => void;
+  onShare: () => void;
   deployed: boolean;
   scheduleCron?: string;
   onSetSchedule: (cron: string) => Promise<void>;
@@ -839,6 +790,35 @@ function RowMenu({
                 }}
               >
                 {scheduleCron ? "Edit schedule" : "Schedule"}
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  onShare();
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  border: "none",
+                  borderRadius: 5,
+                  background: "transparent",
+                  color: "var(--fg)",
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  fontFamily: "var(--font-sans)",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--bg-elev-3)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                Share
               </button>
               <div
                 style={{
@@ -1232,12 +1212,14 @@ function WorkflowRows({
   onDelete,
   onSetSchedule,
   onClearSchedule,
+  onShare,
 }: {
   items: Workflow[];
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
   onSetSchedule: (id: string, cron: string) => Promise<void>;
   onClearSchedule: (id: string) => Promise<void>;
+  onShare: (id: string) => void;
 }) {
   const readOnly = useReadOnly();
   return (
@@ -1357,8 +1339,7 @@ function WorkflowRows({
               color: "var(--accent)",
             }}
           >
-            {wf.spend ?? "-"}
-            {wf.spend && <span style={{ color: "var(--fg-dim)" }}> ALGO</span>}
+            {wf.spend ? `$${wf.spend}` : "-"}
           </span>
           <span
             data-label="Updated"
@@ -1384,6 +1365,7 @@ function WorkflowRows({
               <RowMenu
                 workflowId={wf.id}
                 onDelete={() => onDelete(wf.id)}
+                onShare={() => onShare(wf.id)}
                 deployed={wf.status === "deployed"}
                 scheduleCron={wf.scheduleCron}
                 onSetSchedule={(cron) => onSetSchedule(wf.id, cron)}

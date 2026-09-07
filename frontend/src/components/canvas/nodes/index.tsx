@@ -9,6 +9,7 @@ import {
   PROVIDER_TEMPLATES,
   TOOL_TEMPLATES,
   ACTION_TEMPLATES,
+  STATE_TEMPLATES,
   END_TEMPLATES,
   TENDRIL_TEMPLATES,
   GOOGLE_TEMPLATES,
@@ -40,6 +41,8 @@ export function CanvasNode(props: NodeProps) {
       return <Tool402Node {...props} />;
     case "action":
       return <ActionNode {...props} />;
+    case "state":
+      return <StateNode {...props} />;
     case "end":
       return <EndNode {...props} />;
     case "tendril":
@@ -922,6 +925,65 @@ function ActionNode({
         kicker="action"
         title={node.name ?? tpl?.name ?? "Action"}
         sub={node.sub ?? tpl?.desc}
+      />
+      <SidePort
+        side="left"
+        color="var(--fg)"
+        node={node}
+        port="in"
+        onHover={() => onPortHover("in")}
+        onLeave={onPortLeave}
+      />
+      <SidePort
+        side="right"
+        color="var(--fg)"
+        node={node}
+        port="out"
+        onHover={() => onPortHover("out")}
+        onLeave={onPortLeave}
+        onMouseDown={(e) => onStartWire(e, "out")}
+      />
+    </NodeShell>
+  );
+}
+
+// ── State ──────────────────────────────────────────────────────────────────
+// Blue rather than the accent violet of agent/provider or the magenta of
+// x402: state is the one node that touches neither the model nor money, and
+// keeping the money-coloured nodes visually exclusive is what lets you spot
+// spend on a busy canvas at a glance.
+function StateNode({
+  node,
+  selected,
+  onMouseDown,
+  onPortHover,
+  onPortLeave,
+  onStartWire,
+}: NodeProps) {
+  const t = NODE_TYPES.state;
+  const tpl = STATE_TEMPLATES.find((x) => x.id === node.template);
+  // The key is the useful thing at a glance -- "which value does this touch"
+  // -- so it wins the subtitle over the template's generic description.
+  const sub = node.stateKey
+    ? `${node.stateOp ?? tpl?.id ?? "get"} · ${node.stateKey}`
+    : (node.sub ?? tpl?.desc);
+  return (
+    <NodeShell
+      node={node}
+      selected={selected}
+      onMouseDown={onMouseDown}
+      W={t.w}
+      H={t.h}
+      accent="var(--info)"
+    >
+      <NodeHeader
+        icon={node.icon ?? tpl?.icon ?? "▤"}
+        template={node.template}
+        iconBg="var(--info-soft)"
+        iconColor="var(--info)"
+        kicker="state"
+        title={node.name ?? tpl?.name ?? "State"}
+        sub={sub}
       />
       <SidePort
         side="left"

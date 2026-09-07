@@ -231,6 +231,12 @@ func main() {
 		TodoistClientSecret:         os.Getenv("TODOIST_CLIENT_SECRET"),
 	}
 
+	// Keeps the Bazaar catalog cache refreshed ahead of its own TTL, so a
+	// real request practically never blocks on the ~780-entry upstream crawl
+	// (up to 90s worst case) that would otherwise run inline the instant the
+	// cache goes stale.
+	deps.WarmBazaarCache(ctx)
+
 	r := api.NewRouter(deps)
 
 	port := envOr("PORT", "8080")

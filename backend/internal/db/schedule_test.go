@@ -3,10 +3,12 @@ package db_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/agentmesh/backend/internal/models"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // TestClaimDueSchedulesClaimsAndAdvances verifies the core scheduler
@@ -270,6 +272,161 @@ func TestFindSystemWorkflowReportsScheduleFields(t *testing.T) {
 	}
 	if found.ScheduleNextRunAt == nil {
 		t.Error("FindSystemWorkflow: schedule_next_run_at is nil, want the set time")
+	}
+}
+
+// TestFindSystemWorkflowIgnoresANameCollisionFromAnOrdinaryWorkflow is the
+// regression test for the hijack migration 000033 (is_system) closes.
+// UpdateWorkflow has never validated names, so before is_system existed, a
+// user renaming their OWN ordinary workflow to exactly the console's name
+// made FindSystemWorkflow's name-only WHERE clause return THAT workflow --
+// oldest match wins -- silently swapping it for the console from then on:
+// inaccessible via the canvas (WorkflowRoute dispatches on id) with console
+// runs/spend attributed to it. is_system is a column no rename can touch.
+func TestFindSystemWorkflowIgnoresANameCollisionFromAnOrdinaryWorkflow(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	email := fmt.Sprintf("system-workflow-collision-test-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const systemWorkflowName = "Collision Console (managed, do not edit)"
+
+	// The user's own, ordinary workflow -- created the normal way, is_system
+	// false -- happens to carry the exact name a console would use. This is
+	// the state UpdateWorkflow's missing validation lets a rename produce.
+	ordinary, err := store.CreateWorkflow(ctx, systemWorkflowName, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Before is_system, this would have returned the ordinary workflow.
+	if _, ok, err := store.FindSystemWorkflow(ctx, user.ID, systemWorkflowName); err != nil {
+		t.Fatal(err)
+	} else if ok {
+		t.Fatal("FindSystemWorkflow matched the ordinary, non-system workflow by name alone")
+	}
+
+	// GetOrCreateSystemWorkflow must therefore create a SEPARATE row, not
+	// silently adopt the ordinary one.
+	sys, err := store.GetOrCreateSystemWorkflow(ctx, user.ID, systemWorkflowName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sys.ID == ordinary.ID {
+		t.Fatal("GetOrCreateSystemWorkflow returned the ordinary workflow's id instead of creating its own row")
+	}
+	if !sys.IsSystem {
+		t.Error("the row GetOrCreateSystemWorkflow just created has IsSystem = false, want true")
+	}
+
+	// The ordinary workflow -- same name, is_system false -- must still be
+	// visible to the user; the hidden system row must not be.
+	list, err := store.ListWorkflows(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawOrdinary, sawSystem bool
+	for _, w := range list {
+		if w.ID == ordinary.ID {
+			sawOrdinary = true
+		}
+		if w.ID == sys.ID {
+			sawSystem = true
+		}
+	}
+	if !sawOrdinary {
+		t.Error("ListWorkflows dropped the user's own ordinary workflow")
+	}
+	if sawSystem {
+		t.Error("ListWorkflows returned the hidden system workflow row")
+	}
+}
+
+// TestMigration000033BackfillOnlyPromotesARowWithARealConsoleRun is a
+// regression test for a security-review finding against migration 000033's
+// FIRST version: backfilling is_system by name match alone would have
+// completed, not closed, the exact hijack the migration exists to fix -- a
+// workflow a user had already renamed to the console's exact name
+// (pre-migration) would get promoted to is_system=true by a blind name-match
+// UPDATE, permanently.
+//
+// This runs the migration's actual backfill SQL (copied verbatim from
+// 000033_workflow_is_system.up.sql -- keep the two in sync) against two rows
+// sharing the reserved name: one with a run tagged the way only the real
+// console handlers can produce, one without. Only the corroborated row may
+// end up is_system=true.
+func TestMigration000033BackfillOnlyPromotesARowWithARealConsoleRun(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	url := os.Getenv("TEST_DATABASE_URL")
+
+	email := fmt.Sprintf("migration-000033-backfill-test-%d@example.com", time.Now().UnixNano())
+	user, err := store.CreateUser(ctx, email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const reservedName = "Tendril Console (managed — do not edit)"
+
+	// The hijack: an ordinary workflow that happens to carry the reserved
+	// name, with no console run history at all.
+	hijacked, err := store.CreateWorkflow(ctx, reservedName, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The real console row: same name, but with a run only
+	// runTendrilAction (tendril_console.go) could have produced.
+	real, err := store.CreateWorkflow(ctx, reservedName, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateRun(ctx, real.ID, "tendril-console", []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	// A decoy: run history that exists but was never produced by the real
+	// console handler. Must not be treated as corroborating.
+	if _, err := store.CreateRun(ctx, hijacked.ID, "manual", []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	// Verbatim from 000033_workflow_is_system.up.sql's backfill UPDATE.
+	if _, err := pool.Exec(ctx, `
+		UPDATE workflows SET is_system = true
+		    WHERE name IN ('Tendril Console (managed — do not edit)', 'Prism Console (managed, do not edit)')
+		      AND EXISTS (
+		          SELECT 1 FROM runs
+		          WHERE runs.workflow_id = workflows.id
+		            AND runs.triggered_by IN ('tendril-console', 'prism-console')
+		      )
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	gotHijacked, err := store.GetWorkflow(ctx, hijacked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotHijacked.IsSystem {
+		t.Error("the hijacked (name-matching, no real console run) row was promoted to is_system=true")
+	}
+
+	gotReal, err := store.GetWorkflow(ctx, real.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotReal.IsSystem {
+		t.Error("the real console row (name-matching, with a tendril-console-tagged run) was NOT promoted to is_system=true")
 	}
 }
 

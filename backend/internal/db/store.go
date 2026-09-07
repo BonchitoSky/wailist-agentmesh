@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,7 +48,7 @@ func (s *Store) Close() {
 // sites, and one was missed. A future column now only needs to be added
 // here and in scanWorkflowRow's Scan call, once, for every caller to pick
 // it up automatically.
-const workflowColumns = `id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at, schedule_cron, schedule_next_run_at, geofence_lat, geofence_lng, geofence_radius_m, geofence_inside, geofence_last_fix_at`
+const workflowColumns = `id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at, schedule_cron, schedule_next_run_at, geofence_lat, geofence_lng, geofence_radius_m, geofence_inside, geofence_last_fix_at, is_system`
 
 // rowScanner is satisfied by both pgx.Row (QueryRow) and *pgx.Rows
 // (Query's per-row iteration) -- scanWorkflowRow works with either, so a
@@ -68,7 +69,7 @@ func scanWorkflowRow(row rowScanner) (models.Workflow, error) {
 		&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
 		&w.ScheduleCron, &w.ScheduleNextRunAt,
 		&w.GeofenceLat, &w.GeofenceLng, &w.GeofenceRadiusM,
-		&w.GeofenceInside, &w.GeofenceLastFixAt,
+		&w.GeofenceInside, &w.GeofenceLastFixAt, &w.IsSystem,
 	); err != nil {
 		return models.Workflow{}, err
 	}
@@ -80,13 +81,22 @@ func scanWorkflowRow(row rowScanner) (models.Workflow, error) {
 }
 
 func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models.Workflow, error) {
+	return s.createWorkflowRow(ctx, name, userID, false)
+}
+
+// createWorkflowRow is CreateWorkflow's and GetOrCreateSystemWorkflow's
+// shared INSERT, split out so isSystem can never be set by anything but
+// GetOrCreateSystemWorkflow itself -- CreateWorkflow (the ordinary
+// POST /workflows path) always passes false, hardcoded at its one call site
+// rather than threaded through from a request body a user could set.
+func (s *Store) createWorkflowRow(ctx context.Context, name, userID string, isSystem bool) (models.Workflow, error) {
 	id := uuid.New().String()
 	emptyGraph := `{"nodes":[],"edges":[]}`
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO workflows (id, user_id, name, status, graph)
-		VALUES ($1, $2, $3, 'draft', $4::jsonb)
+		INSERT INTO workflows (id, user_id, name, status, graph, is_system)
+		VALUES ($1, $2, $3, 'draft', $4::jsonb, $5)
 		RETURNING `+workflowColumns+`
-	`, id, userID, name, emptyGraph)
+	`, id, userID, name, emptyGraph, isSystem)
 	return scanWorkflowRow(row)
 }
 
@@ -103,10 +113,17 @@ func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models
 // workflow-page visit calling GetOrCreateSystemWorkflow instead would mint
 // an empty "Tendril Console" row for every user who has never touched
 // Tendril, the instant they open ANY of their own workflows.
+// AND is_system = true is load-bearing, not redundant with the name match:
+// without it, a user renaming their OWN workflow to this exact name (there
+// is no name validation on UpdateWorkflow) would resolve here as THE system
+// workflow -- oldest match wins -- silently swapping their real workflow for
+// the console from then on. is_system is a column no rename can touch, so
+// only a row this store itself created via createWorkflowRow(isSystem=true)
+// can ever match.
 func (s *Store) FindSystemWorkflow(ctx context.Context, userID, name string) (w models.Workflow, found bool, err error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+workflowColumns+`
-		FROM workflows WHERE user_id = $1 AND name = $2 ORDER BY created_at ASC LIMIT 1
+		FROM workflows WHERE user_id = $1 AND name = $2 AND is_system = true ORDER BY created_at ASC LIMIT 1
 	`, userID, name)
 	if err != nil {
 		return models.Workflow{}, false, err
@@ -139,7 +156,7 @@ func (s *Store) GetOrCreateSystemWorkflow(ctx context.Context, userID, name stri
 	if found {
 		return w, nil
 	}
-	return s.CreateWorkflow(ctx, name, userID)
+	return s.createWorkflowRow(ctx, name, userID, true)
 }
 
 func (s *Store) GetWorkflow(ctx context.Context, id string) (models.Workflow, error) {
@@ -393,10 +410,17 @@ func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time, nextRun fu
 	return out, nil
 }
 
+// AND NOT is_system excludes a partner console's hidden row (Tendril,
+// Prism): the user never authored it and there is nothing to open on a
+// canvas, so it has no place in a list of things the user built. Filtered
+// here, in the query, rather than after the fact in the handler -- a row
+// excluded post-hoc still paid for its own decrypt and its own
+// attachWorkflowStats aggregation for nothing; idx_workflows_user_visible
+// (migration 000033) covers this exact predicate.
 func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Workflow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+workflowColumns+`
-		FROM workflows WHERE user_id = $1 ORDER BY updated_at DESC
+		FROM workflows WHERE user_id = $1 AND NOT is_system ORDER BY updated_at DESC
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -410,7 +434,98 @@ func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Work
 		}
 		wfs = append(wfs, w)
 	}
-	return wfs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.attachWorkflowStats(ctx, userID, wfs); err != nil {
+		// The Runs/Spend columns are decoration over `runs` and
+		// `debit_ledger`. A problem aggregating them must not turn "show me
+		// my workflows" into a 500 -- log it and return the list with those
+		// fields left at their zero values.
+		log.Printf("db: list workflows for user %s: stats aggregation failed: %v", userID, err)
+	}
+	return wfs, nil
+}
+
+// workflowStatsWindow is the trailing period the Runs/Spend columns on the
+// workflows list summarise. The UI labels those columns "· 30d", so the two
+// have to agree; changing one means changing the other.
+const workflowStatsWindow = 30 * 24 * time.Hour
+
+// attachWorkflowStats fills in the Runs and Spend fields that ListWorkflows'
+// own SELECT cannot produce -- they are aggregates over `runs` and
+// `debit_ledger`, not columns on `workflows`. Kept as a separate pass rather
+// than a join so workflowColumns/scanWorkflowRow stay the single shared
+// read path for a workflow row.
+//
+// Both queries are scoped by user_id, not just by the workflow ids in hand,
+// so a row belonging to someone else can never be counted into this user's
+// totals even if a workflow id were somehow reused.
+func (s *Store) attachWorkflowStats(ctx context.Context, userID string, wfs []models.Workflow) error {
+	if len(wfs) == 0 {
+		return nil
+	}
+	since := time.Now().Add(-workflowStatsWindow)
+
+	runCounts := map[string]int{}
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.workflow_id, COUNT(*)
+		FROM runs r
+		JOIN workflows w ON w.id = r.workflow_id
+		WHERE w.user_id = $1 AND r.started_at >= $2
+		GROUP BY r.workflow_id
+	`, userID, since)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			rows.Close()
+			return err
+		}
+		runCounts[id] = n
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	spendMicros := map[string]int64{}
+	rows, err = s.pool.Query(ctx, `
+		SELECT workflow_id, COALESCE(SUM(amount_usd_micros), 0)
+		FROM debit_ledger
+		WHERE user_id = $1 AND created_at >= $2
+		GROUP BY workflow_id
+	`, userID, since)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var micros int64
+		if err := rows.Scan(&id, &micros); err != nil {
+			rows.Close()
+			return err
+		}
+		spendMicros[id] = micros
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for i := range wfs {
+		wfs[i].Runs = runCounts[wfs[i].ID]
+		// Spend is a display string in USD. Left empty when nothing settled
+		// so the UI renders its "no data" dash rather than a misleading
+		// "$0.00" on a workflow that has simply never run.
+		if micros, ok := spendMicros[wfs[i].ID]; ok && micros > 0 {
+			wfs[i].Spend = fmt.Sprintf("%.2f", float64(micros)/1e6)
+		}
+	}
+	return nil
 }
 
 func (s *Store) UpdateWorkflow(ctx context.Context, id, name string, graph models.WorkflowGraph) (models.Workflow, error) {
@@ -1163,6 +1278,50 @@ func (s *Store) CreditBalance(ctx context.Context, userID string) (int64, error)
 	return s.GetCreditBalance(ctx, userID)
 }
 
+// ListCreditTransactions returns a user's top-up history, newest first.
+//
+// This is the read side of the same credit_ledger rows CreateCreditTransaction
+// writes and CompleteCreditTransaction settles — the authoritative record of
+// what a user paid and what it granted. It exists because the billing page
+// previously kept its own copy in localStorage, which is per-browser: signing
+// in elsewhere (or as a different account in the same browser) showed the
+// wrong history for money the database had recorded correctly all along.
+//
+// Rows of every status are returned, not just 'completed'. A pending or failed
+// top-up is exactly what a user comes to this page to see after a payment that
+// did not visibly land, and hiding it would make the page a worse answer than
+// the localStorage version it replaces.
+func (s *Store) ListCreditTransactions(ctx context.Context, userID string, limit int) ([]models.CreditTransaction, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, user_id, provider, provider_order_id, provider_payment_id, status,
+		       amount_inr_paise, fx_rate_usd_per_inr, amount_usd_cents, credit_usd_micros,
+		       created_at, completed_at
+		FROM credit_ledger
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Non-nil so an account with no top-ups marshals as [] rather than null.
+	out := make([]models.CreditTransaction, 0, limit)
+	for rows.Next() {
+		var t models.CreditTransaction
+		if err := rows.Scan(
+			&t.ID, &t.UserID, &t.Provider, &t.ProviderOrderID, &t.ProviderPaymentID,
+			&t.Status, &t.AmountINRPaise, &t.FXRateUSDPerINR, &t.AmountUSDCents,
+			&t.CreditUSDMicros, &t.CreatedAt, &t.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // --- Coupons ---
 
 // The coupon catalog is configuration, not code: it comes from the COUPON_CODES
@@ -1605,6 +1764,176 @@ func (s *Store) ListX402RelaySettlementsByRunFunding(ctx context.Context, runFun
 		out = append(out, row)
 	}
 	return out, rows.Err()
+}
+
+// --- Workflow variable methods ---
+
+const (
+	// MaxWorkflowVariables caps how many keys one workflow may hold. This
+	// is bounded key/value state for "remember the last row I processed",
+	// not a document store.
+	MaxWorkflowVariables = 64
+	// maxWorkflowVariableBytes mirrors the CHECK constraint on the column,
+	// enforced here too so the caller gets a typed error instead of a raw
+	// Postgres constraint violation.
+	maxWorkflowVariableBytes = 16384
+)
+
+var (
+	ErrVariableQuotaExceeded = errors.New("workflow variable limit reached")
+	ErrVariableTooLarge      = errors.New("workflow variable value too large")
+)
+
+// GetWorkflowVariables returns every variable for a workflow, JSON-decoded.
+// Returns an empty (non-nil) map when the workflow has none, so callers can
+// index it without a nil check.
+func (s *Store) GetWorkflowVariables(ctx context.Context, workflowID string) (map[string]any, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT key, value FROM workflow_variables WHERE workflow_id=$1
+	`, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]any)
+	for rows.Next() {
+		var k string
+		var v []byte
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		var decoded any
+		if err := json.Unmarshal(v, &decoded); err != nil {
+			return nil, fmt.Errorf("workflow variable %q: stored value is not valid JSON: %w", k, err)
+		}
+		out[k] = decoded
+	}
+	return out, rows.Err()
+}
+
+// SetWorkflowVariable upserts one variable. Concurrent writers are
+// last-write-wins by design: the alternative (optimistic versioning) would
+// make the common cases — "cache this token", "remember this cursor" —
+// fail spuriously when two runs overlap. Callers that need a correct
+// counter under concurrency use IncrementWorkflowVariable instead, which
+// is atomic in the database.
+//
+// The key-count quota is checked inside the same transaction as the write
+// so two concurrent inserts cannot both slip past the cap.
+func (s *Store) SetWorkflowVariable(ctx context.Context, workflowID, key string, valueJSON []byte) error {
+	// Compact before measuring: the caller's JSON may carry insignificant
+	// whitespace this check would otherwise count against the quota, while
+	// Postgres's own CHECK measures octet_length(value::text) on the JSONB
+	// column -- which never stores that whitespace. Compacting here keeps
+	// the two checks measuring the same thing, so a value cannot pass one
+	// and fail the other depending on how it happened to be formatted.
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, valueJSON); err != nil {
+		return fmt.Errorf("workflow variable value must be valid JSON: %w", err)
+	}
+	valueJSON = compact.Bytes()
+	if len(valueJSON) > maxWorkflowVariableBytes {
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrVariableTooLarge, len(valueJSON), maxWorkflowVariableBytes)
+	}
+	if key == "" || len(key) > 128 {
+		return errors.New("workflow variable key must be 1-128 characters")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var count int
+	var exists bool
+	// COALESCE because BOOL_OR over zero rows is NULL, which will not scan
+	// into a bool.
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*), COALESCE(BOOL_OR(key=$2), FALSE)
+		FROM workflow_variables WHERE workflow_id=$1
+	`, workflowID, key).Scan(&count, &exists); err != nil {
+		return err
+	}
+	// Updating a key that already exists never adds to the count, so it is
+	// allowed even at the cap.
+	if !exists && count >= MaxWorkflowVariables {
+		return fmt.Errorf("%w: %d keys, limit %d", ErrVariableQuotaExceeded, count, MaxWorkflowVariables)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workflow_variables (workflow_id, key, value, updated_at)
+		VALUES ($1,$2,$3::jsonb,NOW())
+		ON CONFLICT (workflow_id, key) DO UPDATE
+		SET value = EXCLUDED.value, updated_at = NOW()
+	`, workflowID, key, string(valueJSON)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// IncrementWorkflowVariable adds delta to a numeric variable and returns
+// the new value, creating it at delta if absent. The insert/update itself
+// is a single statement, so overlapping runs of the same workflow cannot
+// lose an update the way a read-then-write from application code would --
+// the quota check runs in the same transaction as that statement, same as
+// SetWorkflowVariable, so a key that doesn't exist yet still can't slip
+// past MaxWorkflowVariables (a state/increment node with a templated key,
+// or just many distinct counter keys, would otherwise grow the table past
+// the cap unbounded, since this path took no count check at all before).
+//
+// A non-numeric existing value is replaced by delta rather than erroring —
+// the counter use case wants to keep counting, not to fail a run because
+// something once wrote a string there.
+func (s *Store) IncrementWorkflowVariable(ctx context.Context, workflowID, key string, delta float64) (float64, error) {
+	if key == "" || len(key) > 128 {
+		return 0, errors.New("workflow variable key must be 1-128 characters")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	var count int
+	var exists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*), COALESCE(BOOL_OR(key=$2), FALSE)
+		FROM workflow_variables WHERE workflow_id=$1
+	`, workflowID, key).Scan(&count, &exists); err != nil {
+		return 0, err
+	}
+	if !exists && count >= MaxWorkflowVariables {
+		return 0, fmt.Errorf("%w: %d keys, limit %d", ErrVariableQuotaExceeded, count, MaxWorkflowVariables)
+	}
+
+	var out float64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO workflow_variables (workflow_id, key, value, updated_at)
+		VALUES ($1,$2,to_jsonb($3::numeric),NOW())
+		ON CONFLICT (workflow_id, key) DO UPDATE
+		SET value = to_jsonb(
+			CASE WHEN jsonb_typeof(workflow_variables.value) = 'number'
+			     THEN (workflow_variables.value)::numeric + $3::numeric
+			     ELSE $3::numeric
+			END),
+		    updated_at = NOW()
+		RETURNING (value)::numeric
+	`, workflowID, key, delta).Scan(&out); err != nil {
+		return 0, err
+	}
+	return out, tx.Commit(ctx)
+}
+
+// DeleteWorkflowVariable removes one key. Deleting a key that does not
+// exist is not an error.
+func (s *Store) DeleteWorkflowVariable(ctx context.Context, workflowID, key string) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM workflow_variables WHERE workflow_id=$1 AND key=$2
+	`, workflowID, key)
+	return err
 }
 
 const tendrilLeaseCols = `id, user_id, workflow_id, run_id, node_id, lease_id,
