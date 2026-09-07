@@ -7,7 +7,14 @@
 import { loadToken, saveToken, clearToken } from "./auth";
 import { flush, start, stop } from "./geofence";
 import { setGeofence, clearGeofence } from "./api";
-import { disablePush, enablePush, listenForTaps, type PushState } from "./push";
+import {
+  disablePush,
+  enablePush,
+  listenForTaps,
+  notificationState,
+  type PushReadState,
+  type PushState,
+} from "./push";
 
 export interface NativeShell {
   onSignedIn(token: string): Promise<void>;
@@ -27,6 +34,21 @@ export interface NativeShell {
    * knows how.
    */
   enableNotifications(): Promise<PushState>;
+  /**
+   * What Android says about notification permission, without asking.
+   *
+   * A screen that offers a notifications switch has to draw it before the
+   * user touches anything, and enableNotifications() cannot answer that
+   * question without spending the one-shot permission dialog to do it.
+   */
+  notificationState(): Promise<PushReadState>;
+  /**
+   * Turns notifications off and drops this device's registration.
+   *
+   * The mirror of enableNotifications, and not merely part of signing out.
+   * A switch that can only be moved one way is not a switch.
+   */
+  disableNotifications(): Promise<void>;
 }
 
 /**
@@ -69,6 +91,14 @@ export const shell: NativeShell = {
 
   async enableNotifications() {
     return enablePush();
+  },
+
+  async notificationState() {
+    return notificationState();
+  },
+
+  async disableNotifications() {
+    await disablePush();
   },
 
   async setGeofence(workflowId, fence) {
