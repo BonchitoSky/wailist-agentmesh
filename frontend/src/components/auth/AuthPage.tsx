@@ -177,7 +177,11 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
             <h1
               style={{
                 margin: 0,
-                fontSize: 32,
+                // Was a flat 32px at every width. On a 320px screen that is
+                // most of the line before the sentence has said anything.
+                // Floor, slope, ceiling -- the shape the landing hero already
+                // uses, an order of magnitude smaller.
+                fontSize: "clamp(24px, 7vw, 32px)",
                 fontWeight: 500,
                 letterSpacing: "-0.025em",
               }}

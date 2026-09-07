@@ -524,8 +524,17 @@ body {
   grid-template-columns: 1fr 1fr;
   min-height: 100dvh;
 }
+/* The insets are folded into this rule's own padding rather than added with
+   .am-safe-top / .am-safe-bottom. targetSdkVersion 36 enforces edge-to-edge, so
+   the WebView draws behind the status bar and a screen starting at y=0 starts
+   underneath it -- but those utilities could not have fixed it here.
+   responsive.css is imported at the TOP of this file, so an `.am-*` class loses
+   to any equal-specificity rule below it, and `padding` shorthand resets
+   padding-top outright. responsive.css says so in its own header: a rule that
+   has to beat a globals.css declaration belongs next to it, not there. */
 .auth-form-col {
-  padding: 40px 56px;
+  padding: calc(40px + env(safe-area-inset-top, 0px)) 56px
+    calc(40px + env(safe-area-inset-bottom, 0px));
   overflow: auto;
 }
 /* The form's own width. It was an inline `maxWidth: 360` on the element, which
@@ -549,7 +558,8 @@ body {
      follows the collapse now, and the card is allowed to use the width it
      just gained. */
   .auth-form-col {
-    padding: 28px 24px;
+    padding: calc(28px + env(safe-area-inset-top, 0px)) 24px
+      calc(28px + env(safe-area-inset-bottom, 0px));
   }
   .auth-card {
     max-width: 420px;
@@ -557,7 +567,8 @@ body {
 }
 @media (max-width: 520px) {
   .auth-form-col {
-    padding: 20px 20px 24px;
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 20px
+      calc(24px + env(safe-area-inset-bottom, 0px));
   }
   /* On a phone the form IS the screen: no card, no centred column, just the
      full width inside the padding. */
