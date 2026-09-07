@@ -1,7 +1,7 @@
 "use client";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { WorkflowNode, Workflow } from "@/lib/types";
+import { WorkflowNode, Workflow, CostEstimate } from "@/lib/types";
 import { decodePendingNode } from "@/lib/bazaar";
 import {
   Toast,
@@ -68,6 +68,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     null,
   );
   const [deployed, setDeployed] = useState(false);
+  // Bumped after a successful deploy so the topbar's run-cost estimate
+  // refetches against the freshly persisted graph.
+  const [estimateTick, setEstimateTick] = useState(0);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [saveLabel, setSaveLabel] = useState("");
@@ -405,6 +408,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     try {
       const res = await workflowsApi.deploy(workflow.id);
       setDeployed(true);
+      setEstimateTick((t) => t + 1);
       showToast(
         `Deployed · ${res.agents.length} agent${res.agents.length !== 1 ? "s" : ""} ready · paid calls draw from your credits`,
       );
@@ -669,6 +673,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         onRun={onRun}
         runBlocked={runBlocked}
         saveLabel={saveLabel}
+        estimateTick={estimateTick}
         onBack={() => router.push("/workflows")}
       />
 
@@ -968,6 +973,21 @@ const nameFieldStyle: React.CSSProperties = {
   borderRadius: 4,
 };
 
+// formatRunCost turns the low/high micro-dollar band into a short topbar
+// string: a single "$1.00" when the bounds match (every node is a flat
+// fee), a "$2.50-$5.00" range otherwise, and a trailing "+" when an x402
+// endpoint's price is only known at run time. Returns null when nothing in
+// the graph is billable, so the caller hides the stat entirely.
+function formatRunCost(e: CostEstimate): string | null {
+  const lo = e.lowUsdMicros / 1_000_000;
+  const hi = e.highUsdMicros / 1_000_000;
+  if (hi <= 0) return null;
+  const suffix = e.hasUnpricedX402 ? "+" : "";
+  const money = (n: number) => `$${n.toFixed(2)}`;
+  if (Math.abs(hi - lo) < 0.005) return `${money(lo)}${suffix}`;
+  return `${money(lo)}-${money(hi)}${suffix}`;
+}
+
 function CanvasTopbar({
   workflow,
   setWorkflow,
@@ -977,6 +997,7 @@ function CanvasTopbar({
   onRun,
   runBlocked,
   saveLabel,
+  estimateTick,
   onBack,
 }: {
   workflow: Workflow;
@@ -990,6 +1011,9 @@ function CanvasTopbar({
    *  doesn't need its own copy of hasProviderNode/canDeploy to derive it. */
   runBlocked: string | null;
   saveLabel: string;
+  /** Bumped by CanvasPage after each successful deploy so the run-cost
+   *  estimate refetches against the newly persisted graph. */
+  estimateTick: number;
   onBack: () => void;
 }) {
   const readOnly = useReadOnly();
@@ -1001,10 +1025,28 @@ function CanvasTopbar({
     useCredits();
   const lowBalance = balanceKnown && balanceUSD < LOW_BALANCE_THRESHOLD_USD;
   const [shareOpen, setShareOpen] = useState(false);
+  const [estimate, setEstimate] = useState<CostEstimate | null>(null);
 
   useEffect(() => {
     void refreshBalance();
   }, [refreshBalance]);
+
+  useEffect(() => {
+    let cancelled = false;
+    workflowsApi
+      .estimate(workflow.id)
+      .then((e) => {
+        if (!cancelled) setEstimate(e);
+      })
+      .catch(() => {
+        if (!cancelled) setEstimate(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflow.id, estimateTick]);
+
+  const estLabel = estimate ? formatRunCost(estimate) : null;
 
   return (
     <div
@@ -1092,6 +1134,16 @@ function CanvasTopbar({
           flexShrink: 0,
         }}
       >
+        {estLabel && (
+          <>
+            <span
+              title="Estimated credits for one run of this workflow. Refreshes when you deploy."
+            >
+              <Stat label="est. run" value={estLabel} />
+            </span>
+            <Hairline vertical length={18} />
+          </>
+        )}
         <Stat
           label="credits"
           value={balanceKnown ? `$${balanceUSD.toFixed(2)}` : "-"}

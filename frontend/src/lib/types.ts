@@ -191,6 +191,22 @@ export interface UsagePayload {
   settlements: Settlement[];
 }
 
+export interface CostEstimateLine {
+  nodeId: string;
+  label: string;
+  lowUsdMicros: number;
+  highUsdMicros: number;
+  note?: string;
+}
+
+// Static low/high band for one workflow run, from GET /workflows/:id/estimate.
+export interface CostEstimate {
+  lowUsdMicros: number;
+  highUsdMicros: number;
+  lines: CostEstimateLine[];
+  hasUnpricedX402: boolean;
+}
+
 export interface PortCoord {
   x: number;
   y: number;

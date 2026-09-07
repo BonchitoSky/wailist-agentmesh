@@ -9,6 +9,7 @@ import {
   WorkflowSpend,
   EndpointUsage,
   Settlement,
+  CostEstimate,
 } from "./types";
 import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
 import { assertWritable } from "./readonly";
@@ -211,6 +212,20 @@ export const workflows = {
     if (id === "new")
       return { id: "wf-new", name: "Untitled workflow", nodes: [], edges: [] };
     return JSON.parse(JSON.stringify(SAMPLE_WORKFLOW));
+  },
+
+  // GET /workflows/:id/estimate -- static low/high cost band for one run.
+  estimate: async (id: string): Promise<CostEstimate> => {
+    if (BASE) {
+      const res = await apiFetch(`${BASE}/workflows/${id}/estimate`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "estimate fetch failed");
+      return data;
+    }
+    await delay(80);
+    return { lowUsdMicros: 0, highUsdMicros: 0, lines: [], hasUnpricedX402: false };
   },
 
   // TODO: POST /workflows

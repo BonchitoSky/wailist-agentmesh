@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/agentmesh/backend/internal/db"
+	"github.com/agentmesh/backend/internal/engine"
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/respond"
@@ -80,6 +81,21 @@ func (d *Deps) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	decrypted := decryptNodes(wf.Nodes, d.EncryptionKey)
 	wf.Nodes = unmaskWebhookSecrets(maskNodes(wf.Nodes), decrypted)
 	respond.JSON(w, http.StatusOK, wf)
+}
+
+// EstimateWorkflowCost returns a static low/high USD-micros band for one
+// run of the workflow. It reads only non-secret node fields (node type,
+// template, key mode, model, x402 price), so it runs against the stored
+// graph with no decrypt. The canvas recomputes this on every deploy.
+func (d *Deps) EstimateWorkflowCost(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	userID, _ := r.Context().Value(CtxUserID).(string)
+	wf, err := d.Store.GetWorkflow(r.Context(), id)
+	if err != nil || wf.UserID != userID {
+		respond.Error(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	respond.JSON(w, http.StatusOK, engine.EstimateRunCost(wf))
 }
 
 func (d *Deps) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
