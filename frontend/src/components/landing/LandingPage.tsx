@@ -188,7 +188,17 @@ function HeroSection({
           top: "50%",
           left: "50%",
           transform: "translate(-50%, -50%)",
-          width: 984,
+          // The width was a hardcoded 984px. This sits behind the hero headline
+          // to darken what is behind it, and the headline is a clamp -- so at
+          // 375px the bloom was 2.6 screens wide and its blurred edge bled into
+          // the sections above and below instead of pooling behind the text.
+          //
+          // Width only. The height is left at 527px on purpose: the hero is
+          // min-height 100dvh, so 527 was never the dimension that overflowed,
+          // and making it viewport-relative would have shrunk the bloom on
+          // desktop too (42vh is 378px in a 900px-tall window). The cap keeps
+          // desktop byte-identical -- measured, not assumed.
+          width: "min(984px, 105vw)",
           height: 527,
           opacity: 0.88,
           background: "hsl(260 60% 4%)",
