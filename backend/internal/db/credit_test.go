@@ -370,7 +370,7 @@ func TestExpireStalePendingTransactionsScopesToProvider(t *testing.T) {
 
 	// A zero threshold (cutoff = now) reliably makes a row created moments ago qualify as
 	// stale without a timing race against a fixed small duration like 1ms. Scoping to the
-	// unique test provider must only ever touch that provider's row.
+	// unique swept provider must only ever touch that provider's row.
 	if _, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, 0); err != nil {
 		t.Fatal(err)
 	}

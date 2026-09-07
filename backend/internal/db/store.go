@@ -1467,15 +1467,17 @@ func (s *Store) MarkCreditTransactionStatus(ctx context.Context, provider, provi
 // warrant a short window, while on-chain crypto providers like NOWPayments need a much
 // longer one to avoid expiring payments still working through block confirmations. Keeps
 // 'pending' meaningful as "still in progress" rather than accumulating dead rows.
+//
+// The cutoff is computed by the database, not by this process. created_at is written by
+// Postgres NOW(), so comparing it against an app-computed time.Now() straddles two
+// clocks: any skew between them (a containerised Postgres on a macOS VM routinely runs a
+// fraction of a second ahead of the host) shifts the effective window by that skew, and a
+// row created moments ago can be newer than a cutoff that was supposed to already include
+// it. Evaluating both sides in the DB makes the window exactly olderThan, whatever either
+// clock says. A zero olderThan sweeps everything already pending as of the database's own
+// now — useful for a test that wants a deterministic "sweep right now" without racing a
+// fixed small duration or writing a raw UPDATE against created_at.
 func (s *Store) ExpireStalePendingTransactions(ctx context.Context, provider string, olderThan time.Duration) (int64, error) {
-	// The cutoff is computed by the database, not by this process.
-	// created_at is written by Postgres NOW(), so comparing it against an
-	// app-computed time.Now() straddles two clocks: any skew between them
-	// (a containerised Postgres on a macOS VM routinely runs a fraction of
-	// a second ahead of the host) shifts the effective window by that skew,
-	// and a row created moments ago can be newer than a cutoff that was
-	// supposed to already include it. Evaluating both sides in the DB makes
-	// the window exactly olderThan, whatever either clock says.
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE credit_ledger SET status = 'expired'
 		WHERE status = 'pending' AND provider = $1
