@@ -18,6 +18,7 @@ export const NODE_TYPES: Record<string, NodeTypeMeta> = {
   tool: { w: 200, h: 64, ports: ["top", "in", "out"] },
   tool402: { w: 220, h: 84, ports: ["top", "in", "out"] },
   action: { w: 200, h: 64, ports: ["in", "out"] },
+  state: { w: 200, h: 64, ports: ["in", "out"] },
   end: { w: 200, h: 60, ports: ["in"] },
   tendril: { w: 240, h: 96, ports: ["in", "out", "top"] },
   // Flow-only (no "top" attach port) -- unlike tool/tool402, a Google node
@@ -493,6 +494,37 @@ export const ACTION_TEMPLATES = [
     desc: "Spot prices (no key)",
     icon: "cg",
     category: "Utilities",
+  },
+];
+
+// Workflow state: a key/value store scoped to the workflow that persists
+// between runs. One template per operation rather than one "State" node
+// with a mode field, so the palette shows what you can actually do with it
+// and a dropped node already has its op set.
+export const STATE_TEMPLATES = [
+  {
+    id: "get",
+    name: "Read State",
+    desc: "Load a saved value",
+    icon: "\u25a4",
+  },
+  {
+    id: "set",
+    name: "Write State",
+    desc: "Save a value for next run",
+    icon: "\u25a5",
+  },
+  {
+    id: "increment",
+    name: "Counter",
+    desc: "Add to a running total",
+    icon: "\u002b",
+  },
+  {
+    id: "delete",
+    name: "Clear State",
+    desc: "Remove a saved value",
+    icon: "\u00d7",
   },
 ];
 

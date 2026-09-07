@@ -16,6 +16,7 @@ import {
   PROVIDER_TEMPLATES,
   TOOL_TEMPLATES,
   ACTION_TEMPLATES,
+  STATE_TEMPLATES,
   ACTION_CATEGORIES,
   END_TEMPLATES,
   TENDRIL_TEMPLATES,
@@ -124,6 +125,24 @@ const PALETTE_TABS = [
       name: it.name,
       icon: it.icon,
       sub: it.desc,
+    }),
+  },
+  {
+    id: "state",
+    label: "State",
+    items: () => STATE_TEMPLATES,
+    type: "state",
+    dotColor: "info" as const,
+    map: (it: (typeof STATE_TEMPLATES)[0]): Partial<WorkflowNode> => ({
+      type: "state",
+      template: it.id,
+      name: it.name,
+      icon: it.icon,
+      sub: it.desc,
+      // The dropped node already knows its operation -- the palette entry
+      // IS the choice of operation, so the inspector opens on a node that
+      // only needs a key, not a mode decision first.
+      stateOp: it.id as NonNullable<WorkflowNode["stateOp"]>,
     }),
   },
   {
@@ -861,7 +880,7 @@ function DraggableRow({
   titleNode?: React.ReactNode;
   sub: string;
   subNode?: React.ReactNode;
-  dotColor: "mute" | "accent" | "magenta";
+  dotColor: "mute" | "accent" | "magenta" | "info";
   onDragStart: (e: React.DragEvent) => void;
   onActivate?: () => void;
   label?: string;
@@ -871,13 +890,17 @@ function DraggableRow({
       ? "rgba(232, 121, 249, 0.14)"
       : dotColor === "accent"
         ? "var(--accent-soft)"
-        : "var(--bg-elev-3)";
+        : dotColor === "info"
+          ? "var(--info-soft)"
+          : "var(--bg-elev-3)";
   const dotFg =
     dotColor === "magenta"
       ? "#E879F9"
       : dotColor === "accent"
         ? "var(--accent)"
-        : "var(--fg)";
+        : dotColor === "info"
+          ? "var(--info)"
+          : "var(--fg)";
 
   return (
     <div

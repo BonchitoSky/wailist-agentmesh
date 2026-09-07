@@ -355,6 +355,58 @@ export const workflows = {
     await delay(100);
   },
 
+  // Persistent per-workflow key/value state, surviving across runs. Used
+  // for incremental sync cursors, counters, and cached tokens.
+  variables: {
+    list: async (id: string): Promise<Record<string, unknown>> => {
+      if (BASE) {
+        const res = await apiFetch(`${BASE}/workflows/${id}/variables`, {
+          credentials: "include",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "failed to load variables");
+        return data.variables ?? {};
+      }
+      await delay(120);
+      return {};
+    },
+    set: async (id: string, key: string, value: unknown): Promise<void> => {
+      assertWritable("PUT", `/workflows/${id}/variables/${key}`);
+      if (BASE) {
+        const res = await apiFetch(
+          `${BASE}/workflows/${id}/variables/${encodeURIComponent(key)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ value }),
+          },
+        );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? "failed to save variable");
+        }
+        return;
+      }
+      await delay(120);
+    },
+    remove: async (id: string, key: string): Promise<void> => {
+      assertWritable("DELETE", `/workflows/${id}/variables/${key}`);
+      if (BASE) {
+        const res = await apiFetch(
+          `${BASE}/workflows/${id}/variables/${encodeURIComponent(key)}`,
+          { method: "DELETE", credentials: "include" },
+        );
+        if (!res.ok && res.status !== 204) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? "failed to delete variable");
+        }
+        return;
+      }
+      await delay(120);
+    },
+  },
+
   // PUT /workflows/:id/schedule
   setSchedule: async (
     id: string,

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { WorkflowNode, CustomParam } from "@/lib/types";
 import {
   base64DecodedBytes,
@@ -11,6 +11,7 @@ import {
   TOOL_TEMPLATES,
   TRIGGER_TEMPLATES,
   ACTION_TEMPLATES,
+  STATE_TEMPLATES,
   END_TEMPLATES,
   AGENT_TEMPLATES,
   TENDRIL_TEMPLATES,
@@ -23,7 +24,12 @@ import { BrandLogo } from "./nodes/brandLogos";
 import { can } from "@/lib/readonly";
 import { iconBtn } from "@/components/ui/buttons";
 import { useReadOnly } from "@/hooks/useReadOnly";
-import { tools as toolsApi, oauth2, OAuthCredentialSummary } from "@/lib/api";
+import {
+  tools as toolsApi,
+  workflows as workflowsApi,
+  oauth2,
+  OAuthCredentialSummary,
+} from "@/lib/api";
 import { ConnectorOAuthButton } from "./ConnectorOAuthButton";
 import {
   tendril as tendrilApi,
@@ -183,6 +189,13 @@ export function Inspector({
             node={selected}
             workflowId={workflowId}
             onUpdate={onUpdate}
+          />
+        )}
+        {selected.type === "state" && (
+          <StateInspector
+            node={selected}
+            onUpdate={onUpdate}
+            workflowId={workflowId}
           />
         )}
         {selected.type === "end" && (
@@ -578,6 +591,11 @@ function nodeMeta(n: WorkflowNode) {
       fg: "#E879F9",
     },
     action: { list: ACTION_TEMPLATES, bg: "var(--bg-elev-3)", fg: "var(--fg)" },
+    state: {
+      list: STATE_TEMPLATES,
+      bg: "var(--info-soft)",
+      fg: "var(--info)",
+    },
     end: { list: END_TEMPLATES, bg: "var(--bg-elev-3)", fg: "var(--fg)" },
     tendril: {
       list: TENDRIL_TEMPLATES,
@@ -1386,7 +1404,6 @@ function bodySkeleton(fields: CustomParam[]): string {
 }
 
 
-
 // ── Tool402 Inspector ──────────────────────────────────────────────────────
 function Tool402Inspector({
   node,
@@ -2126,6 +2143,133 @@ function TriggerInspector({
   );
 }
 
+// ── State ──────────────────────────────────────────────────────────────────
+function StateInspector({
+  node,
+  onUpdate,
+  workflowId,
+}: {
+  node: WorkflowNode;
+  onUpdate: (n: WorkflowNode) => void;
+  workflowId: string;
+}) {
+  const op = node.stateOp ?? "get";
+  const tpl = STATE_TEMPLATES.find((x) => x.id === op);
+
+  return (
+    <>
+      <Section label="State">
+        <Field label="Operation">
+          <select
+            style={inputStyle}
+            value={op}
+            onChange={(e) =>
+              onUpdate({
+                ...node,
+                stateOp: e.target.value as NonNullable<WorkflowNode["stateOp"]>,
+                // Keep the node's displayed identity in step with the
+                // operation, so a node switched from Read to Write does not
+                // keep announcing itself as "Read State" on the canvas.
+                template: e.target.value,
+                name: STATE_TEMPLATES.find((x) => x.id === e.target.value)
+                  ?.name,
+                icon: STATE_TEMPLATES.find((x) => x.id === e.target.value)
+                  ?.icon,
+              })
+            }
+          >
+            {STATE_TEMPLATES.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Key" hint="persists across runs">
+          <input
+            style={monoInputStyle}
+            value={node.stateKey ?? ""}
+            placeholder="lastRowId"
+            onChange={(e) => onUpdate({ ...node, stateKey: e.target.value })}
+          />
+        </Field>
+
+        {op === "set" && (
+          <Field label="Value" hint="blank = previous node's output">
+            <input
+              style={monoInputStyle}
+              value={node.stateValue ?? ""}
+              placeholder="leave blank to store the last output"
+              onChange={(e) =>
+                onUpdate({ ...node, stateValue: e.target.value })
+              }
+            />
+          </Field>
+        )}
+
+        {op === "increment" && (
+          <Field label="Amount" hint="defaults to 1">
+            <input
+              style={monoInputStyle}
+              value={node.stateValue ?? ""}
+              placeholder="1"
+              onChange={(e) =>
+                onUpdate({ ...node, stateValue: e.target.value })
+              }
+            />
+          </Field>
+        )}
+
+        <div
+          style={{
+            fontSize: 11,
+            lineHeight: 1.5,
+            color: "var(--fg-dim)",
+          }}
+        >
+          {op === "get" &&
+            "Loads the saved value and passes it to the next node. Empty on the first run."}
+          {op === "set" && "Saves a value that the next run can read back."}
+          {op === "increment" &&
+            "Adds to a running total. Safe when two runs overlap."}
+          {op === "delete" && "Removes the saved value."}
+          {tpl && " "}
+        </div>
+      </Section>
+
+      <Section label="Use anywhere">
+        <div
+          style={{
+            fontSize: 11,
+            lineHeight: 1.6,
+            color: "var(--fg-muted)",
+          }}
+        >
+          Reference a saved value from any tool URL, prompt or email field:
+          <div
+            style={{
+              marginTop: 6,
+              padding: "6px 8px",
+              borderRadius: "var(--r-2)",
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              color: "var(--info)",
+              userSelect: "all",
+            }}
+          >
+            {`{{state.${node.stateKey || "key"}}}`}
+          </div>
+        </div>
+      </Section>
+
+      <SavedValues workflowId={workflowId} highlightKey={node.stateKey} />
+    </>
+  );
+}
+
 // The real public endpoint and its required auth secret -- both generated
 // server-side (UpdateWorkflow's ensureWebhookSecrets) the first time this
 // node is saved, never authored here. Only rendered once a secret exists
@@ -2163,6 +2307,130 @@ function WebhookTriggerFields({
         without it are rejected.
       </div>
     </>
+  );
+}
+
+// SavedValues shows what the workflow has actually stored right now. A state
+// node is otherwise completely opaque in the editor -- you cannot tell
+// whether a run ever wrote anything, or what a "{{state.x}}" reference will
+// resolve to -- and that is exactly the question you have while wiring one up.
+function SavedValues({
+  workflowId,
+  highlightKey,
+}: {
+  workflowId?: string;
+  highlightKey?: string;
+}) {
+  const [vars, setVars] = useState<Record<string, unknown> | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Initial load. State is only ever set from the promise callbacks, never
+  // synchronously in the effect body, and the cancelled flag drops a
+  // response that lands after the inspector has moved to another node --
+  // which happens routinely, since selecting a different node unmounts this.
+  useEffect(() => {
+    if (!workflowId || workflowId === "new") return;
+    let cancelled = false;
+    workflowsApi.variables
+      .list(workflowId)
+      .then((v) => {
+        if (cancelled) return;
+        setVars(v);
+        setErr(null);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setErr(e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowId]);
+
+  const refresh = useCallback(() => {
+    if (!workflowId || workflowId === "new") return;
+    setBusy(true);
+    workflowsApi.variables
+      .list(workflowId)
+      .then((v) => {
+        setVars(v);
+        setErr(null);
+      })
+      .catch((e: Error) => setErr(e.message))
+      .finally(() => setBusy(false));
+  }, [workflowId]);
+
+  if (!workflowId || workflowId === "new") return null;
+
+  const entries = vars ? Object.entries(vars) : [];
+
+  return (
+    <Section label="Saved values">
+      {err && <div style={{ fontSize: 11, color: "var(--danger)" }}>{err}</div>}
+      {!err && vars && entries.length === 0 && (
+        <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
+          Nothing saved yet — a run has to write one first.
+        </div>
+      )}
+      {entries.map(([k, v]) => {
+        const isMatch = highlightKey === k;
+        return (
+          <div
+            key={k}
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: 8,
+              padding: "6px 8px",
+              borderRadius: "var(--r-2)",
+              background: isMatch ? "var(--info-soft)" : "var(--bg)",
+              border: `1px solid ${isMatch ? "var(--info)" : "var(--border)"}`,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 11,
+                color: isMatch ? "var(--info)" : "var(--fg-muted)",
+                flexShrink: 0,
+              }}
+            >
+              {k}
+            </span>
+            <span
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 11,
+                color: "var(--fg)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                textAlign: "right",
+              }}
+              title={JSON.stringify(v)}
+            >
+              {JSON.stringify(v)}
+            </span>
+          </div>
+        );
+      })}
+      <button
+        onClick={refresh}
+        disabled={busy}
+        style={{
+          height: 30,
+          background: "transparent",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--r-2)",
+          color: "var(--fg-muted)",
+          fontSize: 11,
+          cursor: busy ? "default" : "pointer",
+        }}
+      >
+        {busy ? "Refreshing…" : "Refresh"}
+      </button>
+    </Section>
   );
 }
 

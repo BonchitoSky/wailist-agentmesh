@@ -12,6 +12,7 @@ const (
 	NodeTypeTool     NodeType = "tool"
 	NodeTypeTool402  NodeType = "tool402"
 	NodeTypeAction   NodeType = "action"
+	NodeTypeState    NodeType = "state"
 	NodeTypeEnd      NodeType = "end"
 	NodeTypeTendril  NodeType = "tendril"
 	// NodeTypeGoogle covers Gmail/Sheets/Calendar/Drive -- grouped under one
@@ -131,6 +132,13 @@ type WorkflowNode struct {
 	// Config holds per-connector non-secret settings (list IDs, project keys, channel
 	// names, etc.) for the same connectors. Never encrypted.
 	Config map[string]string `json:"config,omitempty"`
+	// State node fields. StateOp is one of "get", "set", "increment",
+	// "delete". StateValue is the literal to store for "set" (itself
+	// subject to {{state.x}} expansion) or the numeric delta for
+	// "increment".
+	StateOp    string `json:"stateOp,omitempty"`
+	StateKey   string `json:"stateKey,omitempty"`
+	StateValue string `json:"stateValue,omitempty"`
 	// Tendril node fields. TendrilAction is "topup" | "rent" | "run" | "release";
 	// TendrilHours is how many hours of credit to guarantee before renting,
 	// as a decimal string ("1", "2", "0.5") — a string, like every other

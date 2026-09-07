@@ -39,10 +39,14 @@ func (f *fakeRelaySigner) SignUSDCPaymentSingle(_ context.Context, _, _ string, 
 	return []string{"g0"}, 0, nil
 }
 
-// Compile-time check that fakeRelaySigner really satisfies the interface
-// reserveAndFundRun asserts against -- a future edit that drops one of the
-// two methods above now fails to build instead of silently degrading every
-// test using this fake, exactly the bug the doc comments above describe.
+// Compile-time proof that the test doubles really do satisfy the interface
+// they claim to. reserveAndFundRun and executeTool402V2Relay both reach
+// their signer via `x, _ := r.walletSvc.(nodes.USDCGroupSigner)`, which
+// discards the ok and degrades to the no-funding path when the assertion
+// fails -- so a double that has fallen behind the interface does not fail
+// to compile, it silently turns every run-funding assertion in this package
+// into a no-op. That is exactly what happened when SignUSDCPaymentSingle
+// was added to USDCGroupSigner and these doubles were not updated with it.
 var _ nodes.USDCGroupSigner = (*fakeRelaySigner)(nil)
 
 func newTestRunnerWithRelay(t *testing.T, relayBaseURL string) (*engine.Runner, *db.Store) {
