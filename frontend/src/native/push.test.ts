@@ -176,27 +176,60 @@ function fakePrefs() {
   };
 }
 
-describe("reading notification permission without asking for it", () => {
+describe("reading notification state without asking for anything", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
+  // Two facts, not one. Android's permission is necessary and not sufficient:
+  // turning notifications off in this app cannot revoke it, so permission
+  // alone would keep answering "granted" after the user had switched off.
   it.each([
-    ["granted", "granted"],
-    ["denied", "denied"],
-    ["prompt", "prompt"],
-    ["prompt-with-rationale", "prompt"],
-  ])("reports %s as %s", async (receive, expected) => {
-    const { plugin } = permissionPlugin(receive);
+    ["granted", true, "granted"],
+    ["granted", false, "off"],
+    ["denied", true, "denied"],
+    ["denied", false, "denied"],
+    ["prompt", false, "off"],
+    ["prompt", true, "off"],
+    ["prompt-with-rationale", false, "off"],
+  ])(
+    "permission %s with optedIn=%s reads as %s",
+    async (receive, optedIn, expected) => {
+      const { plugin } = permissionPlugin(receive);
+      const prefs = fakePrefs();
+      prefs.state.optedIn = optedIn as boolean;
+      vi.doMock("@capacitor/push-notifications", () => plugin);
+      vi.doMock("./pushPrefs", () => prefs.module);
+      vi.doMock("./api", () => ({
+        registerDevice: async () => {},
+        unregisterDevice: async () => {},
+      }));
+      const { notificationState } = await import("./push");
+
+      expect(await notificationState()).toBe(expected);
+    },
+  );
+
+  it("reads as off immediately after the user turns notifications off", async () => {
+    // The reported bug, end to end. disablePush() unregisters and clears the
+    // opt-in but cannot revoke Android's permission, so the sheet re-read the
+    // state, was told "granted", and snapped back to its "on" panel with a
+    // Turn off button -- right after the user pressed Turn off.
+    const { plugin } = permissionPlugin("granted");
+    const prefs = fakePrefs();
+    prefs.state.optedIn = true;
     vi.doMock("@capacitor/push-notifications", () => plugin);
+    vi.doMock("./pushPrefs", () => prefs.module);
     vi.doMock("./api", () => ({
       registerDevice: async () => {},
       unregisterDevice: async () => {},
     }));
-    const { notificationState } = await import("./push");
+    const { notificationState, disablePush } = await import("./push");
 
-    expect(await notificationState()).toBe(expected);
+    expect(await notificationState()).toBe("granted");
+    await disablePush();
+    expect(await notificationState()).toBe("off");
   });
 
   it("never requests permission, whatever the current state", async () => {
@@ -208,6 +241,7 @@ describe("reading notification permission without asking for it", () => {
       vi.resetModules();
       const { plugin, calls } = permissionPlugin(receive);
       vi.doMock("@capacitor/push-notifications", () => plugin);
+      vi.doMock("./pushPrefs", () => fakePrefs().module);
       vi.doMock("./api", () => ({
         registerDevice: async () => {},
         unregisterDevice: async () => {},
@@ -226,6 +260,7 @@ describe("reading notification permission without asking for it", () => {
     // Settings that would change nothing.
     const { plugin } = permissionPlugin("granted", { throws: true });
     vi.doMock("@capacitor/push-notifications", () => plugin);
+    vi.doMock("./pushPrefs", () => fakePrefs().module);
     vi.doMock("./api", () => ({
       registerDevice: async () => {},
       unregisterDevice: async () => {},
