@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Logo, IconArrow, Tag } from "@/components/ui";
-import { useAuth } from "@/hooks/useAuth";
+import { SessionPersistError, useAuth } from "@/hooks/useAuth";
 import { auth } from "@/lib/api";
 import { authBtn } from "@/components/ui/buttons";
 
@@ -98,8 +98,19 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
         await signUp(email, password, name, org);
       }
       router.push(nextPath());
-    } catch {
-      setError("Something went wrong. Please try again.");
+    } catch (err) {
+      // Generic by default, on purpose: this screen must not echo a server or
+      // developer string back at whoever is standing in front of it.
+      // SessionPersistError is the exception -- its text is written for the
+      // user, it names something only they can act on (sign in again, restart
+      // the app), and the sign-in has already been rolled back by the time it
+      // arrives, so saying "something went wrong" would leave them retrying a
+      // password that was never the problem.
+      setError(
+        err instanceof SessionPersistError
+          ? err.message
+          : "Something went wrong. Please try again.",
+      );
     } finally {
       setLoading(false);
     }
