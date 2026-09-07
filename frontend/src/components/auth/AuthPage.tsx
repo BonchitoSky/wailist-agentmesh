@@ -274,7 +274,11 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
                       position: "absolute",
                       top: 0,
                       right: 0,
-                      height: 38,
+                      // Matches the field it sits on, which is now the 44px
+                      // floor. At 38 tall and ~40 wide this was the smallest
+                      // target on the screen.
+                      height: 44,
+                      minWidth: 44,
                       padding: "0 10px",
                       background: "transparent",
                       border: "none",
@@ -307,7 +311,9 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
                 type="submit"
                 disabled={loading}
                 style={{
-                  height: 42,
+                  // 42 was two pixels under the floor, which is the least
+                  // defensible way to miss it.
+                  height: 44,
                   marginTop: 12,
                   display: "flex",
                   alignItems: "center",
@@ -618,7 +624,9 @@ function FormField({
 }
 
 const inputStyle: React.CSSProperties = {
-  height: 38,
+  // 44px is this app's touch floor -- the same one .am-sheet-grip holds to and
+  // responsive.css names twice. An input is a tap target before it is a box.
+  height: 44,
   padding: "0 12px",
   width: "100%",
   background: "var(--bg-elev-1)",
