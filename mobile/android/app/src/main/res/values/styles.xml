@@ -25,7 +25,7 @@
 
          The stock template set android:background to a full-screen
          @drawable/splash PNG. That attribute is not what Theme.SplashScreen
-         reads, so on every device running 12 or newer it did nothing at all --
+         reads, so on every device running 12 or newer it did nothing at all:
          the app was showing the platform default. The three items below are the
          ones that actually paint.
 
