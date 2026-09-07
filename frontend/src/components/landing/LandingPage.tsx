@@ -897,7 +897,7 @@ function LandingWaitlist() {
               "0 0 60px rgba(167,140,250,0.07), inset 0 1px 0 rgba(255,255,255,0.06)",
           }}
         >
-          <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8 }}>
+          <form onSubmit={handleSubmit} className="lp-waitlist">
             <input
               name="email"
               type="email"
@@ -911,7 +911,10 @@ function LandingWaitlist() {
                 borderRadius: "var(--r-2)",
                 color: "var(--fg)",
                 fontFamily: "var(--font-sans)",
-                fontSize: 14,
+                // 16px for the same reason as the sign-in fields: under 16,
+                // Safari on iOS zooms the page on focus and maximumScale is
+                // deliberately unset, so nothing else can refuse it.
+                fontSize: 16,
                 padding: "0 12px",
                 outline: "none",
               }}
