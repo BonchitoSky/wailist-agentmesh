@@ -303,8 +303,8 @@ func TestExpireStalePendingTransactions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A cutoff a day in the past cannot reach a row created moments ago.
-	n, err := store.ExpireStalePendingTransactions(ctx, provider, time.Now().Add(-24*time.Hour))
+	// Row is only a few milliseconds old — a 24h threshold must not touch it.
+	n, err := store.ExpireStalePendingTransactions(ctx, provider, 24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,12 +312,10 @@ func TestExpireStalePendingTransactions(t *testing.T) {
 		t.Fatalf("want 0 rows expired (too fresh), got %d", n)
 	}
 
-	// Move the cutoff instead of ageing the row. created_at comes from Postgres NOW()
-	// while the cutoff is a Go time, so anything within a second or two of "now" races
-	// the clock skew between them; a day either side of it is unambiguous whichever way
-	// the two clocks line up. This is what the explicit cutoff parameter buys — the same
-	// certainty a backdating UPDATE gave, without a raw write against created_at.
-	n2, err := store.ExpireStalePendingTransactions(ctx, provider, time.Now().Add(24*time.Hour))
+	// A zero threshold (cutoff = the database's own now) makes the row qualify as stale
+	// without racing a fixed small duration like 1ms, and without needing to age the row
+	// with a raw UPDATE against created_at.
+	n2, err := store.ExpireStalePendingTransactions(ctx, provider, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +335,7 @@ func TestExpireStalePendingTransactions(t *testing.T) {
 	}
 
 	// Re-running must not re-touch rows that are no longer 'pending'.
-	n3, err := store.ExpireStalePendingTransactions(ctx, provider, time.Now().Add(24*time.Hour))
+	n3, err := store.ExpireStalePendingTransactions(ctx, provider, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,14 +384,10 @@ func TestExpireStalePendingTransactionsScopesToProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A cutoff a day in the future puts BOTH rows past it, which is the point: the
-	// control row staying pending then proves provider scoping rather than merely
-	// proving it was too fresh to expire. A day of margin keeps that true regardless of
-	// skew between Postgres NOW() and the Go clock the cutoff comes from.
-	staleAsOf := time.Now().Add(24 * time.Hour)
-
-	// Scoping to the unique swept provider must only ever touch that provider's row.
-	if _, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, staleAsOf); err != nil {
+	// A zero threshold (cutoff = now) reliably makes a row created moments ago qualify as
+	// stale without a timing race against a fixed small duration like 1ms. Scoping to the
+	// unique swept provider must only ever touch that provider's row.
+	if _, err := store.ExpireStalePendingTransactions(ctx, sweepProvider, 0); err != nil {
 		t.Fatal(err)
 	}
 

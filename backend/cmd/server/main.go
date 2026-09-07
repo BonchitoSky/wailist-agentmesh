@@ -284,13 +284,12 @@ func expireStalePendingTransactionsLoop(ctx context.Context, store *db.Store) {
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		now := time.Now()
-		if n, err := store.ExpireStalePendingTransactions(ctx, "cashfree", now.Add(-razorpayStaleAfter)); err != nil {
+		if n, err := store.ExpireStalePendingTransactions(ctx, "cashfree", razorpayStaleAfter); err != nil {
 			log.Printf("expire stale cashfree transactions: %v", err)
 		} else if n > 0 {
 			log.Printf("expired %d stale cashfree transactions", n)
 		}
-		if n, err := store.ExpireStalePendingTransactions(ctx, "nowpayments", now.Add(-nowPaymentsStaleAfter)); err != nil {
+		if n, err := store.ExpireStalePendingTransactions(ctx, "nowpayments", nowPaymentsStaleAfter); err != nil {
 			log.Printf("expire stale nowpayments transactions: %v", err)
 		} else if n > 0 {
 			log.Printf("expired %d stale nowpayments transactions", n)

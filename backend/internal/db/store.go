@@ -1302,24 +1302,28 @@ func (s *Store) MarkCreditTransactionStatus(ctx context.Context, provider, provi
 }
 
 // ExpireStalePendingTransactions marks credit_ledger rows for provider still 'pending'
-// and created before cutoff as 'expired' — checkouts the user opened but never completed
-// (closed tab, abandoned QR scan, on-chain payment never sent). Scoped to a single
-// provider so callers can use a per-provider staleness window: fast checkout providers
-// like Razorpay warrant a short window, while on-chain crypto providers like NOWPayments
-// need a much longer one to avoid expiring payments still working through block
-// confirmations. Keeps 'pending' meaningful as "still in progress" rather than
-// accumulating dead rows.
+// after olderThan as 'expired' — checkouts the user opened but never completed (closed
+// tab, abandoned QR scan, on-chain payment never sent). Scoped to a single provider so
+// callers can use a per-provider staleness window: fast checkout providers like Razorpay
+// warrant a short window, while on-chain crypto providers like NOWPayments need a much
+// longer one to avoid expiring payments still working through block confirmations. Keeps
+// 'pending' meaningful as "still in progress" rather than accumulating dead rows.
 //
-// The cutoff is an instant supplied by the caller rather than a duration subtracted from
-// time.Now() in here. The production caller wants the same thing either way, but a test
-// cannot express "sweep as of a point in time" against a method that reads the clock
-// itself — it has to age rows in the database instead, which means writing raw UPDATEs
-// against created_at from the test.
-func (s *Store) ExpireStalePendingTransactions(ctx context.Context, provider string, cutoff time.Time) (int64, error) {
+// The cutoff is computed by the database, not by this process. created_at is written by
+// Postgres NOW(), so comparing it against an app-computed time.Now() straddles two
+// clocks: any skew between them (a containerised Postgres on a macOS VM routinely runs a
+// fraction of a second ahead of the host) shifts the effective window by that skew, and a
+// row created moments ago can be newer than a cutoff that was supposed to already include
+// it. Evaluating both sides in the DB makes the window exactly olderThan, whatever either
+// clock says. A zero olderThan sweeps everything already pending as of the database's own
+// now — useful for a test that wants a deterministic "sweep right now" without racing a
+// fixed small duration or writing a raw UPDATE against created_at.
+func (s *Store) ExpireStalePendingTransactions(ctx context.Context, provider string, olderThan time.Duration) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE credit_ledger SET status = 'expired'
-		WHERE status = 'pending' AND provider = $1 AND created_at < $2
-	`, provider, cutoff)
+		WHERE status = 'pending' AND provider = $1
+		  AND created_at < NOW() - make_interval(secs => $2)
+	`, provider, olderThan.Seconds())
 	if err != nil {
 		return 0, err
 	}
