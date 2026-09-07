@@ -388,13 +388,54 @@
   }
 }
 
-/* Usage tables keep their columns and scroll sideways inside their own card,
-   so the page body never does. */
-@media (max-width: 1024px) {
-  .am-usage-table {
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    -webkit-overflow-scrolling: touch;
+/* ── Sideways scroll, made visible ──────────────────────────────────────────
+   Scrolling was already the right answer for these tables -- the settlements
+   card was tried as a two-up stack and measured WORSE (833px against 18 rows
+   that scrolled), and the endpoints table is nine sortable columns wide. What
+   was missing is any sign that scrolling is possible: on a 375px screen the
+   endpoints table shows 305 of its 984 pixels and simply looks cut off, with a
+   type pill sliced down the middle at the edge.
+
+   So this adds the affordance rather than changing the layout. A fade at the
+   right edge says "there is more this way" -- the standard treatment, and the
+   only one that does not cost vertical space on a page whose length was the
+   actual complaint.
+
+   It is on a wrapper, not the scroller itself: a pseudo-element on the
+   scrolling box scrolls away with the content, so it would drift off exactly
+   when it is needed. `pointer-events: none` so it never eats a tap on the cell
+   underneath. */
+.am-hscroll {
+  position: relative;
+}
+.am-hscroll__pane {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.am-hscroll::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 40px;
+  pointer-events: none;
+  /* Ends in the card's own background so the fade reads as the content
+     running under the edge, not as a grey bar laid over it. */
+  background: linear-gradient(to right, transparent, var(--bg-elev-1));
+  opacity: 1;
+  transition: opacity 0.15s var(--ease);
+}
+/* Nothing further to scroll: the fade goes, so it never lies about there being
+   more. Set by the component once it has measured, which is also why the
+   attribute is absent (not "false") until then. */
+.am-hscroll[data-at-end]::after {
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-hscroll::after {
+    transition: none;
   }
 }
 

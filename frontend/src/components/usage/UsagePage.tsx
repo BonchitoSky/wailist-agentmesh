@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCredits } from "@/lib/credits/store";
 import { LowBalanceBanner } from "@/components/billing/LowBalanceBanner";
@@ -711,7 +711,7 @@ function UsageBody({
             </span>
           }
         />
-        <div className="am-usage-table">
+        <HScroll>
           <div
             style={{
               minWidth: "var(--us-settle-minw)",
@@ -812,7 +812,7 @@ function UsageBody({
               Show all {settlements.length} settlements
             </button>
           )}
-        </div>
+        </HScroll>
       </Card>
 
       {/* ⑥ Footer note */}
@@ -994,7 +994,7 @@ function EndpointTable({
         </div>
       </div>
 
-      <div style={{ overflowX: "auto" }}>
+      <HScroll>
         <div style={{ minWidth: 984 }}>
           <div
             style={{
@@ -1179,7 +1179,7 @@ function EndpointTable({
             ))
           )}
         </div>
-      </div>
+      </HScroll>
     </Card>
   );
 }
@@ -1334,6 +1334,54 @@ function Legend({ items }: { items: { c: string; label: string }[] }) {
           {i.label}
         </span>
       ))}
+    </div>
+  );
+}
+
+// A sideways-scrolling table that says so.
+//
+// Both usage tables are wider than a phone and always were: the settlements
+// card was measured as a two-up stack and came out worse (833px against 18
+// rows that scrolled), and the endpoints table is nine sortable columns. The
+// problem was never the scrolling, it was that nothing announced it -- at
+// 375px the endpoints table shows 305 of its 984 pixels and reads as broken,
+// with a type pill sliced in half at the edge.
+//
+// So this adds the one thing that was missing: a fade at the right edge while
+// there is more to reach, gone once there is not. See .am-hscroll.
+function HScroll({ children }: { children: React.ReactNode }) {
+  const paneRef = useRef<HTMLDivElement>(null);
+  // Starts true so nothing flashes a fade over a table that fits. The first
+  // measurement arrives from the observer below, before paint in practice.
+  const [atEnd, setAtEnd] = useState(true);
+
+  const measure = useCallback(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    // 1px of slack: with fractional column widths scrollLeft never lands
+    // exactly on the end, and an off-by-a-fraction leaves the fade up forever.
+    setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+  }, []);
+
+  // A ResizeObserver rather than a resize listener, and deliberately: this has
+  // to re-measure when the CONTENT changes width too -- filtering the endpoint
+  // list or switching the range does that without the window moving at all.
+  // Its callback is also asynchronous, which is what keeps the first
+  // measurement out of the effect body.
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [measure]);
+
+  return (
+    <div className="am-hscroll" data-at-end={atEnd ? "" : undefined}>
+      <div className="am-hscroll__pane" ref={paneRef} onScroll={measure}>
+        {children}
+      </div>
     </div>
   );
 }
