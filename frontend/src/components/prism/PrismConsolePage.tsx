@@ -487,12 +487,17 @@ export function PrismConsolePage() {
       <Topbar />
       <div style={{ flex: 1, overflow: "auto" }}>
         <div style={{ maxWidth: 860, margin: "0 auto", padding: "28px 24px 96px" }}>
-          <button
-            onClick={() => router.push("/workflows")}
-            style={{ ...ghostBtnSm, marginBottom: 18 }}
-          >
-            ← Workflows
-          </button>
+          {/* ghostBtnSm is inline-flex (so its own icon+label stay aligned),
+              and Tag is inline-flex too -- with no block-level element
+              between them, the button's marginBottom did nothing and the
+              two sat on one crowded line, the Tag's own bullet dot reading
+              like a separator glued to "Workflows". A wrapping block gives
+              the margin somewhere real to apply. */}
+          <div style={{ marginBottom: 18 }}>
+            <button onClick={() => router.push("/workflows")} style={ghostBtnSm}>
+              ← Workflows
+            </button>
+          </div>
 
           <Tag>prism · ai routing</Tag>
           <h1
