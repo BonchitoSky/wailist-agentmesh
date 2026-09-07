@@ -29,6 +29,7 @@ import { ghostBtnSm, primaryBtnSm } from "@/components/ui/buttons";
 import { useIsCompact } from "@/hooks/useIsCompact";
 import { runBlockedMessage } from "./runBlocked";
 import { useReadOnly } from "@/hooks/useReadOnly";
+import { ShareModal } from "@/components/workflows/ShareModal";
 import {
   PALETTE,
   INSPECTOR,
@@ -999,6 +1000,7 @@ function CanvasTopbar({
   const { balanceUSD, balanceKnown, refreshBalance } =
     useCredits();
   const lowBalance = balanceKnown && balanceUSD < LOW_BALANCE_THRESHOLD_USD;
+  const [shareOpen, setShareOpen] = useState(false);
 
   useEffect(() => {
     void refreshBalance();
@@ -1125,11 +1127,19 @@ function CanvasTopbar({
 
       {can("workflow.deploy", readOnly) && (
         <>
-          <button style={ghostBtnSm}>Share</button>
+          <button style={ghostBtnSm} onClick={() => setShareOpen(true)}>
+            Share
+          </button>
           <button onClick={onDeploy} style={btnStyle}>
             {deployed ? "Re-deploy" : "Deploy"}
           </button>
         </>
+      )}
+      {shareOpen && (
+        <ShareModal
+          workflowId={workflow.id}
+          onClose={() => setShareOpen(false)}
+        />
       )}
       <button
         onClick={onRun}
