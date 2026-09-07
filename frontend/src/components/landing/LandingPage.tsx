@@ -536,7 +536,8 @@ function LandingPillars() {
           <h2
             style={{
               margin: "16px 0 0",
-              fontSize: 48,
+              // Was a flat 48px. Same floor/slope/ceiling shape as the hero.
+              fontSize: "clamp(28px, 6vw, 48px)",
               fontWeight: 500,
               letterSpacing: "-0.028em",
               maxWidth: 680,
@@ -694,7 +695,11 @@ function LandingFlow() {
       style={{
         borderTop: "1px solid var(--border)",
         background: "rgba(4, 3, 12, 0.62)",
-        padding: "112px 32px",
+        // Was a hardcoded "112px 32px" at every width -- the only section of
+        // the four not on the shared token, so on a phone it kept 112px of
+        // desktop breathing room above and below while its neighbours dropped
+        // to 72px.
+        padding: "var(--lp-section-pad)",
         position: "relative",
         zIndex: 1,
       }}
@@ -705,7 +710,8 @@ function LandingFlow() {
           <h2
             style={{
               margin: "16px 0 0",
-              fontSize: 40,
+              // Was a flat 40px. Same floor/slope/ceiling shape as the hero.
+              fontSize: "clamp(26px, 6vw, 40px)",
               fontWeight: 500,
               letterSpacing: "-0.025em",
               fontFamily: "var(--font-sans)",
@@ -859,7 +865,8 @@ function LandingWaitlist() {
         <h2
           style={{
             margin: "20px 0 14px",
-            fontSize: 48,
+            // Was a flat 48px. Same floor/slope/ceiling shape as the hero.
+            fontSize: "clamp(28px, 6vw, 48px)",
             fontWeight: 500,
             letterSpacing: "-0.028em",
             fontFamily: "var(--font-sans)",
