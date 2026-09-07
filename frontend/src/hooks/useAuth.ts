@@ -15,6 +15,56 @@ function clearUICookie() {
   document.cookie = `${UI_COOKIE}=; Path=/; SameSite=Lax; Max-Age=0`;
 }
 
+// Thrown when the credentials were accepted but the device would not keep the
+// session. A named type because AuthPage shows a deliberately generic message
+// for everything else -- an auth screen must not echo arbitrary server or
+// developer strings back at the user -- and this is the one failure whose text
+// is written for them and has to reach them intact.
+export class SessionPersistError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "Signed in, but this device could not store the session securely. Sign in again, or restart the app if it keeps happening.",
+      { cause },
+    );
+    this.name = "SessionPersistError";
+  }
+}
+
+// Hands a freshly issued session to the native shell, and refuses the sign-in
+// if the device cannot keep it.
+//
+// The shell writes the token to Keystore-backed storage. That write can fail --
+// a key invalidated by a device credential change is the documented case -- and
+// it used to be logged and swallowed, which produced the worst available
+// outcome: the UI said signed in, the session worked until the app was closed,
+// and the next launch found no token and presented a sign-in screen with no
+// explanation. Nothing anywhere told the user what had happened.
+//
+// So the session is rolled back and the failure is thrown, where AuthPage
+// already renders it. Sign-in either persists or does not happen, which is the
+// same rule clearToken applies in the other direction: signing out has to mean
+// signed out everywhere.
+//
+// Dynamic and IS_NATIVE-guarded, as before: a browser build must not pull
+// Capacitor in.
+// Exported for its test: it is a plain async function with no React in it, and
+// the hooks around it cannot be rendered here (no testing-library in this
+// project, and vitest only collects .test.ts).
+export async function persistNativeSession(token: string): Promise<void> {
+  setAuthToken(token);
+  try {
+    const { shell } = await import("@/native");
+    await shell.onSignedIn(token);
+  } catch (err) {
+    // Revoke server-side first, while the token is still attached to requests,
+    // then drop it locally. A failure here must not mask the one being
+    // reported, which is the reason the caller is being told to stop.
+    await auth.signOut().catch(() => {});
+    setAuthToken(null);
+    throw new SessionPersistError(err);
+  }
+}
+
 export function useAuth() {
   const [signedIn, setSignedIn] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -42,20 +92,10 @@ export function useAuth() {
 
   const signIn = useCallback(async (email: string, password: string) => {
     const token = await auth.signIn(email, password);
-    // Hand the session to the native shell so it survives the app being
-    // closed. Inert on the web, where the token is null and the HttpOnly
-    // cookie is the session. Dynamic and IS_NATIVE-guarded for the same
-    // reason as NativeBoot: a browser build must not pull Capacitor in.
-    if (token && IS_NATIVE) {
-      setAuthToken(token);
-      // Logged, not swallowed: a failed native persist (e.g. a Keystore
-      // write error) would otherwise leave the UI showing signed-in while
-      // the shell never actually saved the token, silently failing to
-      // survive the app being killed.
-      void import("@/native")
-        .then(({ shell }) => shell.onSignedIn(token))
-        .catch((err) => console.error("native shell failed to persist sign-in", err));
-    }
+    // Inert on the web, where the token is null and the HttpOnly cookie is the
+    // session. On native this throws rather than resolving if the device could
+    // not keep the token, so the two lines below are not reached.
+    if (token && IS_NATIVE) await persistNativeSession(token);
     setUICookie();
     setSignedIn(true);
   }, []);
@@ -63,12 +103,7 @@ export function useAuth() {
   const signUp = useCallback(
     async (email: string, password: string, name: string, org: string) => {
       const token = await auth.signUp(email, password, name, org);
-      if (token && IS_NATIVE) {
-        setAuthToken(token);
-        void import("@/native")
-          .then(({ shell }) => shell.onSignedIn(token))
-          .catch((err) => console.error("native shell failed to persist sign-in", err));
-      }
+      if (token && IS_NATIVE) await persistNativeSession(token);
       setUICookie();
       setSignedIn(true);
     },
@@ -83,7 +118,9 @@ export function useAuth() {
       // user's session live in Keystore after the UI has already moved on.
       void import("@/native")
         .then(({ shell }) => shell.onSignedOut())
-        .catch((err) => console.error("native shell failed to clear sign-out", err));
+        .catch((err) =>
+          console.error("native shell failed to clear sign-out", err),
+        );
     }
     clearUICookie();
     // Balance and purchase history are module singletons that survive a

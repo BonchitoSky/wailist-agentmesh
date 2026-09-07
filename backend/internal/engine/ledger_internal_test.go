@@ -201,8 +201,14 @@ func (f *fakeUSDCSignerForLedgerTest) SignUSDCPaymentSingle(_ context.Context, _
 	return []string{"g0"}, 0, nil
 }
 
-// Compile-time check, matching fakeRelaySigner's identical assertion in
-// runner_stop_test.go.
+// Compile-time proof that this double really does satisfy the interface its
+// doc comment claims. reserveAndFundRun reaches its signer via
+// `x, _ := r.walletSvc.(nodes.USDCGroupSigner)`, which discards the ok and
+// degrades to the no-funding path when the assertion fails -- so a double
+// that has fallen behind the interface does not fail to compile, it
+// silently turns every run-funding assertion here into a no-op. That is
+// exactly what happened when SignUSDCPaymentSingle was added to
+// USDCGroupSigner and this double was not updated with it.
 var _ nodes.USDCGroupSigner = (*fakeUSDCSignerForLedgerTest)(nil)
 
 // TestReserveAndFundRunFailsRatherThanSilentlyDegradingWhenRecordRunFundingFails

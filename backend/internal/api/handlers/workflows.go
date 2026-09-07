@@ -2,17 +2,41 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/agentmesh/backend/internal/db"
+	"github.com/agentmesh/backend/internal/engine"
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/respond"
 )
 
+// isReservedSystemWorkflowName reports whether name is one of the exact
+// names GetOrCreateSystemWorkflow uses for a partner console's hidden row.
+// is_system (models.Workflow) is what actually decides a workflow's
+// identity now, so this reservation is belt-and-suspenders, not
+// load-bearing on its own: it stops a user's rename from ever recreating
+// the name-collision shape in the first place, rather than relying solely
+// on is_system to survive it if it does.
+func isReservedSystemWorkflowName(name string) bool {
+	switch name {
+	case tendrilConsoleWorkflowName, prismConsoleWorkflowName:
+		return true
+	default:
+		return false
+	}
+}
+
+// ListWorkflows excludes a partner console's hidden row (Tendril, Prism) via
+// Store.ListWorkflows' own WHERE NOT is_system -- filtered at the query, not
+// here, so a row that will never be shown doesn't get decrypted and
+// aggregated into Runs/Spend for nothing. See is_system's doc comment
+// (models.Workflow) for why that column, not a name match, is what decides.
 func (d *Deps) ListWorkflows(w http.ResponseWriter, r *http.Request) {
 	userID, _ := r.Context().Value(CtxUserID).(string)
 	wfs, err := d.Store.ListWorkflows(r.Context(), userID)
@@ -59,6 +83,21 @@ func (d *Deps) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, wf)
 }
 
+// EstimateWorkflowCost returns a static low/high USD-micros band for one
+// run of the workflow. It reads only non-secret node fields (node type,
+// template, key mode, model, x402 price), so it runs against the stored
+// graph with no decrypt. The canvas recomputes this on every deploy.
+func (d *Deps) EstimateWorkflowCost(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	userID, _ := r.Context().Value(CtxUserID).(string)
+	wf, err := d.Store.GetWorkflow(r.Context(), id)
+	if err != nil || wf.UserID != userID {
+		respond.Error(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	respond.JSON(w, http.StatusOK, engine.EstimateRunCost(wf))
+}
+
 func (d *Deps) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	userID, _ := r.Context().Value(CtxUserID).(string)
@@ -73,6 +112,17 @@ func (d *Deps) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
 		Edges []models.WorkflowEdge `json:"edges"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
+	// is_system is the real identity guard (FindSystemWorkflow requires it,
+	// so a rename alone can no longer forge a console). This check exists so
+	// the collision shape can't arise at all: an ordinary workflow renamed to
+	// exactly a console's name would otherwise sit there sharing that name
+	// forever, one migration or code path away from mattering again. A
+	// row that already IS the console is exempt -- its own name never goes
+	// through user-facing rename UI, but there's no reason to block it here.
+	if !existing.IsSystem && isReservedSystemWorkflowName(body.Name) {
+		respond.Error(w, http.StatusBadRequest, "That name is reserved. Please choose another.")
+		return
+	}
 	clampRetryFields(body.Nodes)
 	encryptedNodes := encryptNodes(body.Nodes, d.EncryptionKey, existing.Nodes)
 	encryptedNodes = ensureWebhookSecrets(encryptedNodes, d.EncryptionKey)
@@ -133,6 +183,78 @@ func (d *Deps) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
 		// the workflows list.
 		log.Printf("delete workflow %s: %v", id, err)
 		respond.Error(w, http.StatusInternalServerError, "could not delete this workflow")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListVariables returns a workflow's persisted key/value state.
+func (d *Deps) ListVariables(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	ctx := r.Context()
+	userID, _ := ctx.Value(CtxUserID).(string)
+
+	wf, err := d.Store.GetWorkflow(ctx, id)
+	if err != nil || wf.UserID != userID {
+		respond.Error(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	vars, err := d.Store.GetWorkflowVariables(ctx, id)
+	if err != nil {
+		respond.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"variables": vars})
+}
+
+// SetVariable writes one variable by hand — for seeding a cursor before
+// the first run, or correcting one after a failure.
+func (d *Deps) SetVariable(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	key := chi.URLParam(r, "key")
+	ctx := r.Context()
+	userID, _ := ctx.Value(CtxUserID).(string)
+
+	wf, err := d.Store.GetWorkflow(ctx, id)
+	if err != nil || wf.UserID != userID {
+		respond.Error(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+
+	var body struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Value) == 0 {
+		respond.Error(w, http.StatusBadRequest, `body must be {"value": <json>}`)
+		return
+	}
+
+	if err := d.Store.SetWorkflowVariable(ctx, id, key, body.Value); err != nil {
+		// Quota and size errors are the caller's fault, not the server's.
+		if errors.Is(err, db.ErrVariableQuotaExceeded) || errors.Is(err, db.ErrVariableTooLarge) {
+			respond.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		respond.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"key": key})
+}
+
+// DeleteVariable removes one variable.
+func (d *Deps) DeleteVariable(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	key := chi.URLParam(r, "key")
+	ctx := r.Context()
+	userID, _ := ctx.Value(CtxUserID).(string)
+
+	wf, err := d.Store.GetWorkflow(ctx, id)
+	if err != nil || wf.UserID != userID {
+		respond.Error(w, http.StatusNotFound, "workflow not found")
+		return
+	}
+	if err := d.Store.DeleteWorkflowVariable(ctx, id, key); err != nil {
+		respond.Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

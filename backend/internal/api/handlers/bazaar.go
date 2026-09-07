@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -173,6 +174,67 @@ func (d *Deps) runCatalogFetch(done chan struct{}) {
 	close(done)
 }
 
+// forceCatalogRefresh starts a new crawl if one is not already running,
+// regardless of whether the cache is still within its TTL. catalog() itself
+// never does this -- a request that finds a fresh cache should never pay for
+// a crawl no one asked for -- so this exists only for WarmBazaarCache, which
+// deliberately refreshes AHEAD of expiry.
+func (d *Deps) forceCatalogRefresh() {
+	d.bazaarCache.mu.Lock()
+	if d.bazaarCache.inflight != nil {
+		// Already refreshing -- a real request's catalog() call beat the
+		// timer to it, or the previous tick's crawl is still running past
+		// its own interval. Do not start a second, concurrent crawl.
+		d.bazaarCache.mu.Unlock()
+		return
+	}
+	ch := make(chan struct{})
+	d.bazaarCache.inflight = ch
+	d.bazaarCache.lastAttemptedAt = time.Now()
+	d.bazaarCache.mu.Unlock()
+	go d.runCatalogFetch(ch)
+}
+
+// WarmBazaarCache keeps the merged catalog cache populated ahead of expiry,
+// so that in the steady state a real GET /bazaar/resources practically never
+// pays for the crawl catalog() would otherwise have to run inline the
+// instant the cache goes stale -- up to bazaarCrawlTimeout (90s) of dead
+// time for whichever request happens to land right after the 15-minute TTL
+// lapses. Call once, from main, right after Deps is constructed; ctx
+// cancellation (server shutdown) stops the loop.
+//
+// The first refresh is fired here too, on its own goroutine (via
+// forceCatalogRefresh, not awaited) rather than run inline, so server
+// startup itself is never blocked on the initial ~780-entry crawl
+// succeeding -- the very first request or two after boot may still pay for
+// it, same as before this existed, but every one after that should not.
+func (d *Deps) WarmBazaarCache(ctx context.Context) {
+	d.forceCatalogRefresh()
+
+	// Refresh before the TTL actually lapses, not exactly at it: the crawl
+	// itself can take up to bazaarCrawlTimeout, so ticking at the TTL would
+	// still leave a window where the cache goes stale mid-refresh and a
+	// request lands in it. Subtracting the crawl's own worst case keeps that
+	// window closed; the 1-minute floor is just so a future edit to either
+	// constant can't accidentally produce a zero or negative ticker interval.
+	interval := bazaarCacheTTL - bazaarCrawlTimeout
+	if interval < time.Minute {
+		interval = time.Minute
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				d.forceCatalogRefresh()
+			}
+		}
+	}()
+}
+
 // BazaarResources serves one page of the mirrored x402 catalog.
 func (d *Deps) BazaarResources(w http.ResponseWriter, r *http.Request) {
 	all, err := d.catalog(r.Context())
@@ -202,15 +264,34 @@ func (d *Deps) BazaarResources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := all
-	if q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q"))); q != "" {
-		filtered := make([]bazaar.Resource, 0, len(items))
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q != "" {
+		// Fuzzy, not a substring filter: FuzzyMatch also RANKS a match, and a
+		// query reorders items by that score (best first) rather than
+		// leaving them in the catalog's own settle-count order underneath a
+		// filter -- see that function's doc comment for why ranking is the
+		// point. This is why q and sort are mutually exclusive below: a
+		// query already answers "what order", and letting a client-picked
+		// sort override match quality would be worse than not sorting at
+		// all when what someone typed is right there scoring every result.
+		type scored struct {
+			r     bazaar.Resource
+			score int
+		}
+		matched := make([]scored, 0, len(items))
 		for _, it := range items {
-			hay := strings.ToLower(it.URL + " " + it.Description + " " + it.Provider + " " + it.Host)
-			if strings.Contains(hay, q) {
-				filtered = append(filtered, it)
+			if score, ok := bestFieldFuzzyScore(it, q); ok {
+				matched = append(matched, scored{it, score})
 			}
 		}
+		sort.SliceStable(matched, func(i, j int) bool { return matched[i].score > matched[j].score })
+		filtered := make([]bazaar.Resource, len(matched))
+		for i, m := range matched {
+			filtered[i] = m.r
+		}
 		items = filtered
+	} else {
+		items = sortItems(items, r.URL.Query().Get("sort"))
 	}
 
 	// supported=1/true keeps only endorsed entries (the pinned "Supported"
@@ -259,6 +340,73 @@ func filterSupported(items []bazaar.Resource, want bool) []bazaar.Resource {
 		}
 	}
 	return filtered
+}
+
+// bestFieldFuzzyScore reports whether q fuzzy-matches r in AT LEAST ONE of
+// its own fields, taking the best score among the fields that do.
+//
+// Matched per field, not against one string the caller joins first: a query
+// like "tendril" is short enough that concatenating Provider+Host+URL+
+// Description into one haystack routinely lets it complete as a scattered
+// subsequence spanning several UNRELATED fields (a 't' from the URL, an 'e'
+// from the description, and so on) -- a real false positive this caught in
+// review, matching a Prism entry on a search for "tendril". Checking each
+// field on its own means every letter of the query has to come from the
+// SAME field, which is what "this actually matches" should mean.
+func bestFieldFuzzyScore(r bazaar.Resource, q string) (int, bool) {
+	best := 0
+	matched := false
+	for _, field := range [...]string{r.Provider, r.Host, r.URL, r.Description} {
+		if score, ok := bazaar.FuzzyMatch(field, q); ok && (!matched || score > best) {
+			best = score
+			matched = true
+		}
+	}
+	return best, matched
+}
+
+// sortItems returns items reordered per the sort param, always as a COPY --
+// items may be (or be sliced from) the shared catalog cache itself, and
+// sort.SliceStable mutates in place, so sorting the cache's own backing
+// array here would corrupt the order every other concurrent request (and
+// the next TTL cycle's cached copy) sees.
+//
+// "settles" (or anything unrecognised) is the crawl's own order and needs no
+// copy at all -- FetchAll already sorts most-settled-first once, at crawl
+// time, so every request agrees on what "default" means without repeating
+// the sort per request.
+func sortItems(items []bazaar.Resource, by string) []bazaar.Resource {
+	switch by {
+	case "name":
+		out := append([]bazaar.Resource(nil), items...)
+		sort.SliceStable(out, func(i, j int) bool {
+			return strings.ToLower(displayName(out[i])) < strings.ToLower(displayName(out[j]))
+		})
+		return out
+	case "recent":
+		out := append([]bazaar.Resource(nil), items...)
+		// LastSeen is an upstream ISO-8601 timestamp string; lexical order
+		// on that format IS chronological order, so a plain string compare
+		// is correct here without parsing it into a time.Time first.
+		sort.SliceStable(out, func(i, j int) bool { return out[i].LastSeen > out[j].LastSeen })
+		return out
+	case "price":
+		out := append([]bazaar.Resource(nil), items...)
+		sort.SliceStable(out, func(i, j int) bool { return out[i].AmountMicros < out[j].AmountMicros })
+		return out
+	default:
+		return items
+	}
+}
+
+// displayName is the same fallback ResourceCard/EndpointRow use on the
+// frontend: a supported entry's own Provider name, or the bare Host for a
+// community listing that has none.
+func displayName(r bazaar.Resource) string {
+	if r.Provider != "" {
+		return r.Provider
+	}
+	return r.Host
 }
 
 // clampAtoi parses a query integer, falling back to def and clamping to
