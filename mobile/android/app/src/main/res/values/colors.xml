@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The literal value of --bg in frontend/src/app/globals.css, and of
+         layout.tsx's themeColor. It has to be a literal here: the launch window
+         is painted by the OS before any web content exists, so it cannot read a
+         CSS custom property. If --bg ever changes, this changes with it, or the
+         hand-off from the system splash to the WebView shows a seam. -->
+    <color name="splashBackground">#08070c</color>
+</resources>
