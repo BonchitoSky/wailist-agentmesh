@@ -167,15 +167,19 @@ not rendered there.
 
 The sheet shows one of four states, and they are not interchangeable:
 
-| State       | What it means                                                                                                                                     |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| prompt      | Nothing decided yet. Shows `PUSH_DISCLOSURE`, then asks Android.                                                                                  |
-| granted     | Registered. Offers a way back off.                                                                                                                |
-| denied      | Refused. Android will not ask again, so the only route back is Settings, and the sheet says so instead of offering a retry that would do nothing. |
-| unavailable | No Firebase in this build, or no Play services. Nobody refused anything, so no route to Settings is offered.                                      |
+| State       | What it means                                                                                                                                                                             |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| off         | Not on. Either Android has never been asked, or it was asked, said yes, and notifications were switched off here anyway. Shows `PUSH_DISCLOSURE`, then asks Android if it still needs to. |
+| granted     | Permission granted **and** turned on here. Offers a way back off.                                                                                                                         |
+| denied      | Refused. Android will not ask again, so the only route back is Settings, and the sheet says so instead of offering a retry that would do nothing.                                         |
+| unavailable | No Firebase in this build, or no Play services. Nobody refused anything, so no route to Settings is offered.                                                                              |
 
-The state is read with `notificationState()`, which wraps `checkPermissions()`
-and never requests. That distinction matters: on Android 13+ the permission
+The state is read with `notificationState()`, which combines
+`checkPermissions()` with the stored opt-in, and never requests. Both halves
+matter: switching notifications off in the app cannot revoke Android's
+permission -- nothing in an app can -- so permission alone kept reading
+"granted" the instant after the user turned them off, and the sheet snapped
+back to its "on" panel. Not requesting matters too: on Android 13+ the permission
 dialog is a one-shot, and using `enablePush()` to find out what to draw would
 spend the single ask on rendering a switch.
 
