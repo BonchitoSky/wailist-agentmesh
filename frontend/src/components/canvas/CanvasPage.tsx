@@ -1,7 +1,7 @@
 "use client";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { WorkflowNode, Workflow } from "@/lib/types";
+import { WorkflowNode, Workflow, CostEstimate } from "@/lib/types";
 import { decodePendingNode } from "@/lib/bazaar";
 import {
   Toast,
@@ -29,6 +29,7 @@ import { ghostBtnSm, primaryBtnSm } from "@/components/ui/buttons";
 import { useIsCompact } from "@/hooks/useIsCompact";
 import { runBlockedMessage } from "./runBlocked";
 import { useReadOnly } from "@/hooks/useReadOnly";
+import { ShareModal } from "@/components/workflows/ShareModal";
 import {
   PALETTE,
   INSPECTOR,
@@ -67,6 +68,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     null,
   );
   const [deployed, setDeployed] = useState(false);
+  // Bumped after a successful deploy so the topbar's run-cost estimate
+  // refetches against the freshly persisted graph.
+  const [estimateTick, setEstimateTick] = useState(0);
   const [running, setRunning] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [saveLabel, setSaveLabel] = useState("");
@@ -404,6 +408,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     try {
       const res = await workflowsApi.deploy(workflow.id);
       setDeployed(true);
+      setEstimateTick((t) => t + 1);
       showToast(
         `Deployed · ${res.agents.length} agent${res.agents.length !== 1 ? "s" : ""} ready · paid calls draw from your credits`,
       );
@@ -668,6 +673,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         onRun={onRun}
         runBlocked={runBlocked}
         saveLabel={saveLabel}
+        estimateTick={estimateTick}
         onBack={() => router.push("/workflows")}
       />
 
@@ -948,7 +954,14 @@ const nameFieldStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 500,
   fontFamily: "var(--font-sans)",
-  flex: "0 1 200px",
+  // flex-basis "auto", not a fixed px: a fixed basis caps the field at that
+  // width even when the topbar has room to spare, which is what truncated
+  // an ordinary-length name ("Demo: Prism Code Review Pipeline") into "…"
+  // on an otherwise empty row. auto sizes to the name's own text up to
+  // maxWidth, and still shrinks (flex-shrink 1) once the row actually
+  // runs out of space.
+  flex: "0 1 auto",
+  maxWidth: 480,
   // A floor, not 0. With minWidth:0 the field collapsed to 12px on a narrow
   // topbar -- the workflow name was simply gone. 120px keeps enough to read
   // and to recognise, and the text ellipsizes from there.
@@ -960,6 +973,21 @@ const nameFieldStyle: React.CSSProperties = {
   borderRadius: 4,
 };
 
+// formatRunCost turns the low/high micro-dollar band into a short topbar
+// string: a single "$1.00" when the bounds match (every node is a flat
+// fee), a "$2.50-$5.00" range otherwise, and a trailing "+" when an x402
+// endpoint's price is only known at run time. Returns null when nothing in
+// the graph is billable, so the caller hides the stat entirely.
+function formatRunCost(e: CostEstimate): string | null {
+  const lo = e.lowUsdMicros / 1_000_000;
+  const hi = e.highUsdMicros / 1_000_000;
+  if (hi <= 0) return null;
+  const suffix = e.hasUnpricedX402 ? "+" : "";
+  const money = (n: number) => `$${n.toFixed(2)}`;
+  if (Math.abs(hi - lo) < 0.005) return `${money(lo)}${suffix}`;
+  return `${money(lo)}-${money(hi)}${suffix}`;
+}
+
 function CanvasTopbar({
   workflow,
   setWorkflow,
@@ -969,6 +997,7 @@ function CanvasTopbar({
   onRun,
   runBlocked,
   saveLabel,
+  estimateTick,
   onBack,
 }: {
   workflow: Workflow;
@@ -982,6 +1011,9 @@ function CanvasTopbar({
    *  doesn't need its own copy of hasProviderNode/canDeploy to derive it. */
   runBlocked: string | null;
   saveLabel: string;
+  /** Bumped by CanvasPage after each successful deploy so the run-cost
+   *  estimate refetches against the newly persisted graph. */
+  estimateTick: number;
   onBack: () => void;
 }) {
   const readOnly = useReadOnly();
@@ -992,10 +1024,29 @@ function CanvasTopbar({
   const { balanceUSD, balanceKnown, refreshBalance } =
     useCredits();
   const lowBalance = balanceKnown && balanceUSD < LOW_BALANCE_THRESHOLD_USD;
+  const [shareOpen, setShareOpen] = useState(false);
+  const [estimate, setEstimate] = useState<CostEstimate | null>(null);
 
   useEffect(() => {
     void refreshBalance();
   }, [refreshBalance]);
+
+  useEffect(() => {
+    let cancelled = false;
+    workflowsApi
+      .estimate(workflow.id)
+      .then((e) => {
+        if (!cancelled) setEstimate(e);
+      })
+      .catch(() => {
+        if (!cancelled) setEstimate(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflow.id, estimateTick]);
+
+  const estLabel = estimate ? formatRunCost(estimate) : null;
 
   return (
     <div
@@ -1036,7 +1087,17 @@ function CanvasTopbar({
           onChange={(e) =>
             setWorkflow((wf) => ({ ...wf, name: e.target.value }))
           }
-          style={nameFieldStyle}
+          style={{
+            ...nameFieldStyle,
+            // flex-basis:auto (nameFieldStyle) sizes a plain element to its
+            // text content, but NOT a form control: an <input>'s intrinsic
+            // size is a fixed UA default (~20 characters) regardless of its
+            // value, so the read-only span above grows with the name and
+            // this input would not. An explicit ch-based width, clamped to
+            // the same floor/cap nameFieldStyle already enforces in px,
+            // makes the editable field track what's actually typed.
+            width: `${Math.min(Math.max(workflow.name.length + 2, 15), 60)}ch`,
+          }}
         />
       ) : (
         <span
@@ -1073,6 +1134,16 @@ function CanvasTopbar({
           flexShrink: 0,
         }}
       >
+        {estLabel && (
+          <>
+            <span
+              title="Estimated credits for one run of this workflow. Refreshes when you deploy."
+            >
+              <Stat label="est. run" value={estLabel} />
+            </span>
+            <Hairline vertical length={18} />
+          </>
+        )}
         <Stat
           label="credits"
           value={balanceKnown ? `$${balanceUSD.toFixed(2)}` : "-"}
@@ -1108,11 +1179,22 @@ function CanvasTopbar({
 
       {can("workflow.deploy", readOnly) && (
         <>
-          <button style={ghostBtnSm}>Share</button>
+          <button
+            style={{ ...ghostBtnSm, color: "var(--fg)" }}
+            onClick={() => setShareOpen(true)}
+          >
+            Share
+          </button>
           <button onClick={onDeploy} style={btnStyle}>
             {deployed ? "Re-deploy" : "Deploy"}
           </button>
         </>
+      )}
+      {shareOpen && (
+        <ShareModal
+          workflowId={workflow.id}
+          onClose={() => setShareOpen(false)}
+        />
       )}
       <button
         onClick={onRun}

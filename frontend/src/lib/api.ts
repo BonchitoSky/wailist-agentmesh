@@ -9,10 +9,12 @@ import {
   WorkflowSpend,
   EndpointUsage,
   Settlement,
+  CostEstimate,
 } from "./types";
 import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
 import { assertWritable } from "./readonly";
 import { IS_NATIVE, authHeaders } from "./nativeAuth";
+import type { PaymentMethod } from "@/components/checkout/types";
 
 // In the browser, always route through /api so the cookie stays same-site.
 // NEXT_PUBLIC_API_URL still controls mock vs real (empty = mock data).
@@ -212,6 +214,20 @@ export const workflows = {
     return JSON.parse(JSON.stringify(SAMPLE_WORKFLOW));
   },
 
+  // GET /workflows/:id/estimate -- static low/high cost band for one run.
+  estimate: async (id: string): Promise<CostEstimate> => {
+    if (BASE) {
+      const res = await apiFetch(`${BASE}/workflows/${id}/estimate`, {
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "estimate fetch failed");
+      return data;
+    }
+    await delay(80);
+    return { lowUsdMicros: 0, highUsdMicros: 0, lines: [], hasUnpricedX402: false };
+  },
+
   // TODO: POST /workflows
   create: async (name: string): Promise<Workflow> => {
     assertWritable("POST", "/workflows");
@@ -354,6 +370,58 @@ export const workflows = {
     await delay(100);
   },
 
+  // Persistent per-workflow key/value state, surviving across runs. Used
+  // for incremental sync cursors, counters, and cached tokens.
+  variables: {
+    list: async (id: string): Promise<Record<string, unknown>> => {
+      if (BASE) {
+        const res = await apiFetch(`${BASE}/workflows/${id}/variables`, {
+          credentials: "include",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error ?? "failed to load variables");
+        return data.variables ?? {};
+      }
+      await delay(120);
+      return {};
+    },
+    set: async (id: string, key: string, value: unknown): Promise<void> => {
+      assertWritable("PUT", `/workflows/${id}/variables/${key}`);
+      if (BASE) {
+        const res = await apiFetch(
+          `${BASE}/workflows/${id}/variables/${encodeURIComponent(key)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ value }),
+          },
+        );
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? "failed to save variable");
+        }
+        return;
+      }
+      await delay(120);
+    },
+    remove: async (id: string, key: string): Promise<void> => {
+      assertWritable("DELETE", `/workflows/${id}/variables/${key}`);
+      if (BASE) {
+        const res = await apiFetch(
+          `${BASE}/workflows/${id}/variables/${encodeURIComponent(key)}`,
+          { method: "DELETE", credentials: "include" },
+        );
+        if (!res.ok && res.status !== 204) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? "failed to delete variable");
+        }
+        return;
+      }
+      await delay(120);
+    },
+  },
+
   // PUT /workflows/:id/schedule
   setSchedule: async (
     id: string,
@@ -376,6 +444,54 @@ export const workflows = {
       cron,
       nextRunAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     };
+  },
+
+  // PUT /workflows/:id/geofence
+  //
+  // No assertWritable, unlike every other write above, and that absence is the
+  // change: a geofence is chosen from the place it describes, so a viewer may
+  // set one. See the "workflow.geofence" capability in lib/readonly.ts for the
+  // reasoning, and readonly.test.ts for the tests that pin it.
+  //
+  // Distinct from native/api.ts's setGeofence, which the shipped Android app
+  // uses via shell.setGeofence: that one also arms Android's GeofencingClient,
+  // because the device doing the watching is the device that has to be told.
+  // This one only records the zone on the server -- correct for a browser,
+  // where nothing is watching, and honest about it in the screen's copy.
+  setGeofence: async (
+    id: string,
+    fence: { lat: number; lng: number; radiusM: number },
+  ): Promise<void> => {
+    if (BASE) {
+      const res = await apiFetch(`${BASE}/workflows/${id}/geofence`, {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fence),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "could not save the zone");
+      }
+      return;
+    }
+    await delay(200);
+  },
+
+  // DELETE /workflows/:id/geofence
+  clearGeofence: async (id: string): Promise<void> => {
+    if (BASE) {
+      const res = await apiFetch(`${BASE}/workflows/${id}/geofence`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "could not remove the zone");
+      }
+      return;
+    }
+    await delay(150);
   },
 
   // DELETE /workflows/:id/schedule
@@ -803,6 +919,43 @@ export const payments = {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "payment verification failed");
+    return data;
+  },
+
+  // Which gateways this deployment can actually take money through, plus the
+  // live INR->USD rate. Both come from the server because both are deployment
+  // state: NOWPayments quotes in USD and can only be offered when a rate is
+  // available, and it has to be the same rate the backend uses rather than the
+  // mock constant in lib/credits/fx.ts.
+  listProviders: async (): Promise<{
+    usd_per_inr: number;
+    providers: { id: PaymentMethod; enabled: boolean; currency: string }[];
+  }> => {
+    if (!BASE) throw new Error("payments require a configured backend");
+    const res = await apiFetch(`${BASE}/payments/providers`, {
+      credentials: "include",
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok)
+      throw new Error(data.error ?? "could not load payment providers");
+    return data;
+  },
+
+  // Opens a NOWPayments hosted invoice. Crypto settles on-chain with no
+  // client-side completion step, so the IPN webhook is the ONLY path that
+  // credits a crypto top-up -- there is deliberately no verify call here.
+  createCryptoInvoice: async (
+    amountUSDCents: number,
+  ): Promise<{ order_id: string; invoice_url: string }> => {
+    if (!BASE) throw new Error("payments require a configured backend");
+    const res = await apiFetch(`${BASE}/payments/nowpayments/invoice`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount_usd_cents: amountUSDCents }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error ?? "invoice creation failed");
     return data;
   },
 };

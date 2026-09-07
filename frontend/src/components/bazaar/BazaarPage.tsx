@@ -1,26 +1,63 @@
 "use client";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Topbar } from "@/components/Topbar";
-import { bazaar, type BazaarResource } from "@/lib/bazaar";
+import {
+  bazaar,
+  BAZAAR_SORT_OPTIONS,
+  type BazaarResource,
+  type BazaarSort,
+} from "@/lib/bazaar";
 import { ResourceCard } from "./ResourceCard";
+import { ConsoleCard } from "./ConsoleCard";
 import { EndpointRow } from "./EndpointRow";
 import { ProviderGroupCard } from "./ProviderGroupCard";
 import { AddToWorkflowDialog } from "./AddToWorkflowDialog";
 
-const PAGE_SIZE = 30;
+// Real pagination, not infinite scroll: a fixed page is fetched and shown at
+// a time, with Prev/Next and a page-size picker -- a long, unbounded list
+// that keeps growing as you scroll was the exact complaint this replaces.
+const PAGE_SIZE_OPTIONS = [5, 10, 20] as const;
+type PageSize = (typeof PAGE_SIZE_OPTIONS)[number];
+const DEFAULT_PAGE_SIZE: PageSize = 10;
 
+// The partner track is explicit, not auto-fill. There are two partners; an
+// auto-fill grid stretches to four columns on a wide screen and leaves them
+// adrift in it, which reads as "two things are missing" rather than "these are
+// the two". auto-fit with a max keeps each card at a readable width and lets a
+// third slot in cleanly when there is one.
+const CONSOLE_GRID: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 460px))",
+  justifyContent: "start",
+  gap: 14,
+};
+
+// Any supported entry WITHOUT a console still renders as an ordinary card.
+// Nothing produces one today (curated.go's TestEveryCuratedEntryIsConsoleBacked
+// requires a console key), but a registry that grows a non-console partner
+// should degrade to a card rather than vanish from the page.
 const GRID: React.CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
   gap: 12,
 };
+
+// Prev/Next share one style, differing only in their disabled state -- a
+// function rather than two near-duplicate inline style objects.
+function paginationBtnStyle(disabled: boolean): React.CSSProperties {
+  return {
+    height: 32,
+    padding: "0 14px",
+    background: "var(--bg-elev-1)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--r-2)",
+    color: "var(--fg-muted)",
+    fontFamily: "var(--font-sans)",
+    fontSize: 12.5,
+    cursor: disabled ? "default" : "pointer",
+    opacity: disabled ? 0.45 : 1,
+  };
+}
 
 // The community list renders as one bordered row-list rather than a card
 // grid: a card grid puts variable-height cards into CSS grid cells (no
@@ -41,7 +78,7 @@ const BAZAAR_CSS = `
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 11px 16px;
+  padding: 13px 16px;
   border: none;
   border-bottom: 1px solid var(--border);
   background: transparent;
@@ -64,12 +101,16 @@ const BAZAAR_CSS = `
   transform: scaleY(0);
   transition: transform 0.15s var(--ease);
 }
-.bz-row--group:hover,
-.bz-row--group:focus-visible {
+/* Every row hovers the same way, not just the expandable group headers --
+   a plain row is just as much a target (its own Add button) and reading a
+   long list is easier when the row under the pointer is visually obvious,
+   not only the ones that happen to expand. */
+.bz-row:hover,
+.bz-row:focus-within {
   background: var(--bg-elev-2);
 }
-.bz-row--group:hover::before,
-.bz-row--group:focus-visible::before {
+.bz-row:hover::before,
+.bz-row:focus-within::before {
   transform: scaleY(1);
 }
 .bz-row__icon {
@@ -176,35 +217,49 @@ const BAZAAR_CSS = `
   background: var(--bg-elev-2);
 }
 .bz-supported-card {
-  /* The wrapper owns the hover shadow, so it has to match the card's own
-     radius -- otherwise the glow is cast by a square box sitting behind a
-     rounded one and reads as a lopsided smear at the corners. */
-  border-radius: var(--r-2);
   /* Fill the grid cell. Grid stretches this wrapper to the tallest card in
-     the row, but the card inside was intrinsically sized, so a short
-     description left a visible gap under it and the row looked ragged. */
+     the row, but the card inside is intrinsically sized, so a short
+     description would otherwise leave a visible gap under it and the row
+     would look ragged. */
   height: 100%;
-  transition:
-    transform 0.15s var(--ease),
-    box-shadow 0.15s var(--ease);
 }
 .bz-supported-card > * {
   height: 100%;
 }
-.bz-supported-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+/* The search box and sort select, next to the "Everything else" heading.
+   flex-wrap alone was not enough: a flex item's default min-width is its
+   own CONTENT width, not 0, so the input's fixed 200px floor plus the
+   select's own intrinsic width (its longest option, "Price: low to high")
+   could together exceed a narrow container's remaining space and overflow
+   past the edge instead of shrinking -- the classic flexbox gotcha. min-width
+   0 here is what actually lets them shrink; the media query is what gives a
+   genuinely narrow (phone-width) screen a clean full-width stack instead of
+   two squeezed controls sharing a cramped row. */
+.bz-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bz-toolbar input,
+.bz-toolbar select {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+@media (max-width: 480px) {
+  .bz-toolbar {
+    width: 100%;
+  }
+  .bz-toolbar input,
+  .bz-toolbar select {
+    flex: 1 1 100%;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .bz-row,
   .bz-row::before,
   .bz-row__chevron,
-  .bz-group-body,
-  .bz-supported-card {
+  .bz-group-body {
     transition: none !important;
-  }
-  .bz-supported-card:hover {
-    transform: none;
   }
 }
 `;
@@ -217,21 +272,36 @@ export function BazaarPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState<BazaarResource | null>(null);
+  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
+  const [page, setPage] = useState(0); // 0-indexed
+
+  // Supported entries collapse by console key: Prism is four endpoints behind
+  // one page, and four cards all opening that same page would be four buttons
+  // for one destination. Entries without a console key keep one card each.
+  // Map preserves first-seen order, so a console surfaces where its first
+  // endpoint would have.
+  const { consoles, plainSupported } = useMemo(() => {
+    const byConsole = new Map<string, BazaarResource[]>();
+    const plain: BazaarResource[] = [];
+    for (const r of supported) {
+      if (!r.console) {
+        plain.push(r);
+        continue;
+      }
+      const list = byConsole.get(r.console);
+      if (list) list.push(r);
+      else byConsole.set(r.console, [r]);
+    }
+    return { consoles: Array.from(byConsole.entries()), plainSupported: plain };
+  }, [supported]);
 
   // Endpoints sharing a host collapse into one ProviderGroupCard so a single
-  // heavy publisher doesn't bury everything else (one host is over 70% of the
-  // raw catalog). Grouping is client-side over whatever's loaded so far —
-  // this stays correct with the existing paged fetch, no backend change
-  // needed, and a group simply grows as more of its host's entries scroll
-  // in. Map preserves first-seen order, which is that host's highest
-  // settle-count entry's position (items already arrive settle-count
-  // sorted) — so a provider surfaces where its best single entry would have.
-  // Rebuilds the whole grouping from all of `items` on every loadMore page,
-  // not just the newly-appended page -- O(n) per page, O(n²/pageSize) over a
-  // full scroll session instead of O(n). Not worth an incremental fold at
-  // the current ~780-entry catalog (worst case is a few tens of thousands of
-  // trivial operations, well under one frame); revisit if the catalog grows
-  // by an order of magnitude or more.
+  // heavy publisher doesn't bury everything else on the page (one host is
+  // over 70% of the raw catalog). Grouping is client-side over just the
+  // current page's `items` -- with real pagination that's at most 20 rows,
+  // trivial to group per render. A host's other entries can land on a
+  // different page than this one; that's an ordinary, expected pagination
+  // outcome now; see ProviderGroupCard's partial={false} below.
   const groupedItems = useMemo(() => {
     const byHost = new Map<string, BazaarResource[]>();
     for (const r of items) {
@@ -259,6 +329,13 @@ export function BazaarPage() {
     return () => window.clearTimeout(t);
   }, [query]);
 
+  // "Most used" (settles) is the crawl's own default order and needs no
+  // param at all. Meaningless while a search is active — bazaar.list()
+  // already drops it server-side whenever q is set, since match relevance
+  // is a more useful order than a client-picked one — so the control below
+  // disables itself in that state instead of quietly doing nothing.
+  const [sort, setSort] = useState<BazaarSort>("settles");
+
   // Supported entries are pinned above the scrolling list, so they are fetched
   // once and never paged. Searching does not filter them — the point of the
   // section is that it is always visible.
@@ -281,111 +358,83 @@ export function BazaarPage() {
     };
   }, []);
 
-  // Reset the paged list whenever the search changes. Done during render
+  // Jump back to page 0 whenever the search, sort, or page size changes --
+  // a new view of the list starts over, rather than e.g. landing on "page 3"
+  // of a search that only has one page of results. Done during render
   // (React's "adjusting state when a prop changes" pattern) rather than in a
-  // useEffect, so the reset lands in the same commit as the query change
-  // instead of firing a second, cascading render.
-  const [resetForQuery, setResetForQuery] = useState(activeQuery);
-  const [noMore, setNoMore] = useState(false);
-  if (resetForQuery !== activeQuery) {
-    setResetForQuery(activeQuery);
-    setItems([]);
-    setTotal(0);
-    setNoMore(false);
-    // Without this, a query change right after a failed load leaves the
-    // sentinel effect's `if (noMore || loading || error) return;` guard
-    // permanently tripped for the NEW query: the stale error message stays
-    // on screen with only a manual Retry button instead of the new search
-    // auto-loading.
+  // useEffect, so the reset lands in the same commit as the change instead
+  // of firing a second, cascading render.
+  const viewKey = `${activeQuery} ${sort} ${pageSize}`;
+  const [resetForKey, setResetForKey] = useState(viewKey);
+  if (resetForKey !== viewKey) {
+    setResetForKey(viewKey);
+    setPage(0);
+  }
+
+  // retryTick has no meaning of its own -- bumping it is just how the Retry
+  // button below re-triggers a fetch of the same page without duplicating
+  // the fetch effect below.
+  const [retryTick, setRetryTick] = useState(0);
+
+  // Marks loading the instant the fetch's own inputs change, in the SAME
+  // render/commit as that change -- same "adjusting state" pattern as the
+  // page reset above, and for the same reason: setting it from inside the
+  // effect below instead would still be correct, but is a synchronous
+  // setState at the top of an effect body, which is exactly the extra,
+  // avoidable cascading-render round trip that pattern exists to skip (and
+  // what react-hooks/set-state-in-effect flags). fetchKey intentionally
+  // reads `page` AFTER the reset above has had a chance to land it at 0, so
+  // a query/sort/size change that also resets the page is only ever one
+  // fetch, not two.
+  const fetchKey = `${page}|${pageSize}|${activeQuery}|${sort}|${retryTick}`;
+  const [fetchKeyForLoading, setFetchKeyForLoading] = useState(fetchKey);
+  if (fetchKeyForLoading !== fetchKey) {
+    setFetchKeyForLoading(fetchKey);
+    setLoading(true);
     setError(null);
   }
 
-  // Bumped every time a search reset commits, so an in-flight loadMore
-  // response from a stale (pre-reset) request can tell it's stale and skip
-  // applying setTotal — items already self-guards via its own offset check,
-  // but total has no equivalent natural staleness signal to compare against.
-  // This must be useLayoutEffect, not useEffect: a plain useEffect is
-  // deferred past paint via a macrotask, leaving a window (until that
-  // macrotask runs) during which a stale request's already-queued
-  // microtask continuation (the code right after `await bazaar.list(...)`)
-  // could read the pre-bump value and slip through. useLayoutEffect runs
-  // synchronously in the commit phase, closing that window entirely.
-  const requestGeneration = useRef(0);
-  useLayoutEffect(() => {
-    requestGeneration.current += 1;
-  }, [activeQuery]);
-
-  const loadMore = useCallback(async () => {
-    if (loading) return;
-    setLoading(true);
-    setError(null);
-    const myGeneration = requestGeneration.current;
-    try {
-      const offset = items.length;
-      const page = await bazaar.list({
-        offset,
-        limit: PAGE_SIZE,
-        q: activeQuery || undefined,
-        // The grid only shows unsupported entries — a supported one already
-        // renders in the pinned section above, and showing it twice under
-        // contradictory copy ("Community listings — you configure the fields
-        // yourself") is actively wrong for a supported card.
-        supported: false,
-      });
-      // A reset that happened while this request was in flight bumped the
-      // generation counter — this response no longer describes the current
-      // query, so skip it entirely. Gating setItems on this too (not just
-      // total/noMore) matters: right after a reset, items is [] and offset
-      // was captured as 0, so the offset-based guard below is trivially true
-      // and would otherwise let a stale first page slip into the new query's
-      // state instead of being rejected.
-      if (requestGeneration.current === myGeneration) {
-        setTotal(page.total);
-        // A short page (fewer items than asked for) means there is nothing
-        // more to fetch, regardless of what `total` says — `total` counts
-        // the whole filtered set and can disagree with pagination in edge
-        // cases (e.g. a concurrent catalog refresh), but a short page from
-        // the backend is authoritative on its own.
-        if (page.items.length < PAGE_SIZE) setNoMore(true);
-        // Guard against a concurrent reset landing between the request and
-        // its response, which would otherwise append a stale page.
-        setItems((cur) =>
-          cur.length === offset ? [...cur, ...page.items] : cur,
-        );
-      }
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "could not load the catalog");
-    } finally {
-      setLoading(false);
-    }
-  }, [items.length, loading, activeQuery]);
-
-  // Sentinel-driven infinite scroll. Re-observes after every load so the
-  // callback always closes over the current item count.
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  // Fetches exactly one page and REPLACES items, rather than the old
+  // infinite-scroll accumulator that appended forever -- real pagination
+  // means the request itself changes (offset/limit) on every page/size/sort/
+  // search/retry change, so a plain effect keyed on all five, with a
+  // `cancelled` guard against a stale response landing after a newer
+  // request already resolved, is simpler than the accumulator ever needed
+  // to be.
   useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    // noMore (a short page) is the authoritative "stop fetching" signal — see
-    // loadMore. Also gate on !error: a failed request leaves `loading` back
-    // at false without ever marking noMore, and without this guard the
-    // observer effect (re-created because loadMore's identity changed) would
-    // immediately re-fire the same failing request forever. Auto-retry was
-    // never the intent — the manual "Retry" button below is.
-    if (noMore || loading || error) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) loadMore();
-      },
-      { rootMargin: "300px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [loadMore, noMore, loading, error]);
+    let cancelled = false;
+    bazaar
+      .list({
+        offset: page * pageSize,
+        limit: pageSize,
+        q: activeQuery || undefined,
+        sort,
+        // The grid only shows unsupported entries -- a supported one already
+        // renders in the pinned section above, and showing it twice under
+        // contradictory copy ("Community listings -- you configure the
+        // fields yourself") is actively wrong for a supported card.
+        supported: false,
+      })
+      .then((res) => {
+        if (cancelled) return;
+        setItems(res.items);
+        setTotal(res.total);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : "could not load the catalog");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [page, pageSize, activeQuery, sort, retryTick]);
 
-  // Same signal the observer uses to stop fetching, so the UI's "done" state
-  // and the fetch-stopping state can never disagree.
-  const exhausted = noMore;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const canGoPrev = page > 0;
+  const canGoNext = page < totalPages - 1;
 
   return (
     // .am-viewport-min rather than a raw 100vh: on a phone browser 100vh
@@ -410,8 +459,9 @@ export function BazaarPage() {
         <h1
           style={{
             margin: 0,
-            fontSize: 20,
+            fontSize: 26,
             fontWeight: 600,
+            letterSpacing: "-0.02em",
             color: "var(--fg)",
           }}
         >
@@ -419,30 +469,44 @@ export function BazaarPage() {
         </h1>
         <p
           style={{
-            margin: "6px 0 0",
-            fontSize: 13,
+            margin: "8px 0 0",
+            fontSize: 13.5,
             color: "var(--fg-muted)",
-            lineHeight: 1.6,
+            lineHeight: 1.65,
+            maxWidth: "68ch",
           }}
         >
-          Every paid endpoint listed in GoPlausible&apos;s Algorand catalog. Add
-          any of them to a workflow. Our official partners are verified by
-          AgentMesh, and arrive with hand-authored fields where we have them.
+          Services your agents can pay for by the call, no accounts or API keys
+          needed. Our partners come with a ready-made page. Everything else you
+          can drop straight onto a canvas.
         </p>
 
         {supported.length > 0 && (
-          <section style={{ marginTop: 24 }}>
+          <section style={{ marginTop: 28 }}>
             <SectionHeading
-              title="Official AgentMesh partners"
-              note="Verified by AgentMesh."
+              title="Partners"
+              note="Set up and tested by us. Open one and start using it right away."
             />
-            <div style={GRID}>
-              {supported.map((r) => (
-                <div key={r.id} className="bz-supported-card">
-                  <ResourceCard resource={r} onAdd={setAdding} />
-                </div>
-              ))}
-            </div>
+            {consoles.length > 0 && (
+              <div style={CONSOLE_GRID}>
+                {consoles.map(([key, resources]) => (
+                  <ConsoleCard
+                    key={key}
+                    consoleKey={key}
+                    resources={resources}
+                  />
+                ))}
+              </div>
+            )}
+            {plainSupported.length > 0 && (
+              <div style={{ ...GRID, marginTop: consoles.length > 0 ? 12 : 0 }}>
+                {plainSupported.map((r) => (
+                  <div key={r.id} className="bz-supported-card">
+                    <ResourceCard resource={r} onAdd={setAdding} />
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
 
@@ -458,26 +522,55 @@ export function BazaarPage() {
             }}
           >
             <SectionHeading
-              title="All endpoints"
-              note="Community listings. You configure the fields yourself."
+              title="Everything else"
+              note="Public listings. Add one to a canvas and fill in its details yourself."
             />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search endpoints…"
-              aria-label="Search endpoints"
-              style={{
-                height: 32,
-                padding: "0 10px",
-                minWidth: 200,
-                border: "1px solid var(--border)",
-                background: "var(--bg)",
-                borderRadius: "var(--r-2)",
-                color: "var(--fg)",
-                fontSize: 12.5,
-                fontFamily: "var(--font-sans)",
-              }}
-            />
+            <div className="bz-toolbar">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search…"
+                aria-label="Search endpoints"
+                style={{
+                  height: 32,
+                  padding: "0 10px",
+                  border: "1px solid var(--border)",
+                  background: "var(--bg)",
+                  borderRadius: "var(--r-2)",
+                  color: "var(--fg)",
+                  fontSize: 12.5,
+                  fontFamily: "var(--font-sans)",
+                }}
+              />
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value as BazaarSort)}
+                disabled={Boolean(activeQuery)}
+                aria-label="Sort endpoints"
+                title={
+                  activeQuery
+                    ? "Search results are already ordered by best match."
+                    : undefined
+                }
+                style={{
+                  height: 32,
+                  padding: "0 8px",
+                  border: "1px solid var(--border)",
+                  background: activeQuery ? "var(--bg-elev-2)" : "var(--bg)",
+                  borderRadius: "var(--r-2)",
+                  color: activeQuery ? "var(--fg-dim)" : "var(--fg)",
+                  fontSize: 12.5,
+                  fontFamily: "var(--font-sans)",
+                  cursor: activeQuery ? "default" : "pointer",
+                }}
+              >
+                {BAZAAR_SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="bz-list">
@@ -496,7 +589,7 @@ export function BazaarPage() {
                   expanded={expandedHosts.has(host)}
                   onToggle={() => toggleHost(host)}
                   onAdd={setAdding}
-                  partial={!noMore}
+                  partial={false}
                 />
               ),
             )}
@@ -509,7 +602,7 @@ export function BazaarPage() {
               {error}{" "}
               <button
                 type="button"
-                onClick={loadMore}
+                onClick={() => setRetryTick((t) => t + 1)}
                 style={{
                   background: "none",
                   border: "none",
@@ -537,38 +630,81 @@ export function BazaarPage() {
             <p
               style={{ marginTop: 16, fontSize: 12.5, color: "var(--fg-dim)" }}
             >
-              No endpoints match “{activeQuery}”.
+              Nothing matches “{activeQuery}”.
             </p>
           )}
 
-          {exhausted && items.length > 0 && (
-            <p style={{ marginTop: 16, fontSize: 12, color: "var(--fg-dim)" }}>
-              That&apos;s all {total} endpoints.
-            </p>
-          )}
-
-          {!exhausted && !loading && !error && items.length > 0 && (
-            <button
-              type="button"
-              onClick={loadMore}
+          {!loading && !error && items.length > 0 && (
+            <div
               style={{
                 marginTop: 16,
-                width: "100%",
-                height: 36,
-                background: "var(--bg-elev-1)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--r-2)",
-                color: "var(--fg-muted)",
-                fontFamily: "var(--font-sans)",
-                fontSize: 12.5,
-                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                flexWrap: "wrap",
               }}
             >
-              Load more{total > 0 ? ` · ${items.length} of ${total}` : ""}
-            </button>
-          )}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 12,
+                  color: "var(--fg-dim)",
+                }}
+              >
+                <span>Show</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) =>
+                    setPageSize(Number(e.target.value) as PageSize)
+                  }
+                  aria-label="Results per page"
+                  style={{
+                    height: 28,
+                    padding: "0 6px",
+                    border: "1px solid var(--border)",
+                    background: "var(--bg)",
+                    borderRadius: "var(--r-2)",
+                    color: "var(--fg)",
+                    fontSize: 12,
+                    fontFamily: "var(--font-sans)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+                <span>per page · {total} total</span>
+              </div>
 
-          <div ref={sentinelRef} style={{ height: 1 }} />
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
+                  Page {page + 1} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={!canGoPrev}
+                  style={paginationBtnStyle(!canGoPrev)}
+                >
+                  ← Prev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={!canGoNext}
+                  style={paginationBtnStyle(!canGoNext)}
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       </div>
 

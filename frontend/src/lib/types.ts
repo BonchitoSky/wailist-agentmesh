@@ -5,6 +5,7 @@ export type NodeType =
   | "tool"
   | "tool402"
   | "action"
+  | "state"
   | "end"
   | "tendril"
   | "google";
@@ -71,6 +72,13 @@ export interface WorkflowNode {
   // nested body, and real endpoints want one.
   bodyMode?: "params" | "json";
   bodyTemplate?: string;
+  // state-specific — reads and writes the workflow's persisted variables,
+  // which survive between runs. stateValue is the literal to store for
+  // "set" (itself subject to {{state.x}} expansion) or the numeric delta
+  // for "increment".
+  stateOp?: "get" | "set" | "increment" | "delete";
+  stateKey?: string;
+  stateValue?: string;
   // trigger-specific
   source?: string;
   // email action-specific
@@ -116,6 +124,17 @@ export interface Workflow {
   tags?: string[];
   scheduleCron?: string;
   scheduleNextRunAt?: string;
+  // The geofence trigger. All three are present together or none is -- a
+  // partly configured zone means nothing, so the backend writes and clears
+  // them as a unit (models.Workflow, migration 000029).
+  geofenceLat?: number;
+  geofenceLng?: number;
+  geofenceRadiusM?: number;
+  // Tri-state on the wire: absent means no fix has been recorded yet, which
+  // is deliberately NOT the same as being outside. The first fix after a zone
+  // is saved only establishes a baseline; it never counts as a crossing.
+  geofenceInside?: boolean;
+  geofenceLastFixAt?: string;
 }
 
 export interface NodeTypeMeta {
@@ -181,6 +200,22 @@ export interface UsagePayload {
   byWorkflow: WorkflowSpend[];
   byEndpoint: EndpointUsage[];
   settlements: Settlement[];
+}
+
+export interface CostEstimateLine {
+  nodeId: string;
+  label: string;
+  lowUsdMicros: number;
+  highUsdMicros: number;
+  note?: string;
+}
+
+// Static low/high band for one workflow run, from GET /workflows/:id/estimate.
+export interface CostEstimate {
+  lowUsdMicros: number;
+  highUsdMicros: number;
+  lines: CostEstimateLine[];
+  hasUnpricedX402: boolean;
 }
 
 export interface PortCoord {
