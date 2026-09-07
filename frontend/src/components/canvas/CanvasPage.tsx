@@ -1127,7 +1127,10 @@ function CanvasTopbar({
 
       {can("workflow.deploy", readOnly) && (
         <>
-          <button style={ghostBtnSm} onClick={() => setShareOpen(true)}>
+          <button
+            style={{ ...ghostBtnSm, color: "var(--fg)" }}
+            onClick={() => setShareOpen(true)}
+          >
             Share
           </button>
           <button onClick={onDeploy} style={btnStyle}>
