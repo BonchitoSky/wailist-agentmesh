@@ -528,6 +528,14 @@ body {
   padding: 40px 56px;
   overflow: auto;
 }
+/* The form's own width. It was an inline `maxWidth: 360` on the element, which
+   no media query could have reached -- the same trap that has cost this repo
+   four dead CSS rules. The inline value is gone so this can own it. */
+.auth-card {
+  width: 100%;
+  max-width: 360px;
+}
+
 @media (max-width: 900px) {
   .auth-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -535,10 +543,26 @@ body {
   .auth-aside {
     display: none;
   }
+  /* Collapsing the grid was only half of it. The column kept `40px 56px` of
+     desktop padding down to 520px, so between those widths the result was a
+     360px card floating in a wide shell rather than a screen. The padding
+     follows the collapse now, and the card is allowed to use the width it
+     just gained. */
+  .auth-form-col {
+    padding: 28px 24px;
+  }
+  .auth-card {
+    max-width: 420px;
+  }
 }
 @media (max-width: 520px) {
   .auth-form-col {
-    padding: 24px 20px;
+    padding: 20px 20px 24px;
+  }
+  /* On a phone the form IS the screen: no card, no centred column, just the
+     full width inside the padding. */
+  .auth-card {
+    max-width: none;
   }
 }
 

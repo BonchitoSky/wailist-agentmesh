@@ -173,7 +173,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
             marginBottom: 16,
           }}
         >
-          <div style={{ width: "100%", maxWidth: 360 }} className="reveal">
+          <div className="auth-card reveal">
             <h1
               style={{
                 margin: 0,
