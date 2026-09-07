@@ -11,6 +11,7 @@
 import type { PluginListenerHandle } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { registerDevice, unregisterDevice } from "./api";
+import { clearOptedIn, setOptedIn } from "./pushPrefs";
 
 // What the user is told BEFORE Android's own dialog, for the same reason
 // permissions.ts explains background location first: a cold system prompt is
@@ -34,6 +35,11 @@ export const PUSH_DISCLOSURE = {
 } as const;
 
 export type PushState = "granted" | "denied" | "unavailable";
+
+// What a screen can be told before anything has been asked. "prompt" is the
+// state enablePush() cannot report, because reaching it means having already
+// asked -- and on Android 13+ asking is a one-shot.
+export type PushReadState = PushState | "prompt";
 
 // Long enough for a cold FCM registration on a slow connection, short enough
 // that a device which will never register does not hold anything up.
@@ -71,6 +77,10 @@ export async function enablePush(): Promise<PushState> {
 
     await registerDevice(token);
     currentToken = token;
+    // Recorded only now, at the end. Every earlier return is a device that is
+    // not registered, and a flag set before the registration landed would have
+    // boot() re-arming something that never worked.
+    await setOptedIn();
     return "granted";
   } catch (err) {
     // A missing google-services.json lands here, and so does an FCM outage.
@@ -82,16 +92,58 @@ export async function enablePush(): Promise<PushState> {
 }
 
 /**
+ * What Android says about notification permission, without asking for it.
+ *
+ * The distinction this exists for: enablePush() answers by REQUESTING, and on
+ * Android 13+ the permission dialog is a one-shot -- refuse it once and the
+ * only route back is Settings. So a screen that wants to render its own state
+ * cannot use enablePush() to find out what that state is; doing so would burn
+ * the single ask just to draw a toggle.
+ *
+ * Reports "prompt" when nothing has been decided yet, and "unavailable" when
+ * the plugin cannot answer at all -- a build with no google-services.json, or
+ * a device with no Play services.
+ */
+export async function notificationState(): Promise<PushReadState> {
+  try {
+    const { receive } = await PushNotifications.checkPermissions();
+    if (receive === "granted") return "granted";
+    if (receive === "denied") return "denied";
+    // "prompt" and "prompt-with-rationale" both mean the question is still
+    // open. The rationale variant is Android telling us it would show its own
+    // explanation; PUSH_DISCLOSURE is shown either way, so they are one state
+    // as far as this app is concerned.
+    return "prompt";
+  } catch (err) {
+    console.error("push: could not read the notification permission", err);
+    return "unavailable";
+  }
+}
+
+/**
  * Stops this device receiving notifications, and tells the server so.
  *
- * Called on sign-out. Never throws: a device that cannot reach the network
- * must still be able to sign out, and the server is not left holding a dead
- * row either way -- FCM rejects sends to an unregistered token, and the send
- * path drops the row on that verdict.
+ * Called on sign-out, and when the user turns notifications off. Never
+ * throws: a device that cannot reach the network must still be able to sign
+ * out, and the server is not left holding a dead row either way -- FCM
+ * rejects sends to an unregistered token, and the send path drops the row on
+ * that verdict.
+ *
+ * Note what this cannot do after a cold start: currentToken is null, so the
+ * server keeps the row until FCM refuses a send to it. The opt-in flag is
+ * still cleared, so nothing re-arms it, and the row is dropped on the first
+ * send that would have gone to this device. Turning it off is therefore
+ * immediate on the phone and eventual on the server.
  */
 export async function disablePush(): Promise<void> {
   const token = currentToken;
   currentToken = null;
+  // First, and not conditional on the token. A cold start leaves currentToken
+  // null while the device is still registered server-side, so gating this on
+  // having a token would leave the flag set on exactly the devices that most
+  // need it cleared -- and boot() would then re-arm what the user just turned
+  // off.
+  await clearOptedIn();
   if (token) {
     await unregisterDevice(token).catch((err) => {
       console.error("push: could not unregister this device", err);
