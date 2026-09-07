@@ -101,7 +101,10 @@ const SHEET_CSS = `
 }
 `;
 
-type View = "loading" | "prompt" | "granted" | "denied" | "unavailable";
+// "off" rather than "prompt": the same panel serves a device Android has never
+// been asked about and one whose owner turned notifications off with the
+// permission still granted. Both want the same thing said to them.
+type View = "loading" | "off" | "granted" | "denied" | "unavailable";
 
 export function NotificationsSheet({
   onClose,
@@ -135,8 +138,7 @@ export function NotificationsSheet({
     if (!IS_NATIVE) return "unavailable";
     try {
       const { shell } = await import("@/native");
-      const state = await shell.notificationState();
-      return state === "prompt" ? "prompt" : state;
+      return await shell.notificationState();
     } catch {
       return "unavailable";
     }
@@ -210,6 +212,8 @@ export function NotificationsSheet({
     setBusy(true);
     try {
       const { shell } = await import("@/native");
+      // enableNotifications answers "granted" | "denied" | "unavailable" --
+      // never "off" -- so this is a complete View without a fallback branch.
       setView(await shell.enableNotifications());
     } catch {
       setView("unavailable");
@@ -223,9 +227,8 @@ export function NotificationsSheet({
     try {
       const { shell } = await import("@/native");
       await shell.disableNotifications();
-      // Back to the OS's answer rather than assuming "prompt": permission
-      // survives being switched off here, so a device that keeps it should
-      // show a switch that turns straight back on, not the disclosure again.
+      // Re-read rather than assuming: the answer depends on the opt-in flag
+      // AND the OS permission, and only the first of those just changed.
       setView(await read());
     } catch {
       setView("unavailable");
@@ -258,7 +261,7 @@ export function NotificationsSheet({
         >
           {view === "loading" && <p style={bodyText}>Checking this device…</p>}
 
-          {view === "prompt" && (
+          {view === "off" && (
             <Prompt busy={busy} onGrant={enable} onDecline={close} />
           )}
 

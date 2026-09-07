@@ -11,7 +11,7 @@
 import type { PluginListenerHandle } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { registerDevice, unregisterDevice } from "./api";
-import { clearOptedIn, setOptedIn } from "./pushPrefs";
+import { clearOptedIn, hasOptedIn, setOptedIn } from "./pushPrefs";
 
 // What the user is told BEFORE Android's own dialog, for the same reason
 // permissions.ts explains background location first: a cold system prompt is
@@ -36,10 +36,14 @@ export const PUSH_DISCLOSURE = {
 
 export type PushState = "granted" | "denied" | "unavailable";
 
-// What a screen can be told before anything has been asked. "prompt" is the
-// state enablePush() cannot report, because reaching it means having already
-// asked -- and on Android 13+ asking is a one-shot.
-export type PushReadState = PushState | "prompt";
+// What a screen can be told without asking for anything.
+//
+// "off" is the state enablePush() cannot report, because reaching that function
+// means having already asked -- and on Android 13+ asking is a one-shot. It
+// covers both "Android has never been asked" and "Android says yes but nobody
+// here turned it on", which are the same thing to a reader: notifications are
+// not arriving, and there is a way to start them.
+export type PushReadState = PushState | "off";
 
 // Long enough for a cold FCM registration on a slow connection, short enough
 // that a device which will never register does not hold anything up.
@@ -92,7 +96,7 @@ export async function enablePush(): Promise<PushState> {
 }
 
 /**
- * What Android says about notification permission, without asking for it.
+ * Whether notifications are on for this app, without asking for anything.
  *
  * The distinction this exists for: enablePush() answers by REQUESTING, and on
  * Android 13+ the permission dialog is a one-shot -- refuse it once and the
@@ -100,20 +104,29 @@ export async function enablePush(): Promise<PushState> {
  * cannot use enablePush() to find out what that state is; doing so would burn
  * the single ask just to draw a toggle.
  *
- * Reports "prompt" when nothing has been decided yet, and "unavailable" when
- * the plugin cannot answer at all -- a build with no google-services.json, or
- * a device with no Play services.
+ * TWO facts, not one. Android's permission is necessary and not sufficient:
+ * turning notifications off in this app unregisters the device and clears the
+ * opt-in, but it does NOT revoke the OS permission -- nothing in an app can.
+ * A version of this function that reported only what Android says answered
+ * "granted" the instant after the user pressed Turn off, so the sheet snapped
+ * straight back to its "on" panel, and a device that had opted out on an
+ * earlier visit opened on that panel too. Both were reported in review on
+ * #174; both were invisible to a four-state walkthrough that never set up
+ * "permission granted, opted out" as a case.
+ *
+ * "off" therefore covers never-asked and opted-out alike, which is the same
+ * thing to a reader. "unavailable" means the plugin could not answer at all --
+ * a build with no google-services.json, or a device with no Play services.
  */
 export async function notificationState(): Promise<PushReadState> {
   try {
     const { receive } = await PushNotifications.checkPermissions();
-    if (receive === "granted") return "granted";
+    // Denied first: a refusal is worth saying out loud whatever the opt-in
+    // records, because the route back is Settings rather than this app, and
+    // that is the one thing the reader needs to be told.
     if (receive === "denied") return "denied";
-    // "prompt" and "prompt-with-rationale" both mean the question is still
-    // open. The rationale variant is Android telling us it would show its own
-    // explanation; PUSH_DISCLOSURE is shown either way, so they are one state
-    // as far as this app is concerned.
-    return "prompt";
+    if (receive !== "granted") return "off";
+    return (await hasOptedIn()) ? "granted" : "off";
   } catch (err) {
     console.error("push: could not read the notification permission", err);
     return "unavailable";
