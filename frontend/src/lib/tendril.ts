@@ -1,5 +1,4 @@
 import { BASE, apiFetch } from "@/lib/api";
-import { assertWritable } from "@/lib/readonly";
 
 // Tendril charges a flat 0.01 USDC to open a lease; the hours themselves meter
 // against credit at the machine's hourly rate. Kept in sync with the backend's
@@ -106,40 +105,6 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
 }
 
 export const tendril = {
-  // Finds-or-creates the ONE hidden workflow row that backs this user's
-  // console (backend: GetOrCreateSystemWorkflow, keyed on a fixed name) so
-  // every "Load Tendril workflow" click opens the same row instead of
-  // minting a fresh duplicate one every time -- workflowsApi.create would
-  // do the latter, since it always inserts.
-  async console(): Promise<string> {
-    assertWritable("GET", "/tendril/console");
-    const res = await apiFetch(`${BASE}/tendril/console`, {
-      credentials: "include",
-    });
-    if (!res.ok) throw new Error(`console: ${res.status}`);
-    const body = (await res.json()) as { workflowId: string };
-    return body.workflowId;
-  },
-
-  // Read-only counterpart to console() above: reports the console
-  // workflow's id WITHOUT creating one if it doesn't exist yet. Use this
-  // (not console()) for "is this workflow id the console" checks --
-  // WorkflowRoute calls it once per workflow-page visit, and console()'s
-  // create-on-first-call behavior would otherwise mint a hidden console
-  // row for every user the instant they open any of their own, entirely
-  // unrelated workflows.
-  async consoleWorkflowIdIfExists(): Promise<string | null> {
-    const res = await apiFetch(`${BASE}/tendril/console/exists`, {
-      credentials: "include",
-    });
-    if (!res.ok) throw new Error(`console/exists: ${res.status}`);
-    const body = (await res.json()) as {
-      exists: boolean;
-      workflowId?: string;
-    };
-    return body.exists && body.workflowId ? body.workflowId : null;
-  },
-
   async machines(): Promise<TendrilMachine[]> {
     const res = await apiFetch(`${BASE}/tendril/machines`, {
       credentials: "include",

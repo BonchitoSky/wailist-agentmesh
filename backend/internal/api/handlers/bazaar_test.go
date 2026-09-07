@@ -388,3 +388,90 @@ func TestBazaarResourcesUpstreamFailureIsBadGateway(t *testing.T) {
 		t.Errorf("status = %d, want 502", rec.Code)
 	}
 }
+
+// TestForceCatalogRefreshRefetchesEvenWhenCacheIsFresh is what WarmBazaarCache
+// actually depends on: catalog() itself is a no-op while the cache is still
+// within its TTL (correctly -- a real request should never pay for a crawl no
+// one asked for), so the background warmer needs a way to force one anyway,
+// ahead of expiry. This pins that forceCatalogRefresh does exactly that.
+func TestForceCatalogRefreshRefetchesEvenWhenCacheIsFresh(t *testing.T) {
+	var hits int32
+	srv := fakeCatalog(5, &hits)
+	defer srv.Close()
+	d := &Deps{BazaarBaseURL: srv.URL}
+
+	rec := httptest.NewRecorder()
+	d.BazaarResources(rec, httptest.NewRequest(http.MethodGet, "/bazaar/resources", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initial request: status %d", rec.Code)
+	}
+	afterFirst := atomic.LoadInt32(&hits)
+	if afterFirst == 0 {
+		t.Fatal("initial request never hit upstream")
+	}
+
+	// A second BazaarResources call right now must be served from cache --
+	// this is the behaviour forceCatalogRefresh has to differ from below.
+	rec2 := httptest.NewRecorder()
+	d.BazaarResources(rec2, httptest.NewRequest(http.MethodGet, "/bazaar/resources", nil))
+	if got := atomic.LoadInt32(&hits); got != afterFirst {
+		t.Fatalf("cache: a second request within the TTL hit upstream (%d -> %d)", afterFirst, got)
+	}
+
+	d.forceCatalogRefresh()
+	d.bazaarCache.mu.Lock()
+	ch := d.bazaarCache.inflight
+	d.bazaarCache.mu.Unlock()
+	if ch == nil {
+		t.Fatal("forceCatalogRefresh did not start a crawl")
+	}
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("forceCatalogRefresh's crawl did not finish in time")
+	}
+
+	if got := atomic.LoadInt32(&hits); got <= afterFirst {
+		t.Errorf("forceCatalogRefresh did not hit upstream again while the cache was still fresh: %d -> %d", afterFirst, got)
+	}
+}
+
+// TestForceCatalogRefreshDoesNotStartASecondConcurrentCrawl guards the other
+// half of the same contract: the background warmer's own ticker firing while
+// a real request's catalog() call (or a previous tick) is already mid-crawl
+// must join that crawl, not start a second one against the same upstream.
+func TestForceCatalogRefreshDoesNotStartASecondConcurrentCrawl(t *testing.T) {
+	var hits int32
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		<-block // held open until the test releases it
+		json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+	}))
+	defer srv.Close()
+	d := &Deps{BazaarBaseURL: srv.URL}
+
+	// inflight is set synchronously, before the crawl's goroutine is even
+	// spawned (see forceCatalogRefresh), so the second call below is
+	// guaranteed to observe it -- no sleep-based race to make this
+	// deterministic.
+	d.forceCatalogRefresh()
+	d.forceCatalogRefresh()
+
+	close(block)
+
+	d.bazaarCache.mu.Lock()
+	ch := d.bazaarCache.inflight
+	d.bazaarCache.mu.Unlock()
+	if ch != nil {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatal("crawl did not finish in time")
+		}
+	}
+
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Errorf("forceCatalogRefresh started %d concurrent crawls, want 1", got)
+	}
+}

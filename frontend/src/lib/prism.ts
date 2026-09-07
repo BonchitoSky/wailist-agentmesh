@@ -1,5 +1,4 @@
 import { BASE, apiFetch } from "@/lib/api";
-import { assertWritable } from "@/lib/readonly";
 
 // PRISM's x402 endpoints, as served by GET /prism/endpoints. The backend's
 // internal/prism package is the single source of truth for all of this — the
@@ -118,32 +117,6 @@ export class PrismRunError extends Error {
 }
 
 export const prism = {
-  // Finds-or-creates the ONE hidden workflow row that backs this user's Prism
-  // console, so every entry point (the Bazaar card, the workflow list) opens
-  // the same row rather than minting a duplicate each time.
-  async console(): Promise<string> {
-    assertWritable("GET", "/prism/console");
-    const res = await apiFetch(`${BASE}/prism/console`, {
-      credentials: "include",
-    });
-    if (!res.ok) throw new Error(`console: ${res.status}`);
-    const body = (await res.json()) as { workflowId: string };
-    return body.workflowId;
-  },
-
-  // Read-only counterpart: reports the console workflow's id WITHOUT creating
-  // one. WorkflowRoute calls this on every workflow-page visit, where the
-  // creating variant would mint a hidden Prism row for every user the instant
-  // they opened any of their own, unrelated workflows.
-  async consoleWorkflowIdIfExists(): Promise<string | null> {
-    const res = await apiFetch(`${BASE}/prism/console/exists`, {
-      credentials: "include",
-    });
-    if (!res.ok) throw new Error(`console/exists: ${res.status}`);
-    const body = (await res.json()) as { exists: boolean; workflowId?: string };
-    return body.exists && body.workflowId ? body.workflowId : null;
-  },
-
   async spec(): Promise<PrismSpec> {
     const res = await apiFetch(`${BASE}/prism/endpoints`, {
       credentials: "include",

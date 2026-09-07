@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Topbar } from "@/components/Topbar";
-import { bazaar, type BazaarResource } from "@/lib/bazaar";
+import { bazaar, BAZAAR_SORT_OPTIONS, type BazaarResource, type BazaarSort } from "@/lib/bazaar";
 import { ResourceCard } from "./ResourceCard";
 import { ConsoleCard } from "./ConsoleCard";
 import { EndpointRow } from "./EndpointRow";
@@ -51,7 +51,7 @@ const BAZAAR_CSS = `
   align-items: center;
   gap: 12px;
   width: 100%;
-  padding: 11px 16px;
+  padding: 13px 16px;
   border: none;
   border-bottom: 1px solid var(--border);
   background: transparent;
@@ -74,12 +74,16 @@ const BAZAAR_CSS = `
   transform: scaleY(0);
   transition: transform 0.15s var(--ease);
 }
-.bz-row--group:hover,
-.bz-row--group:focus-visible {
+/* Every row hovers the same way, not just the expandable group headers --
+   a plain row is just as much a target (its own Add button) and reading a
+   long list is easier when the row under the pointer is visually obvious,
+   not only the ones that happen to expand. */
+.bz-row:hover,
+.bz-row:focus-within {
   background: var(--bg-elev-2);
 }
-.bz-row--group:hover::before,
-.bz-row--group:focus-visible::before {
+.bz-row:hover::before,
+.bz-row:focus-within::before {
   transform: scaleY(1);
 }
 .bz-row__icon {
@@ -275,6 +279,13 @@ export function BazaarPage() {
     return () => window.clearTimeout(t);
   }, [query]);
 
+  // "Most used" (settles) is the crawl's own default order and needs no
+  // param at all. Meaningless while a search is active — bazaar.list()
+  // already drops it server-side whenever q is set, since match relevance
+  // is a more useful order than a client-picked one — so the control below
+  // disables itself in that state instead of quietly doing nothing.
+  const [sort, setSort] = useState<BazaarSort>("settles");
+
   // Supported entries are pinned above the scrolling list, so they are fetched
   // once and never paged. Searching does not filter them — the point of the
   // section is that it is always visible.
@@ -297,18 +308,19 @@ export function BazaarPage() {
     };
   }, []);
 
-  // Reset the paged list whenever the search changes. Done during render
-  // (React's "adjusting state when a prop changes" pattern) rather than in a
-  // useEffect, so the reset lands in the same commit as the query change
-  // instead of firing a second, cascading render.
-  const [resetForQuery, setResetForQuery] = useState(activeQuery);
+  // Reset the paged list whenever the search OR the sort changes. Done
+  // during render (React's "adjusting state when a prop changes" pattern)
+  // rather than in a useEffect, so the reset lands in the same commit as the
+  // change instead of firing a second, cascading render.
+  const resetKey = `${activeQuery} ${sort}`;
+  const [resetForKey, setResetForKey] = useState(resetKey);
   const [noMore, setNoMore] = useState(false);
-  if (resetForQuery !== activeQuery) {
-    setResetForQuery(activeQuery);
+  if (resetForKey !== resetKey) {
+    setResetForKey(resetKey);
     setItems([]);
     setTotal(0);
     setNoMore(false);
-    // Without this, a query change right after a failed load leaves the
+    // Without this, a query/sort change right after a failed load leaves the
     // sentinel effect's `if (noMore || loading || error) return;` guard
     // permanently tripped for the NEW query: the stale error message stays
     // on screen with only a manual Retry button instead of the new search
@@ -316,7 +328,7 @@ export function BazaarPage() {
     setError(null);
   }
 
-  // Bumped every time a search reset commits, so an in-flight loadMore
+  // Bumped every time a search/sort reset commits, so an in-flight loadMore
   // response from a stale (pre-reset) request can tell it's stale and skip
   // applying setTotal — items already self-guards via its own offset check,
   // but total has no equivalent natural staleness signal to compare against.
@@ -329,7 +341,7 @@ export function BazaarPage() {
   const requestGeneration = useRef(0);
   useLayoutEffect(() => {
     requestGeneration.current += 1;
-  }, [activeQuery]);
+  }, [resetKey]);
 
   const loadMore = useCallback(async () => {
     if (loading) return;
@@ -342,6 +354,7 @@ export function BazaarPage() {
         offset,
         limit: PAGE_SIZE,
         q: activeQuery || undefined,
+        sort,
         // The grid only shows unsupported entries — a supported one already
         // renders in the pinned section above, and showing it twice under
         // contradictory copy ("Community listings — you configure the fields
@@ -372,7 +385,7 @@ export function BazaarPage() {
     } finally {
       setLoading(false);
     }
-  }, [items.length, loading, activeQuery]);
+  }, [items.length, loading, activeQuery, sort]);
 
   // Sentinel-driven infinite scroll. Re-observes after every load so the
   // callback always closes over the current item count.
@@ -471,23 +484,53 @@ export function BazaarPage() {
               title="Everything else"
               note="Public listings. Add one to a canvas and fill in its details yourself."
             />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search…"
-              aria-label="Search endpoints"
-              style={{
-                height: 32,
-                padding: "0 10px",
-                minWidth: 200,
-                border: "1px solid var(--border)",
-                background: "var(--bg)",
-                borderRadius: "var(--r-2)",
-                color: "var(--fg)",
-                fontSize: 12.5,
-                fontFamily: "var(--font-sans)",
-              }}
-            />
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search… (typos okay)"
+                aria-label="Search endpoints"
+                style={{
+                  height: 32,
+                  padding: "0 10px",
+                  minWidth: 200,
+                  border: "1px solid var(--border)",
+                  background: "var(--bg)",
+                  borderRadius: "var(--r-2)",
+                  color: "var(--fg)",
+                  fontSize: 12.5,
+                  fontFamily: "var(--font-sans)",
+                }}
+              />
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value as BazaarSort)}
+                disabled={Boolean(activeQuery)}
+                aria-label="Sort endpoints"
+                title={
+                  activeQuery
+                    ? "Search results are already ordered by best match."
+                    : undefined
+                }
+                style={{
+                  height: 32,
+                  padding: "0 8px",
+                  border: "1px solid var(--border)",
+                  background: activeQuery ? "var(--bg-elev-2)" : "var(--bg)",
+                  borderRadius: "var(--r-2)",
+                  color: activeQuery ? "var(--fg-dim)" : "var(--fg)",
+                  fontSize: 12.5,
+                  fontFamily: "var(--font-sans)",
+                  cursor: activeQuery ? "default" : "pointer",
+                }}
+              >
+                {BAZAAR_SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="bz-list">

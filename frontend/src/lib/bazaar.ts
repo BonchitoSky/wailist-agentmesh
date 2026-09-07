@@ -43,6 +43,40 @@ export interface BazaarPage {
   supportedCount: number;
 }
 
+// Mirrors backend/internal/api/handlers/bazaar.go's sortItems switch exactly
+// -- "settles" is the default (the crawl's own most-settled-first order,
+// which needs no query param at all) and every other value here has a
+// matching case there.
+export type BazaarSort = "settles" | "name" | "recent" | "price";
+
+export const BAZAAR_SORT_OPTIONS: { value: BazaarSort; label: string }[] = [
+  { value: "settles", label: "Most used" },
+  { value: "name", label: "Name A–Z" },
+  { value: "recent", label: "Recently seen" },
+  { value: "price", label: "Price: low to high" },
+];
+
+function sortMockResources(
+  items: BazaarResource[],
+  by: BazaarSort,
+): BazaarResource[] {
+  const out = [...items];
+  switch (by) {
+    case "name":
+      out.sort((a, b) =>
+        (a.provider ?? a.host).toLowerCase().localeCompare((b.provider ?? b.host).toLowerCase()),
+      );
+      break;
+    case "price":
+      out.sort((a, b) => a.amountMicros - b.amountMicros);
+      break;
+    // "recent" has no fixture timestamp to sort by in mock mode -- MOCK_
+    // RESOURCES is a handful of hand-picked rows, not a live crawl, so
+    // there's nothing meaningful to reorder. Left in the list's own order.
+  }
+  return out;
+}
+
 // MOCK_RESOURCES backs list() when NEXT_PUBLIC_API_URL is unset (mock/demo
 // mode, e.g. a frontend-only preview deploy) -- every other resource in
 // lib/api.ts falls back to fixture data in that mode; this was the one page
@@ -164,6 +198,11 @@ export const bazaar = {
     limit: number;
     q?: string;
     supported?: boolean;
+    // Ignored by the backend (and skipped below) whenever q is set: a
+    // search query already answers "what order" via match relevance, and a
+    // stale client-picked sort winning over that would be worse than no
+    // sort at all -- see BazaarResources' own doc comment.
+    sort?: BazaarSort;
   }): Promise<BazaarPage> => {
     if (BASE) {
       const qs = new URLSearchParams({
@@ -173,6 +212,9 @@ export const bazaar = {
       if (opts.q) qs.set("q", opts.q);
       if (opts.supported !== undefined) {
         qs.set("supported", opts.supported ? "1" : "0");
+      }
+      if (opts.sort && opts.sort !== "settles" && !opts.q) {
+        qs.set("sort", opts.sort);
       }
       const res = await apiFetch(`${BASE}/bazaar/resources?${qs}`, {
         credentials: "include",
@@ -190,6 +232,8 @@ export const bazaar = {
           .toLowerCase()
           .includes(q),
       );
+    } else if (opts.sort && opts.sort !== "settles") {
+      items = sortMockResources(items, opts.sort);
     }
     if (opts.supported !== undefined) {
       items = items.filter((r) => r.supported === opts.supported);

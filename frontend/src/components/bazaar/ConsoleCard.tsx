@@ -6,8 +6,6 @@ import {
   X402_PLATFORM_FEE_USD_MICROS,
   type BazaarResource,
 } from "@/lib/bazaar";
-import { tendril } from "@/lib/tendril";
-import { prism } from "@/lib/prism";
 import { can } from "@/lib/readonly";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import { TENDRIL_DEMO_WORKFLOW, PRISM_DEMO_WORKFLOW } from "@/lib/data";
@@ -44,21 +42,16 @@ const TRY_WORKFLOW_TEMPLATES: Record<string, Workflow> = {
   prism: PRISM_DEMO_WORKFLOW,
 };
 
-// Where each console lives. Resolved on click, never on render: both of these
-// find-or-create a hidden workflow row server-side, and merely LOOKING at the
-// Bazaar must not mint console rows for partners the user has never opened.
-const CONSOLE_ROUTES: Record<
-  string,
-  { create: () => Promise<string>; find: () => Promise<string | null> }
-> = {
-  tendril: {
-    create: () => tendril.console(),
-    find: () => tendril.consoleWorkflowIdIfExists(),
-  },
-  prism: {
-    create: () => prism.console(),
-    find: () => prism.consoleWorkflowIdIfExists(),
-  },
+// Where each console lives. A plain route now, not a workflow id: neither
+// console page reads one (they drive off /tendril/* and /prism/* directly),
+// so there is nothing left to resolve before navigating -- and nothing to
+// accidentally mint just from a click, since the hidden workflow row each
+// console still needs server-side gets created lazily on first real use
+// (PrismConsoleRun / runTendrilAction's own GetOrCreateSystemWorkflow call),
+// not by opening the page.
+const CONSOLE_PATHS: Record<string, string> = {
+  tendril: "/bazaar/tendril",
+  prism: "/bazaar/prism",
 };
 
 // TIER_SUFFIXES are quality tiers, not separate capabilities: "code-review-fast"
@@ -138,43 +131,28 @@ export function ConsoleCard({
 }) {
   const router = useRouter();
   const readOnly = useReadOnly();
-  const [opening, setOpening] = useState(false);
   const [trying, setTrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const provider = resources[0].provider ?? resources[0].host;
   const capabilities = capabilityLabels(resources.map((r) => r.url));
   const copy = CONSOLE_COPY[consoleKey];
-  const route = CONSOLE_ROUTES[consoleKey];
+  const path = CONSOLE_PATHS[consoleKey];
   const template = TRY_WORKFLOW_TEMPLATES[consoleKey];
   const canTryWorkflow = Boolean(template) && can("workflow.create", readOnly);
-  // Mock/demo mode (NEXT_PUBLIC_API_URL unset) has no backend to resolve a
-  // console workflow id against. Say so on the button rather than routing to
-  // a URL that cannot load -- the rest of the page still renders its fixtures
-  // usefully, and a dead click would read as the page being broken.
-  const available = Boolean(BASE) && Boolean(route);
+  // Mock/demo mode (NEXT_PUBLIC_API_URL unset) has no backend for the console
+  // page to actually call. Say so on the button rather than routing to a page
+  // that will just sit on its own load-failed state -- a dead click would
+  // read as the page being broken instead of "this is a preview".
+  const available = Boolean(BASE) && Boolean(path);
 
-  const open = async () => {
-    if (opening || !available || !route) return;
-    setOpening(true);
-    setError(null);
-    try {
-      // A viewer takes the non-creating variant: find-or-create is authoring
-      // even though the call is a GET, and a read-only session must not
-      // author. If no console exists yet there is simply nowhere to go.
-      const id = can("workflow.create", readOnly)
-        ? await route.create()
-        : await route.find();
-      if (!id) {
-        setError("Open this from the AgentMesh desktop app first.");
-        setOpening(false);
-        return;
-      }
-      router.push(`/workflows/${id}`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not open this. Try again.");
-      setOpening(false);
-    }
+  // A plain client-side navigation, not an async action: the console page
+  // itself owns everything past this point (spec fetch, the hidden workflow
+  // row's lazy creation on first run), so there is nothing left to await or
+  // fail here.
+  const open = () => {
+    if (!available || !path) return;
+    router.push(path);
   };
 
   // Unlike `open`, this always creates a fresh workflow row (create() then
@@ -182,7 +160,7 @@ export function ConsoleCard({
   // there is no "the one shared try-it" row to find-or-create, since each
   // click is a new copy the user immediately owns and can edit or throw away.
   const tryWorkflow = async () => {
-    if (trying || opening || !canTryWorkflow || !available || !template) return;
+    if (trying || !canTryWorkflow || !available || !template) return;
     setTrying(true);
     setError(null);
     try {
@@ -246,7 +224,7 @@ export function ConsoleCard({
           <button
             type="button"
             onClick={tryWorkflow}
-            disabled={trying || opening || !available}
+            disabled={trying || !available}
             title={
               available
                 ? `Try a workflow with ${provider}`
@@ -264,7 +242,7 @@ export function ConsoleCard({
               border: "1px solid var(--border-strong)",
               background: "var(--bg)",
               color: trying || !available ? "var(--fg-dim)" : MAGENTA,
-              cursor: trying || opening || !available ? "default" : "pointer",
+              cursor: trying || !available ? "default" : "pointer",
               fontSize: 11,
               padding: 0,
             }}
@@ -337,22 +315,22 @@ export function ConsoleCard({
         <button
           type="button"
           onClick={open}
-          disabled={opening || !available}
+          disabled={!available}
           title={available ? undefined : "This preview has no backend connected."}
           style={{
             height: 32,
             padding: "0 16px",
-            border: `1px solid ${opening || !available ? "var(--border-strong)" : "var(--accent)"}`,
-            background: opening || !available ? "transparent" : "var(--accent)",
-            color: opening || !available ? "var(--fg-dim)" : "var(--accent-fg)",
+            border: `1px solid ${!available ? "var(--border-strong)" : "var(--accent)"}`,
+            background: !available ? "transparent" : "var(--accent)",
+            color: !available ? "var(--fg-dim)" : "var(--accent-fg)",
             borderRadius: "var(--r-2)",
             fontSize: 12,
             fontWeight: 500,
-            cursor: opening || !available ? "default" : "pointer",
+            cursor: !available ? "default" : "pointer",
             fontFamily: "var(--font-sans)",
           }}
         >
-          {!available ? "Unavailable in preview" : opening ? "Opening…" : "Open"}
+          {!available ? "Unavailable in preview" : "Open"}
         </button>
       </div>
 
