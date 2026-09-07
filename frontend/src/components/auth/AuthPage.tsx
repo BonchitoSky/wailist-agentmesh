@@ -625,7 +625,18 @@ const inputStyle: React.CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: "var(--r-2)",
   color: "var(--fg)",
-  fontSize: 13,
+  // 16px, and not a pixel less, on every pointer. Safari on iOS zooms the page
+  // when a field smaller than 16px takes focus, and layout.tsx leaves
+  // `maximumScale` unset on purpose -- so the page cannot refuse the zoom, and
+  // the only lever left is the font size. It was 13.
+  //
+  // Unconditional rather than behind `(pointer: coarse)`, for two reasons. The
+  // width lives in this object, and a media query in a stylesheet cannot beat
+  // an inline style; and there is no `pointer: coarse` block in responsive.css
+  // to extend -- `lib/device.ts` uses that query from JavaScript, which is a
+  // different thing. Making it conditional would mean either a dead CSS rule
+  // or a JS round trip, to keep a 3px difference nobody asked for.
+  fontSize: 16,
   fontFamily: "var(--font-sans)",
   outline: "none",
 };
