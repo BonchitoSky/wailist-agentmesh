@@ -42,9 +42,11 @@ export function WorkflowsPage() {
   // other. A success only clears the error if it's the one that owns it,
   // so it never wipes an unrelated action's still-relevant error.
   const [pageError, setPageError] = useState<{
-    source: "demo" | "delete" | "schedule";
+    source: "demo" | "delete" | "schedule" | "import";
     message: string;
   } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
 
   useEffect(() => {
@@ -105,6 +107,45 @@ export function WorkflowsPage() {
       setCreatingDemo(false);
     }
   }, [creatingDemo, router]);
+
+  // Reads a workflow JSON file (produced by RowMenu's Export) and loads it as
+  // a brand-new workflow row, via the same create-then-update-then-rollback
+  // helper the demo/template buttons use. Exported files never carry real
+  // API keys (GetWorkflow masks them server-side -- see MaskNodes), so an
+  // imported workflow's provider nodes need keys re-entered; that's expected,
+  // not a bug in this path.
+  const handleImportFile = useCallback(
+    async (file: File) => {
+      if (importing) return;
+      setImporting(true);
+      setPageError((prev) => (prev?.source === "import" ? null : prev));
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        if (!Array.isArray(parsed?.nodes) || !Array.isArray(parsed?.edges)) {
+          throw new Error("not a valid workflow export file");
+        }
+        const id = await loadTemplateWorkflow({
+          id: "",
+          name:
+            typeof parsed.name === "string" && parsed.name.trim()
+              ? parsed.name
+              : "Imported workflow",
+          nodes: parsed.nodes,
+          edges: parsed.edges,
+        });
+        router.push(`/workflows/${id}`);
+      } catch (e) {
+        setPageError({
+          source: "import",
+          message:
+            e instanceof Error ? e.message : "could not import workflow",
+        });
+        setImporting(false);
+      }
+    },
+    [importing, router],
+  );
 
   // Deletion is permanent, so the row only calls this after its own in-menu
   // confirm step. The backend refuses (409) for workflows with Tendril lease
@@ -212,7 +253,26 @@ export function WorkflowsPage() {
             </div>
             <div className="wf-actions">
               {can("workflow.create", readOnly) && (
-                <button style={ghostBtn}>Import</button>
+                <>
+                  <input
+                    ref={importInputRef}
+                    type="file"
+                    accept="application/json,.json"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (file) void handleImportFile(file);
+                    }}
+                  />
+                  <button
+                    style={{ ...ghostBtn, opacity: importing ? 0.6 : 1 }}
+                    disabled={importing}
+                    onClick={() => importInputRef.current?.click()}
+                  >
+                    {importing ? "Importing…" : "Import"}
+                  </button>
+                </>
               )}
               {can("workflow.create", readOnly) && (
                 <button
@@ -567,6 +627,46 @@ function RowMenu({
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [view, setView] = useState<"menu" | "schedule">("menu");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  // Export re-fetches the single-workflow GET rather than trusting the row's
+  // list-hydrated props, same reasoning as fetchSchedule below: only GET
+  // /workflows/:id returns the full node/edge graph (and it's the endpoint
+  // that masks API keys server-side -- see MaskNodes in workflows.go).
+  const handleExport = useCallback(async () => {
+    if (exporting) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      const wf = await workflowsApi.get(workflowId);
+      const payload = JSON.stringify(
+        { name: wf.name, nodes: wf.nodes, edges: wf.edges },
+        null,
+        2,
+      );
+      const blob = new Blob([payload], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const slug =
+        wf.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "workflow";
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${slug}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setExportError(
+        e instanceof Error ? e.message : "could not export workflow",
+      );
+    } finally {
+      setExporting(false);
+    }
+  }, [exporting, workflowId]);
   // workflowsApi.list() doesn't return scheduleCron/scheduleNextRunAt (only
   // the single-workflow GET does), so the row's props are always stale --
   // fetched fresh every time the Schedule item is opened, rather than
@@ -650,6 +750,7 @@ function RowMenu({
     setOpen(false);
     setConfirming(false);
     setView("menu");
+    setExportError(null);
     resetSchedule();
   }, [resetSchedule]);
 
@@ -764,6 +865,45 @@ function RowMenu({
               >
                 {scheduleCron ? "Edit schedule" : "Schedule"}
               </button>
+              <button
+                role="menuitem"
+                disabled={exporting}
+                onClick={handleExport}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  border: "none",
+                  borderRadius: 5,
+                  background: "transparent",
+                  color: exporting ? "var(--fg-dim)" : "var(--fg)",
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  fontFamily: "var(--font-sans)",
+                  cursor: exporting ? "not-allowed" : "pointer",
+                }}
+                onMouseEnter={(e) => {
+                  if (!exporting)
+                    e.currentTarget.style.background = "var(--bg-elev-3)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                {exporting ? "Exporting…" : "Export"}
+              </button>
+              {exportError && (
+                <div
+                  style={{
+                    padding: "0 10px 8px",
+                    fontSize: 11,
+                    color: "var(--danger)",
+                  }}
+                >
+                  {exportError}
+                </div>
+              )}
               <div
                 style={{
                   height: 1,
