@@ -7,6 +7,7 @@
 import { loadToken, saveToken, clearToken } from "./auth";
 import { flush, start, stop } from "./geofence";
 import { setGeofence, clearGeofence } from "./api";
+import { clearOptedIn, hasOptedIn } from "./pushPrefs";
 import {
   disablePush,
   enablePush,
@@ -71,6 +72,30 @@ export async function boot(): Promise<string | null> {
   // and a listener registered after that has already missed it -- the app
   // would open on its front page having been asked to open a specific run.
   void listenForTaps().catch(() => {});
+  // Re-register with FCM if this device was already turned on for
+  // notifications. Two reasons, and the second is the one that is easy to
+  // miss:
+  //
+  //   - FCM rotates tokens. A device that registered a month ago may be
+  //     holding a token the server can no longer deliver to, and re-running
+  //     the registration is what refreshes it.
+  //   - push.ts keeps currentToken in memory only, so after a cold start
+  //     nothing knows which row to drop. Without this, a user who turned
+  //     notifications on yesterday could not turn them off today.
+  //
+  // Gated on a restored session, not a signed-out launch: registerDevice is
+  // authenticated and would simply 401. And on boot() rather than onSignedIn,
+  // because onSignedIn is a FRESH sign-in -- possibly a different person on
+  // the same phone -- who has not agreed to anything. onSignedOut clears the
+  // flag, so this can only ever re-arm for the person who set it.
+  //
+  // Not awaited, for the same reason flush() is not: a slow FCM registration
+  // must not hold up the launch.
+  if (token !== null) {
+    void hasOptedIn()
+      .then((optedIn) => (optedIn ? enablePush() : null))
+      .catch((err) => console.error("push: could not re-arm on launch", err));
+  }
   return token;
 }
 
@@ -86,6 +111,12 @@ export const shell: NativeShell = {
     // authenticated call, so clearing the session first would guarantee it
     // fails and leave this device receiving the next user's run results.
     await disablePush();
+    // Belt and braces. disablePush() clears the opt-in already, but it is one
+    // `await` away from a plugin call that can throw on a device with no push
+    // provider at all, and the cost of the flag surviving a sign-out is that
+    // the NEXT person to sign in on this phone is registered for
+    // notifications they were never asked about.
+    await clearOptedIn();
     await clearToken();
   },
 
