@@ -18,14 +18,30 @@ import { IS_NATIVE, authReady } from "@/lib/nativeAuth";
 // native splash stays up until this component has painted and calls hide(), so
 // there is never a moment with nothing on screen.
 
-// Long enough for one full sweep, so a fast boot does not flash the wordmark
-// and vanish. Under this the animation reads as a glitch rather than a load.
+// How long the wordmark is held at minimum, and this one is a product decision
+// rather than a technical floor.
+//
+// 700ms was the technical answer: one full sweep, so a fast boot could not flash
+// the wordmark and vanish, which reads as a glitch rather than a load. 1700 is
+// the deliberate one. Seen on real hardware the screen is worth looking at, and
+// a launch that is over before it registers gives that away for nothing.
+//
+// It also buys the shell a second. NativeBoot's work runs underneath this, so a
+// longer hold means more of it is finished before anything is revealed -- fewer
+// screens that arrive empty and populate a moment later. That is a side effect
+// of holding the screen, not a wait ON the backend: nothing here blocks on a
+// request, and a slow server still resolves through authReady exactly as before.
+//
+// Android's guidance is against artificial timers, and this is one, so it is
+// worth being honest about the trade: one second of brand against one second of
+// waiting. It is defensible while the screen carries something worth seeing. If
+// the wordmark ever goes, this number should go back to 700 with it.
 //
 // Measured from when the wordmark is VISIBLE, not from mount. Those are not the
 // same moment: the native splash sits in its own window on top of the WebView
 // until hide() completes, so a floor started at mount can elapse entirely
 // behind it.
-const MIN_VISIBLE_MS = 700;
+const MIN_VISIBLE_MS = 1700;
 
 // The backstop, and nothing else. It must be LONGER than the boot it is
 // covering or it becomes the normal way out -- which is what went wrong: at
