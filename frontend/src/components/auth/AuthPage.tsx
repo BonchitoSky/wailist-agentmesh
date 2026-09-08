@@ -173,11 +173,15 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
             marginBottom: 16,
           }}
         >
-          <div style={{ width: "100%", maxWidth: 360 }} className="reveal">
+          <div className="auth-card reveal">
             <h1
               style={{
                 margin: 0,
-                fontSize: 32,
+                // Was a flat 32px at every width. On a 320px screen that is
+                // most of the line before the sentence has said anything.
+                // Floor, slope, ceiling -- the shape the landing hero already
+                // uses, an order of magnitude smaller.
+                fontSize: "clamp(24px, 7vw, 32px)",
                 fontWeight: 500,
                 letterSpacing: "-0.025em",
               }}
@@ -274,7 +278,11 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
                       position: "absolute",
                       top: 0,
                       right: 0,
-                      height: 38,
+                      // Matches the field it sits on, which is now the 44px
+                      // floor. At 38 tall and ~40 wide this was the smallest
+                      // target on the screen.
+                      height: 44,
+                      minWidth: 44,
                       padding: "0 10px",
                       background: "transparent",
                       border: "none",
@@ -307,7 +315,9 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
                 type="submit"
                 disabled={loading}
                 style={{
-                  height: 42,
+                  // 42 was two pixels under the floor, which is the least
+                  // defensible way to miss it.
+                  height: 44,
                   marginTop: 12,
                   display: "flex",
                   alignItems: "center",
@@ -618,14 +628,27 @@ function FormField({
 }
 
 const inputStyle: React.CSSProperties = {
-  height: 38,
+  // 44px is this app's touch floor -- the same one .am-sheet-grip holds to and
+  // responsive.css names twice. An input is a tap target before it is a box.
+  height: 44,
   padding: "0 12px",
   width: "100%",
   background: "var(--bg-elev-1)",
   border: "1px solid var(--border)",
   borderRadius: "var(--r-2)",
   color: "var(--fg)",
-  fontSize: 13,
+  // 16px, and not a pixel less, on every pointer. Safari on iOS zooms the page
+  // when a field smaller than 16px takes focus, and layout.tsx leaves
+  // `maximumScale` unset on purpose -- so the page cannot refuse the zoom, and
+  // the only lever left is the font size. It was 13.
+  //
+  // Unconditional rather than behind `(pointer: coarse)`, for two reasons. The
+  // width lives in this object, and a media query in a stylesheet cannot beat
+  // an inline style; and there is no `pointer: coarse` block in responsive.css
+  // to extend -- `lib/device.ts` uses that query from JavaScript, which is a
+  // different thing. Making it conditional would mean either a dead CSS rule
+  // or a JS round trip, to keep a 3px difference nobody asked for.
+  fontSize: 16,
   fontFamily: "var(--font-sans)",
   outline: "none",
 };
