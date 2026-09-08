@@ -31,7 +31,19 @@
 
          postSplashScreenTheme matters as much as the colour: without it the
          window keeps the splash theme after handing over, and the first WebView
-         frame draws against the wrong background. -->
+         frame draws against the wrong background.
+
+         REPLACING THE ICON. drawable/splash_icon.png is the only file to swap,
+         and there are two rules it has to keep, both learned the hard way:
+
+           1. Whatever fills the space around the mark must be exactly the same
+              colour as windowSplashScreenBackground, or fully transparent.
+              Android masks this drawable to a CIRCLE, so any plate that differs
+              from the background renders as a visible disc with its corners cut
+              off. The artwork shipped here originally had a dark slate plate on
+              a black background and did exactly that.
+           2. Keep the mark inside the middle two thirds of the canvas. The
+              outer third is what the circular mask eats. -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/splashBackground</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
