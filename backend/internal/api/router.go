@@ -125,6 +125,8 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Get("/prism/console", d.PrismConsoleWorkflow)
 		r.Get("/prism/console/exists", d.PrismConsoleWorkflowExists)
 		r.Post("/prism/run", d.PrismConsoleRun)
+		r.Post("/prism/repo/files", d.PrismRepoFiles)
+		r.Post("/prism/repo/review", d.PrismRepoReview)
 		r.Get("/leases", d.ListLeases)
 		r.Post("/leases/{id}/release", d.ReleaseLease)
 		r.Get("/leases/{id}/key", d.DownloadLeaseKey)
