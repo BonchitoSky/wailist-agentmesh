@@ -299,8 +299,15 @@ body {
   animation: wordmark-sweep 1.6s var(--ease) infinite;
 }
 
-/* Animating background-position rather than transform: the glyphs must stay
-   put while the colour moves through them. It is composited, not laid out. */
+/* Animating background-position rather than transform: the glyphs must stay put
+   while the colour moves through them.
+
+   This repaints; it is not composited, and an earlier version of this comment
+   claimed otherwise. background-position is a paint property, and with
+   background-clip: text the glyph mask is re-rasterised every frame. It is
+   affordable only because the painted area is the word "Mesh" at 34px -- about
+   90x34 CSS pixels. Do not reach for this technique on a large surface, and do
+   not trust the old claim if you are copying from here. */
 @keyframes wordmark-sweep {
   from {
     background-position: 100% 0;

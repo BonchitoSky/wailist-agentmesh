@@ -20,14 +20,26 @@ import { IS_NATIVE, authReady } from "@/lib/nativeAuth";
 
 // Long enough for one full sweep, so a fast boot does not flash the wordmark
 // and vanish. Under this the animation reads as a glitch rather than a load.
+//
+// Measured from when the wordmark is VISIBLE, not from mount. Those are not the
+// same moment: the native splash sits in its own window on top of the WebView
+// until hide() completes, so a floor started at mount can elapse entirely
+// behind it.
 const MIN_VISIBLE_MS = 700;
 
-// The ceiling. Android's own guidance is that a splash should last as long as
-// loading genuinely takes and no longer -- artificial timers are called out by
-// name -- so this is a cap, not a duration: boot almost always wins the race.
-// It exists so a stalled restore cannot hold someone on a logo forever;
-// NativeBoot has its own 10s timeout, which is far too long to stare at this.
-const MAX_VISIBLE_MS = 2000;
+// The backstop, and nothing else. It must be LONGER than the boot it is
+// covering or it becomes the normal way out -- which is what went wrong: at
+// 2000ms against NativeBoot's 10s timeout, any boot slower than two seconds hit
+// the cap, and the cap tore the wordmark away while the app behind it had
+// still drawn nothing. What the user got was the splash replaced by an empty
+// screen for as long as the app took to render.
+//
+// authReady always settles inside BOOT_TIMEOUT_MS because NativeBoot resolves
+// it in a finally, so this only fires if that contract is broken. Sitting on a
+// branded screen for a moment longer is strictly better than sitting on a blank
+// one: Android's guidance is that a splash lasts as long as loading takes, and
+// loading is not over while the screen is still empty.
+const MAX_VISIBLE_MS = 12_000;
 
 // Matches the fade in globals.css. Kept as a constant because the unmount has
 // to outlast the transition, and two numbers drifting apart would clip it.
@@ -44,15 +56,10 @@ export function AppSplash() {
     if (!IS_NATIVE) return;
 
     let done = false;
-    // Tell the OS it can drop the launch window: this component is painted, so
-    // there is something behind it. Deliberately not awaited -- if the plugin
-    // is missing the splash simply auto-hides as it used to, and the app must
-    // not wait on a teardown it does not depend on.
-    void import("@capacitor/splash-screen")
-      .then(({ SplashScreen }) => SplashScreen.hide())
-      .catch(() => {});
+    let capTimer: number | undefined;
+    let floorTimer: number | undefined;
+    let frame: number | undefined;
 
-    const started = Date.now();
     const leave = () => {
       if (done) return;
       done = true;
@@ -60,19 +67,64 @@ export function AppSplash() {
       window.setTimeout(() => setPhase("gone"), FADE_MS);
     };
 
-    // Whichever comes first: the shell is ready (having waited out the floor),
-    // or the cap. authReady resolves even when boot fails -- NativeBoot calls
-    // markAuthReady in a finally -- so this cannot hang on a broken restore.
-    void authReady.then(() => {
-      const remaining = MIN_VISIBLE_MS - (Date.now() - started);
-      if (remaining > 0) window.setTimeout(leave, remaining);
-      else leave();
-    });
-    const cap = window.setTimeout(leave, MAX_VISIBLE_MS);
+    // Is there anything behind this to reveal?
+    //
+    // authReady says the SHELL has booted. It does not say React has rendered a
+    // screen, and on a slow device those are seconds apart -- long enough that
+    // leaving on authReady alone uncovered an empty page and held it there.
+    // Deliberately generic: any child of <body> that is not the splash and
+    // occupies real space counts, so this never has to know which route the app
+    // opened on or what that route calls its root element.
+    const appHasPainted = () =>
+      Array.from(document.body.children).some(
+        (el) =>
+          !el.classList.contains("splash") &&
+          (el as HTMLElement).getBoundingClientRect().height > 0,
+      );
+
+    // Poll on frames rather than a timer: this is a question about what has been
+    // drawn, so the moment after a paint is exactly when the answer changes. The
+    // splash is animating throughout, so frames are being served -- rAF stalling
+    // on an unpainted page is not a risk while this component is the page.
+    const leaveOncePainted = () => {
+      if (done) return;
+      if (appHasPainted()) return leave();
+      frame = requestAnimationFrame(leaveOncePainted);
+    };
+
+    // The clock starts when the wordmark can actually be SEEN.
+    //
+    // hide() takes the native splash down, and until it resolves this component
+    // is painted but covered. Starting the floor and the cap here rather than at
+    // mount is the whole fix: previously both ran while the native window was
+    // still on top, so the wordmark's entire life could expire before anyone
+    // could see it -- which is what happened, every launch.
+    const begin = () => {
+      if (done) return;
+      const shownAt = Date.now();
+      capTimer = window.setTimeout(leave, MAX_VISIBLE_MS);
+      void authReady.then(() => {
+        const remaining = MIN_VISIBLE_MS - (Date.now() - shownAt);
+        if (remaining > 0)
+          floorTimer = window.setTimeout(leaveOncePainted, remaining);
+        else leaveOncePainted();
+      });
+    };
+
+    // Tell the OS it can drop the launch window: this component is painted, so
+    // there is something behind it. The result is not awaited for correctness --
+    // a missing plugin must not stall boot -- but begin() hangs off it either
+    // way, so a rejection still starts the clock rather than stranding it.
+    void import("@capacitor/splash-screen")
+      .then(({ SplashScreen }) => SplashScreen.hide())
+      .catch(() => {})
+      .finally(begin);
 
     return () => {
       done = true;
-      window.clearTimeout(cap);
+      window.clearTimeout(capTimer);
+      window.clearTimeout(floorTimer);
+      if (frame !== undefined) cancelAnimationFrame(frame);
     };
   }, []);
 
