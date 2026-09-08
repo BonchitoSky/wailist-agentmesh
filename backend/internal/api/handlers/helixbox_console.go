@@ -169,12 +169,19 @@ func (d *Deps) HelixboxConsoleRun(w http.ResponseWriter, r *http.Request) {
 	//
 	// Fails open: an unreachable or changed probe yields StateUnknown, which is
 	// not blocked. See helixbox.Ready.
-	if code := strings.TrimSpace(req.Fields["code"]); code != "" {
-		if state, paidUntil := helixbox.Ready(r.Context(), nil, code, plan.DurationSeconds); state.Blocked() {
-			// 409, not 400: the request is well-formed and would be accepted
-			// at another time. Nothing was charged, and the message says why.
-			respond.Error(w, http.StatusConflict, state.Message(paidUntil))
-			return
+	//
+	// The pairing code's field name is read from the endpoint spec rather
+	// than hardcoded, so a future plan with a differently-named or optional
+	// session field does not silently lose this check — it just has no single
+	// field to preflight on, same as today's zero-field case.
+	if len(plan.Fields) == 1 {
+		if code := strings.TrimSpace(req.Fields[plan.Fields[0].Name]); code != "" {
+			if state, paidUntil := helixbox.Ready(r.Context(), nil, code, plan.DurationSeconds); state.Blocked() {
+				// 409, not 400: the request is well-formed and would be accepted
+				// at another time. Nothing was charged, and the message says why.
+				respond.Error(w, http.StatusConflict, state.Message(paidUntil))
+				return
+			}
 		}
 	}
 

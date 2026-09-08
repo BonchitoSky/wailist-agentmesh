@@ -3,11 +3,15 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/prism"
@@ -42,6 +46,17 @@ const repoReviewCallTimeout = 3 * time.Minute
 
 var githubHTTPClient = &http.Client{Timeout: githubTreeTimeout}
 
+// escapeGitRef percent-escapes a git ref for use in a GitHub API URL segment,
+// segment by segment so slashes in a branch name like "release/1.0" survive as
+// path separators rather than being encoded themselves.
+func escapeGitRef(ref string) string {
+	segs := strings.Split(ref, "/")
+	for i, s := range segs {
+		segs[i] = url.PathEscape(s)
+	}
+	return strings.Join(segs, "/")
+}
+
 // fetchRepoTree lists a repository's files via the GitHub trees API.
 //
 // Unauthenticated: the endpoint has to be a public repo anyway, because PRISM
@@ -53,7 +68,7 @@ func fetchRepoTree(ctx context.Context, ref prism.RepoRef) ([]prism.RepoFile, st
 	if branch == "" {
 		// No ref in the URL: ask GitHub what the default branch is rather than
 		// guessing "main" and 404ing on every repo that still uses "master".
-		repoURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", ref.Owner, ref.Name)
+		repoURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", url.PathEscape(ref.Owner), url.PathEscape(ref.Name))
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, repoURL, nil)
 		if err != nil {
 			return nil, "", err
@@ -61,7 +76,7 @@ func fetchRepoTree(ctx context.Context, ref prism.RepoRef) ([]prism.RepoFile, st
 		req.Header.Set("Accept", "application/vnd.github+json")
 		res, err := githubHTTPClient.Do(req)
 		if err != nil {
-			return nil, "", fmt.Errorf("could not reach GitHub")
+			return nil, "", fmt.Errorf("could not reach GitHub: %w", err)
 		}
 		defer res.Body.Close()
 		if res.StatusCode == http.StatusNotFound {
@@ -76,14 +91,16 @@ func fetchRepoTree(ctx context.Context, ref prism.RepoRef) ([]prism.RepoFile, st
 		var meta struct {
 			DefaultBranch string `json:"default_branch"`
 		}
-		if err := json.NewDecoder(res.Body).Decode(&meta); err != nil || meta.DefaultBranch == "" {
+		if err := json.NewDecoder(res.Body).Decode(&meta); err != nil {
+			return nil, "", fmt.Errorf("could not read that repository's default branch: %w", err)
+		} else if meta.DefaultBranch == "" {
 			return nil, "", fmt.Errorf("could not read that repository's default branch")
 		}
 		branch = meta.DefaultBranch
 	}
 
 	treeURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/git/trees/%s?recursive=1",
-		ref.Owner, ref.Name, branch)
+		url.PathEscape(ref.Owner), url.PathEscape(ref.Name), escapeGitRef(branch))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, treeURL, nil)
 	if err != nil {
 		return nil, "", err
@@ -91,7 +108,7 @@ func fetchRepoTree(ctx context.Context, ref prism.RepoRef) ([]prism.RepoFile, st
 	req.Header.Set("Accept", "application/vnd.github+json")
 	res, err := githubHTTPClient.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("could not reach GitHub")
+		return nil, "", fmt.Errorf("could not reach GitHub: %w", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusNotFound {
@@ -113,7 +130,7 @@ func fetchRepoTree(ctx context.Context, ref prism.RepoRef) ([]prism.RepoFile, st
 		} `json:"tree"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&tree); err != nil {
-		return nil, "", fmt.Errorf("could not read that repository's file list")
+		return nil, "", fmt.Errorf("could not read that repository's file list: %w", err)
 	}
 
 	// GitHub truncates a recursive tree past roughly 100k entries or 7 MB, and
@@ -247,8 +264,17 @@ func (d *Deps) PrismRepoReview(w http.ResponseWriter, r *http.Request) {
 	// every file paid for and then a failure to collect our own markup.
 	if err := d.Store.ReserveCredits(r.Context(), userID, models.X402PlatformFeeUSDMicros); err != nil {
 		d.Store.FinishRun(context.WithoutCancel(r.Context()), run.ID, models.RunStatusFailed)
-		respond.Error(w, http.StatusPaymentRequired,
-			"Not enough credit to start this review. Nothing was charged.")
+		if errors.Is(err, db.ErrInsufficientCredits) {
+			respond.Error(w, http.StatusPaymentRequired,
+				"Not enough credit to start this review. Nothing was charged.")
+			return
+		}
+		// Any other error here is a real infrastructure failure (DB down, tx
+		// conflict), not the user's balance — reporting it as "not enough
+		// credit" would send them to top up when nothing about their balance
+		// is the problem.
+		log.Printf("prism repo review: could not reserve platform fee (user=%s run=%s): %v", userID, run.ID, err)
+		respond.Error(w, http.StatusInternalServerError, "Could not start the review right now. Nothing was charged — try again.")
 		return
 	}
 	feeCommitted := false
@@ -275,8 +301,9 @@ func (d *Deps) PrismRepoReview(w http.ResponseWriter, r *http.Request) {
 	// price. The sizes are free (one more call to the same tree endpoint) and
 	// authoritative, unlike anything the client sends up.
 	//
-	// A listing failure here is not fatal: fall back to the path-and-extension
-	// checks rather than refusing a review because GitHub is rate-limiting us.
+	// A listing failure here is logged but not fatal to the request: the loop
+	// below still runs, it just cannot classify any file by size and so skips
+	// all of them (fail closed) rather than accepting an unverified size.
 	sizes := map[string]int64{}
 	if listed, _, err := fetchRepoTree(r.Context(), ref); err == nil {
 		for _, f := range listed {
@@ -290,24 +317,30 @@ func (d *Deps) PrismRepoReview(w http.ResponseWriter, r *http.Request) {
 	var vendorTotal int64
 	anySettled := false
 
-	for _, p := range body.Paths {
+	for i, p := range body.Paths {
 		// Re-classify server-side. The client sends a list it got from us, but
 		// a caller could post any path — and an unfiltered one is a paid call
 		// on a lockfile or, worse, a traversal out of the repo.
 		//
-		// Size 1 when unknown: a placeholder that passes the size checks, which
-		// is the same permissiveness as the old behaviour and only applies when
-		// the listing above failed.
+		// An unknown size (the re-list above failed, or the file did not
+		// appear in it) fails CLOSED, not open: skip the file rather than
+		// guessing a size that passes the guard. A guessed size that happens
+		// to pass is exactly the "server accepts whatever the client
+		// re-sends" bug this re-classification exists to close.
 		size, known := sizes[p]
 		if !known {
-			size = 1
+			results = append(results, repoReviewResult{Path: p, Error: "skipped: could not verify this file's size — try the review again"})
+			continue
 		}
 		if cls := prism.ClassifyFile(p, size); cls.Skip != "" {
 			results = append(results, repoReviewResult{Path: p, Error: "skipped: " + cls.Skip})
 			continue
 		}
 		node := models.WorkflowNode{
-			ID:       "prism-repo-" + endpoint.ID,
+			// Indexed per file: usage/billing volume metrics count distinct
+			// (run_id, node_id) pairs, so a fixed ID here would collapse an
+			// entire batch's call count down to one.
+			ID:       fmt.Sprintf("prism-repo-%s-%d", endpoint.ID, i),
 			Type:     models.NodeTypeTool402,
 			Name:     endpoint.Title,
 			Endpoint: endpoint.URL(),
