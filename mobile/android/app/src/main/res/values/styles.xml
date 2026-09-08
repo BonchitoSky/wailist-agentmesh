@@ -16,7 +16,25 @@
     </style>
 
 
+    <!-- The launch window, and the only part of startup Android lets an app
+         style. From Android 12 the system draws this itself: an icon on a
+         colour, with the icon capped at 288dp and any animation capped at
+         1000ms. There is no way to put a wordmark here, which is why the
+         animated one lives in the WebView (AppSplash.tsx) and this exists only
+         to make the seam between them invisible.
+
+         The stock template set android:background to a full-screen
+         @drawable/splash PNG. That attribute is not what Theme.SplashScreen
+         reads, so on every device running 12 or newer it did nothing at all:
+         the app was showing the platform default. The three items below are the
+         ones that actually paint.
+
+         postSplashScreenTheme matters as much as the colour: without it the
+         window keeps the splash theme after handing over, and the first WebView
+         frame draws against the wrong background. -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">@color/splashBackground</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
 </resources>
