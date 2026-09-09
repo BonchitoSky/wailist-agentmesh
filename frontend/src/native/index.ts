@@ -7,10 +7,11 @@
 import { loadToken, saveToken, clearToken } from "./auth";
 import { flush, start, stop } from "./geofence";
 import { setGeofence, clearGeofence } from "./api";
-import { clearOptedIn, hasOptedIn } from "./pushPrefs";
+import { clearOptedIn } from "./pushPrefs";
 import {
   disablePush,
   enablePush,
+  restorePush,
   listenForTaps,
   notificationState,
   type PushReadState,
@@ -92,9 +93,9 @@ export async function boot(): Promise<string | null> {
   // Not awaited, for the same reason flush() is not: a slow FCM registration
   // must not hold up the launch.
   if (token !== null) {
-    void hasOptedIn()
-      .then((optedIn) => (optedIn ? enablePush() : null))
-      .catch((err) => console.error("push: could not re-arm on launch", err));
+    void restorePush().catch((err) =>
+      console.error("push: could not re-arm on launch", err),
+    );
   }
   return token;
 }

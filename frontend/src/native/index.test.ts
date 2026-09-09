@@ -29,6 +29,9 @@ function harness(opts: { token: string | null; optedIn: boolean }) {
     clearGeofence: async () => {},
   }));
   vi.doMock("./push", () => ({
+    restorePush: async () => {
+      if (prefs.optedIn) calls.enable += 1;
+    },
     enablePush: async () => {
       calls.enable += 1;
       return "granted";
