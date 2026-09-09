@@ -310,6 +310,23 @@ function UsageBody({
   // Desktop is unaffected: it keeps its five-column table and shows all 18.
   const handheld = useIsHandheld();
   const [showAllSettlements, setShowAllSettlements] = useState(false);
+
+  // Collapse again when the range changes, because the expansion was a decision
+  // about a particular set of rows and those rows are now different ones. Left
+  // alone, "show all 18" silently became "show all" of whatever the next range
+  // returned -- nobody asked for that, and on a wider range it is a long table
+  // they did not open.
+  //
+  // Adjusted during render rather than in an effect: this is the pattern React
+  // documents for resetting state when a value changes, it avoids the extra
+  // commit an effect would cost, and this repo lints against setState in
+  // effects (AuthPage carries a disable comment for exactly that rule).
+  const [rangeShown, setRangeShown] = useState(range);
+  if (rangeShown !== range) {
+    setRangeShown(range);
+    setShowAllSettlements(false);
+  }
+
   const settlementCap =
     handheld && !showAllSettlements ? 6 : settlements.length;
   const visibleSettlements = settlements.slice(0, settlementCap);
