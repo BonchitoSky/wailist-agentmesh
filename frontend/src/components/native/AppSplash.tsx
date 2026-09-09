@@ -91,6 +91,44 @@ const FADE_MS = 220;
 // practice this settles in tens of milliseconds and the cap never fires.
 const FONT_WAIT_MS = 1000;
 
+// Is there anything behind the splash to reveal?
+//
+// authReady says the SHELL has booted. It does not say React has rendered a
+// screen, and on a slow device those are seconds apart -- long enough that
+// leaving on authReady alone uncovered an empty page and held it there.
+//
+// "Occupies space" was the first version of this test and it never waited for
+// anything. The static export ships a full-height placeholder as the second
+// child of <body>,
+//
+//   <div><div style="min-height:100dvh;background:var(--bg)"></div></div>
+//
+// which is exactly the empty screen this is supposed to hold past, and it has
+// height on the very first frame. app/page.tsx renders that same placeholder
+// while it decides between /signin and /workflows, so it is the normal state
+// during boot rather than an edge case: the gate returned true immediately,
+// every launch, and the guard behind it was decorative.
+//
+// So the test is CONTENT, not size: rendered text, or something that is content
+// without being text. Still deliberately generic -- it never has to know which
+// route the app opened on or what that route calls its root element.
+//
+// textContent rather than innerText: jsdom does not implement innerText, and
+// the difference (visibility-aware whitespace) buys nothing here.
+const CONTENTFUL = "img, svg, canvas, input, button, textarea, select";
+
+export function appHasPainted(body: HTMLElement = document.body): boolean {
+  return Array.from(body.children).some((el) => {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el.classList.contains("splash")) return false;
+    if (el.getBoundingClientRect().height <= 0) return false;
+    return (
+      (el.textContent ?? "").trim() !== "" ||
+      el.querySelector(CONTENTFUL) !== null
+    );
+  });
+}
+
 export function AppSplash() {
   // Starts visible, and deliberately not behind a mounted check: the shell is a
   // static export, so this renders into index.html and is on screen in the very
@@ -113,21 +151,6 @@ export function AppSplash() {
       setPhase("leaving");
       window.setTimeout(() => setPhase("gone"), FADE_MS);
     };
-
-    // Is there anything behind this to reveal?
-    //
-    // authReady says the SHELL has booted. It does not say React has rendered a
-    // screen, and on a slow device those are seconds apart -- long enough that
-    // leaving on authReady alone uncovered an empty page and held it there.
-    // Deliberately generic: any child of <body> that is not the splash and
-    // occupies real space counts, so this never has to know which route the app
-    // opened on or what that route calls its root element.
-    const appHasPainted = () =>
-      Array.from(document.body.children).some(
-        (el) =>
-          !el.classList.contains("splash") &&
-          (el as HTMLElement).getBoundingClientRect().height > 0,
-      );
 
     // Poll on frames rather than a timer: this is a question about what has been
     // drawn, so the moment after a paint is exactly when the answer changes. The
