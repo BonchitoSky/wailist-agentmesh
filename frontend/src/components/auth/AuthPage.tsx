@@ -19,6 +19,30 @@ const OAUTH_ERRORS: Record<string, string> = {
   oauth: "Sign in was cancelled or failed.",
 };
 
+// The same idea as OAUTH_ERRORS, for the email and password form.
+//
+// Everything here failed generically before, including a wrong password --
+// which is the single most common thing that happens on this screen, and
+// "Something went wrong. Please try again." is close to the least useful thing
+// to say about it. Someone who mistyped a password retries the same password.
+//
+// Still an allowlist, and deliberately so. The rule this screen keeps is that a
+// server string is never echoed at whoever is standing in front of it: an
+// unrecognised error falls through to the generic message, so a new backend
+// error can only ever make this vaguer, never leak. Keys are the exact strings
+// backend/internal/api/handlers/auth.go returns; a rename there makes this
+// generic again rather than breaking it.
+const FORM_ERRORS: Record<string, string> = {
+  "invalid credentials": "That email and password do not match.",
+  "email already registered":
+    "An account with this email already exists. Try signing in instead.",
+  "valid email required": "Enter a valid email address.",
+  "password must be at least 8 characters":
+    "Passwords need to be at least 8 characters.",
+  "email and password required": "Enter your email and password.",
+  "name required": "Enter your name.",
+};
+
 type Mode = "signin" | "signup";
 
 const DEFAULT_DEST = "/workflows";
@@ -109,7 +133,8 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
       setError(
         err instanceof SessionPersistError
           ? err.message
-          : "Something went wrong. Please try again.",
+          : ((err instanceof Error ? FORM_ERRORS[err.message] : undefined) ??
+              "Something went wrong. Please try again."),
       );
     } finally {
       setLoading(false);
