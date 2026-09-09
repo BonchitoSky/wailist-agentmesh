@@ -793,26 +793,37 @@ function UsageBody({
               </div>
             ))}
           </div>
-          {/* Only when there is something hidden, and only where it was hidden.
-              Says how many rather than just "more", so the tap is an informed
-              one. */}
-          {settlements.length > visibleSettlements.length && (
-            <button
-              type="button"
-              onClick={() => setShowAllSettlements(true)}
-              style={{
-                ...ghostBtnSm,
-                width: "100%",
-                // ghostBtnSm is 28px, which is a pointer size. This one is
-                // tapped, so it takes the 44px floor.
-                minHeight: 44,
-                marginTop: 8,
-              }}
-            >
-              Show all {settlements.length} settlements
-            </button>
-          )}
         </HScroll>
+        {/* Only when there is something hidden, and only where it was hidden.
+            Says how many rather than just "more", so the tap is an informed
+            one.
+
+            OUTSIDE the HScroll, and that placement is the whole point. The rows
+            above are held open by --us-settle-minw (720px) against a card about
+            343px wide on a phone, so the pane scrolls sideways. A block box in
+            normal flow does not grow to its overflowing children, so `width:
+            100%` resolved against the pane's own ~343px content box rather than
+            the 720px canvas: the button was laid out at the left edge of a
+            surface that scrolls, and scrolling right to read Amount and Time
+            carried the one CTA off screen with it -- exactly when somebody has
+            scrolled far enough to want it. The fade this PR adds makes that
+            scroll likelier, which is what turned a latent bug into a real one. */}
+        {settlements.length > visibleSettlements.length && (
+          <button
+            type="button"
+            onClick={() => setShowAllSettlements(true)}
+            style={{
+              ...ghostBtnSm,
+              width: "100%",
+              // ghostBtnSm is 28px, which is a pointer size. This one is
+              // tapped, so it takes the 44px floor.
+              minHeight: 44,
+              marginTop: 8,
+            }}
+          >
+            Show all {settlements.length} settlements
+          </button>
+        )}
       </Card>
 
       {/* ⑥ Footer note */}
