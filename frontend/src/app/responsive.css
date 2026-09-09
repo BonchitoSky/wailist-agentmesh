@@ -40,7 +40,7 @@
 }
 
 /* ── Safe areas ─────────────────────────────────────────────────────────────
-   The app targets Android SDK 35, so from Android 15 the WebView draws behind
+   The app targets Android SDK 36, so from Android 15 the WebView draws behind
    the status and navigation bars and the page is responsible for keeping its
    own content clear of them. `viewport-fit=cover` in layout.tsx opts in; these
    classes are the other half.
