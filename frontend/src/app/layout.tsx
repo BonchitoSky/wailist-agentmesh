@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { NativeBoot } from "@/components/native/NativeBoot";
 import { BottomNav } from "@/components/nav/BottomNav";
+import { RouteTransition } from "@/components/nav/RouteTransition";
 import { IS_NATIVE } from "@/lib/nativeAuth";
 import { buildCsp } from "@/lib/csp";
 import localFont from "next/font/local";
@@ -124,7 +125,9 @@ export default function RootLayout({
         }}
       >
         <NativeBoot />
-        {children}
+        {/* Wraps the page so an arriving screen can be given a direction on a
+            phone. A no-op on desktop and under reduced motion. */}
+        <RouteTransition>{children}</RouteTransition>
         {/* Renders itself only on a handheld, and only at a section root. One
             mount point rather than one per page: it is app-wide chrome, and
             every page that would have to opt in is a page that can forget to. */}
