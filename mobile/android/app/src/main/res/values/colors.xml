@@ -1,15 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The literal value of the bg custom property in
-         frontend/src/app/globals.css, and of layout.tsx's themeColor. It has to
-         be a literal here: the launch window is painted by the OS before any web
+    <!-- The app's background, and the literal value of the bg custom property
+         in frontend/src/app/globals.css and of layout.tsx's themeColor. It has
+         to be a literal here: the window is painted by the OS before any web
          content exists, so it cannot read a CSS custom property. If that token
-         ever changes, this changes with it, or the hand-off from the system
-         splash to the WebView shows a seam.
+         changes, this changes with it, or the hand-off from the system splash
+         to the WebView shows a seam.
 
-         Named without its two leading hyphens on purpose. XML forbids a double
-         hyphen anywhere inside a comment, and Android reports it from the
-         resource merge rather than the parser, so the failure arrives as a line
-         and column with no hint that a comment is the cause. -->
-    <color name="splashBackground">#08070c</color>
+         Named for the app rather than for one screen, because the window
+         background is what shows through wherever the WebView has not drawn:
+         behind the system bars, and for the moment between the window opening
+         and the first web paint. Both #195 and #176 need exactly this value,
+         and one name for it is what stops a fourth copy of #08070c appearing.
+
+         Named without the leading hyphens of the CSS property on purpose. XML
+         forbids a double hyphen anywhere inside a comment, and Android reports
+         it from the resource merge rather than the parser, so the failure
+         arrives as a line and column with no hint that a comment is the
+         cause. -->
+    <color name="appBackground">#08070c</color>
 </resources>
