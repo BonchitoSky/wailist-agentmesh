@@ -550,8 +550,8 @@ body {
    padding-top outright. responsive.css says so in its own header: a rule that
    has to beat a globals.css declaration belongs next to it, not there. */
 .auth-form-col {
-  padding: calc(40px + env(safe-area-inset-top, 0px)) 56px
-    calc(40px + env(safe-area-inset-bottom, 0px));
+  padding: calc(40px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))) 56px
+    calc(40px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   overflow: auto;
 }
 /* The form's own width. It was an inline `maxWidth: 360` on the element, which
@@ -575,8 +575,8 @@ body {
      follows the collapse now, and the card is allowed to use the width it
      just gained. */
   .auth-form-col {
-    padding: calc(28px + env(safe-area-inset-top, 0px)) 24px
-      calc(28px + env(safe-area-inset-bottom, 0px));
+    padding: calc(28px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))) 24px
+      calc(28px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   }
   .auth-card {
     max-width: 420px;
@@ -584,8 +584,8 @@ body {
 }
 @media (max-width: 520px) {
   .auth-form-col {
-    padding: calc(20px + env(safe-area-inset-top, 0px)) 20px
-      calc(24px + env(safe-area-inset-bottom, 0px));
+    padding: calc(20px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))) 20px
+      calc(24px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
   }
   /* On a phone the form IS the screen: no card, no centred column, just the
      full width inside the padding. */
