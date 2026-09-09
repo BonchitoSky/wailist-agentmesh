@@ -8,6 +8,7 @@ import { loadToken, saveToken, clearToken } from "./auth";
 import { flush, start, stop } from "./geofence";
 import { setGeofence, clearGeofence } from "./api";
 import { disablePush, enablePush, listenForTaps, type PushState } from "./push";
+import { listenForCallback } from "./oauth";
 
 export interface NativeShell {
   onSignedIn(token: string): Promise<void>;
@@ -49,6 +50,29 @@ export async function boot(): Promise<string | null> {
   // and a listener registered after that has already missed it -- the app
   // would open on its front page having been asked to open a specific run.
   void listenForTaps().catch(() => {});
+  // Same reasoning, and the same cold start: the OAuth callback arrives as an
+  // Android intent, and Android is free to have killed the app while the Custom
+  // Tab was in front. A listener attached when the sign-in screen mounts would
+  // miss the answer to the question that screen asked.
+  //
+  // The token goes in through the same seam password sign-in uses rather than
+  // through saveToken directly -- see persistNativeSession -- so a failed write
+  // rolls the session back instead of leaving the app half signed in.
+  void listenForCallback(async (result) => {
+    if (!result.ok) {
+      window.location.assign(
+        `/signin?error=${encodeURIComponent(result.reason)}`,
+      );
+      return;
+    }
+    const { persistNativeSession } = await import("@/hooks/useAuth");
+    try {
+      await persistNativeSession(result.token);
+      window.location.assign("/workflows");
+    } catch {
+      window.location.assign("/signin?error=session_persist");
+    }
+  }).catch(() => {});
   return token;
 }
 

@@ -181,6 +181,27 @@ export const auth = {
   // is configured (mock mode) -- callers should guard on the http prefix.
   oauthURL: (provider: "github" | "google"): string =>
     BASE ? `${BASE}/auth/oauth/${provider}` : "",
+
+  // Swap the one-time code from an ai.agentmesh.app://auth deep link for a
+  // session token. Native only: the web flow ends in a cookie and never sees a
+  // code at all. Returns null when the backend refuses -- an expired code and a
+  // wrong verifier are deliberately indistinguishable there, so there is
+  // nothing more specific to hand back. See native/oauth.ts and the Go side's
+  // handlers/oauth_native.go.
+  oauthExchange: async (
+    code: string,
+    verifier: string,
+  ): Promise<string | null> => {
+    if (!BASE) return null;
+    const res = await apiFetch(`${BASE}/auth/oauth/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, verifier }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { token?: string };
+    return data.token ?? null;
+  },
 };
 
 // -- Workflows ------------------------------------------------------------
@@ -225,7 +246,12 @@ export const workflows = {
       return data;
     }
     await delay(80);
-    return { lowUsdMicros: 0, highUsdMicros: 0, lines: [], hasUnpricedX402: false };
+    return {
+      lowUsdMicros: 0,
+      highUsdMicros: 0,
+      lines: [],
+      hasUnpricedX402: false,
+    };
   },
 
   // TODO: POST /workflows
