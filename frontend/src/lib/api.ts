@@ -182,6 +182,16 @@ export const auth = {
   oauthURL: (provider: "github" | "google"): string =>
     BASE ? `${BASE}/auth/oauth/${provider}` : "",
 
+  // The external browser must start on the frontend proxy's origin so its
+  // state cookie is also sent to the provider callback.
+  nativeOAuthURL: async (provider: "github" | "google"): Promise<string> => {
+    if (!BASE) throw new Error("Social sign in is not configured.");
+    const res = await apiFetch(`${BASE}/auth/oauth/${provider}/url`);
+    if (!res.ok) throw new Error("Social sign in is not configured.");
+    const data = (await res.json()) as { url: string };
+    return data.url;
+  },
+
   // Swap the one-time code from an ai.agentmesh.app://auth deep link for a
   // session token. Native only: the web flow ends in a cookie and never sees a
   // code at all. Returns null when the backend refuses -- an expired code and a

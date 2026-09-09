@@ -23,6 +23,7 @@ func NewRouter(d *handlers.Deps) http.Handler {
 	r.Post("/auth/signin", d.SignIn)
 	r.Post("/auth/signout", d.SignOut)
 	r.Get("/auth/oauth/{provider}", d.OAuthStart)
+	r.Get("/auth/oauth/{provider}/url", d.OAuthStartURL)
 	r.Get("/auth/oauth/{provider}/callback", d.OAuthCallback)
 	// Public because the caller has no session yet — that is the whole point of
 	// it. The one-time code it takes is the credential, and it is worthless

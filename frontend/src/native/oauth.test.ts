@@ -35,11 +35,15 @@ async function loadModule(opts: {
   calls?: ExchangeCall[];
 }) {
   const session = fakeSessionStorage(opts.session);
-  vi.stubGlobal("sessionStorage", session.api);
+  vi.doMock("./secureStore", () => ({ SecureStore: {
+    get: async ({ key }: { key: string }) => ({ value: session.api.getItem(key) }),
+    set: async ({ key, value }: { key: string; value: string }) => session.api.setItem(key, value),
+    remove: async ({ key }: { key: string }) => session.api.removeItem(key),
+  } }));
 
   vi.doMock("@/lib/api", () => ({
     auth: {
-      oauthURL: (p: string) => `https://api.test/auth/oauth/${p}`,
+      nativeOAuthURL: async (p: string) => `https://app.test/api/auth/oauth/${p}`,
       oauthExchange: async (code: string, verifier: string) => {
         opts.calls?.push({ code, verifier });
         return opts.exchange
@@ -93,9 +97,7 @@ describe("handleCallbackUrl", () => {
     expect(calls).toEqual([]);
   });
 
-  it("fails when the app was restarted and the verifier is gone", async () => {
-    // The real case: Android killed the app behind the Custom Tab, and
-    // sessionStorage went with it. Better a sign-in screen than a silent hang.
+  it("fails when there is no pending sign-in", async () => {
     const { mod } = await loadModule({ session: {} });
 
     const result = await mod.handleCallbackUrl(
@@ -166,6 +168,7 @@ describe("listenForCallback", () => {
     const attached: string[] = [];
     vi.doMock("@capacitor/app", () => ({
       App: {
+        getLaunchUrl: async () => undefined,
         addListener: async (event: string) => {
           attached.push(event);
           return { remove: async () => {} };
@@ -186,6 +189,7 @@ describe("listenForCallback", () => {
     let fire: ((e: { url: string }) => void) | undefined;
     vi.doMock("@capacitor/app", () => ({
       App: {
+        getLaunchUrl: async () => undefined,
         addListener: async (_e: string, cb: (e: { url: string }) => void) => {
           fire = cb;
           return { remove: async () => {} };

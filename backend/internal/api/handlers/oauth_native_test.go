@@ -159,6 +159,7 @@ func postExchange(t *testing.T, d *Deps, body string) *httptest.ResponseRecorder
 
 func TestExchangeReturnsATokenForTheRightVerifier(t *testing.T) {
 	d := testDeps()
+	d.Store = oauthTestStore(t)
 	verifier := "the-verifier-the-app-kept"
 	code, err := d.issueExchangeCode("user-1", "a@b.test", challengeOf(verifier))
 	if err != nil {

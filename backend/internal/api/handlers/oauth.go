@@ -51,6 +51,19 @@ func (d *Deps) providerConfig(name string) (oauthProvider, bool) {
 	return oauthProvider{}, false
 }
 
+// OAuthStartURL gives native clients the browser URL on the callback's origin.
+func (d *Deps) OAuthStartURL(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "provider")
+	if _, ok := d.providerConfig(name); !ok {
+		respond.Error(w, http.StatusNotFound, "unknown or unconfigured provider")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	respond.JSON(w, http.StatusOK, map[string]string{
+		"url": strings.TrimSuffix(d.oauthRedirectURI(name), "/callback"),
+	})
+}
+
 // OAuthStart redirects the browser to the provider's consent screen.
 func (d *Deps) OAuthStart(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "provider")

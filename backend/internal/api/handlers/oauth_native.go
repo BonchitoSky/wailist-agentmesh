@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -142,19 +143,22 @@ type exchangeClaims struct {
 
 // issueExchangeCode mints the one-time code the app swaps for a session.
 //
-// A signed, self-describing code rather than a row in a table: it needs no
-// storage, no cleanup, and no assumption about how many instances of this
-// server are running. Single use is enforced by the minute-long expiry and by
-// the challenge — a replay needs the verifier, which never left the device.
+// A unique identifier keeps separate grants distinct even within one second.
+// Redemption is recorded atomically in the shared database.
 func (d *Deps) issueExchangeCode(userID, email, challenge string) (string, error) {
 	if len(d.JWTSecret) < 32 {
 		return "", errors.New("jwt secret not configured")
+	}
+	id, err := randHex(16)
+	if err != nil {
+		return "", err
 	}
 	claims := exchangeClaims{
 		UserID:    userID,
 		Email:     email,
 		Challenge: challenge,
 		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        id,
 			Issuer:    exchangeIssuer,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(exchangeTTL)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -211,8 +215,8 @@ func (d *Deps) OAuthExchange(w http.ResponseWriter, r *http.Request) {
 			return nil, errors.New("unexpected signing method")
 		}
 		return []byte(d.JWTSecret), nil
-	}, jwt.WithIssuer(exchangeIssuer), jwt.WithExpirationRequired())
-	if err != nil || claims.UserID == "" {
+	}, jwt.WithIssuer(exchangeIssuer), jwt.WithExpirationRequired(), jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil || claims.UserID == "" || claims.ID == "" {
 		respond.Error(w, http.StatusUnauthorized, "invalid or expired code")
 		return
 	}
@@ -227,6 +231,20 @@ func (d *Deps) OAuthExchange(w http.ResponseWriter, r *http.Request) {
 	token, err := d.issueToken(models.User{ID: claims.UserID, Email: claims.Email})
 	if err != nil {
 		respond.Error(w, http.StatusInternalServerError, "could not issue token")
+		return
+	}
+	if d.Store == nil {
+		respond.Error(w, http.StatusServiceUnavailable, "could not exchange code")
+		return
+	}
+	consumed, err := d.Store.ConsumeOAuthExchangeCode(r.Context(), claims.ID, claims.ExpiresAt.Time)
+	if err != nil {
+		slog.Error("could not consume oauth exchange code", "error", err)
+		respond.Error(w, http.StatusServiceUnavailable, "could not exchange code")
+		return
+	}
+	if !consumed {
+		respond.Error(w, http.StatusUnauthorized, "invalid or expired code")
 		return
 	}
 	// No cookie. The app is a bearer client, and setting one here would put a

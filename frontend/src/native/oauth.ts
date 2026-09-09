@@ -1,5 +1,6 @@
 import type { PluginListenerHandle } from "@capacitor/core";
 import { auth } from "@/lib/api";
+import { SecureStore } from "./secureStore";
 
 // OAuth sign-in from inside the app.
 //
@@ -13,7 +14,7 @@ import { auth } from "@/lib/api";
 // So the provider is opened OUTSIDE the WebView and the answer comes back as an
 // Android intent:
 //
-//   start()  -> Custom Tab at <api>/auth/oauth/<provider>?client=android&challenge=
+//   start()  -> Custom Tab at <frontend>/api/auth/oauth/<provider>?client=android&challenge=
 //               ... provider, consent, backend callback ...
 //   intent   -> ai.agentmesh.app://auth?code=<one-time>
 //   handle() -> POST /auth/oauth/exchange {code, verifier} -> session token
@@ -31,21 +32,12 @@ import { auth } from "@/lib/api";
 // Android simply does not match the intent-filter, the Custom Tab sits open,
 // and nothing anywhere says why.
 const APP_SCHEME = "ai.agentmesh.app";
-const CALLBACK_PREFIX = `${APP_SCHEME}://auth`;
 
-// Where the verifier waits between the two halves of the flow.
-//
-// sessionStorage, not a module variable: the Custom Tab is a separate task and
-// Android is free to kill the app behind it on a low-memory device. A verifier
-// held in memory would be gone exactly when the user came back, and the flow
-// would fail at the last step having already asked them for consent. Not the
-// secure store either -- this is a value with a 60-second life that is
-// worthless once used, and the secure store is an async native call on the path
-// where the app is being resumed.
+// Persist through process death while the external browser is open.
 const VERIFIER_KEY = "agentmesh.oauth.verifier";
 
 // 32 bytes, hex. Long enough that guessing it is not a strategy, and printable
-// so it survives a URL and sessionStorage with no encoding questions.
+// so it survives storage with no encoding questions.
 function newVerifier(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -71,18 +63,24 @@ async function challengeOf(verifier: string): Promise<string> {
 // useful to open and a Custom Tab showing an error page is worse than a
 // sentence on the sign-in screen.
 export async function start(provider: "github" | "google"): Promise<void> {
-  const base = auth.oauthURL(provider);
+  const base = await auth.nativeOAuthURL(provider);
   if (!base) throw new Error("Social sign in is not configured.");
 
   const verifier = newVerifier();
-  sessionStorage.setItem(VERIFIER_KEY, verifier);
+  await SecureStore.set({ key: VERIFIER_KEY, value: verifier });
+  lastCallbackURL = null;
 
   const url = `${base}?client=android&challenge=${encodeURIComponent(
     await challengeOf(verifier),
   )}`;
 
   const { Browser } = await import("@capacitor/browser");
-  await Browser.open({ url });
+  try {
+    await Browser.open({ url });
+  } catch (error) {
+    await SecureStore.remove({ key: VERIFIER_KEY });
+    throw error;
+  }
 }
 
 // The outcome of one callback, so the caller decides what to show. A thrown
@@ -103,19 +101,17 @@ export async function handleCallbackUrl(url: string): Promise<OAuthResult> {
     return { ok: false, reason: "bad_callback" };
   }
 
-  const error = parsed.searchParams.get("error");
-  if (error) return { ok: false, reason: error };
-
-  const code = parsed.searchParams.get("code");
-  if (!code) return { ok: false, reason: "no_code" };
-
-  // Read and clear together. A verifier left behind would be reused by the next
-  // attempt, and a second attempt is exactly when the first one went wrong.
-  const verifier = sessionStorage.getItem(VERIFIER_KEY);
-  sessionStorage.removeItem(VERIFIER_KEY);
-  if (!verifier) return { ok: false, reason: "no_verifier" };
+  if (!isCallbackURL(parsed)) return { ok: false, reason: "bad_callback" };
 
   try {
+    const { value: verifier } = await SecureStore.get({ key: VERIFIER_KEY });
+    await SecureStore.remove({ key: VERIFIER_KEY });
+    const error = parsed.searchParams.get("error");
+    if (error) return { ok: false, reason: error };
+    const code = parsed.searchParams.get("code");
+    if (!code) return { ok: false, reason: "no_code" };
+    if (!verifier) return { ok: false, reason: "no_verifier" };
+
     const token = await auth.oauthExchange(code, verifier);
     return token
       ? { ok: true, token }
@@ -125,37 +121,58 @@ export async function handleCallbackUrl(url: string): Promise<OAuthResult> {
   }
 }
 
-let urlListener: PluginListenerHandle | null = null;
+function isCallbackURL(url: URL): boolean {
+  return (
+    url.protocol === `${APP_SCHEME}:` &&
+    url.hostname === "auth" &&
+    (url.pathname === "" || url.pathname === "/")
+  );
+}
 
-// listenForCallback attaches the deep-link handler.
-//
-// Idempotent for the same reason listenForTaps is: a second attachment would
-// run one callback twice, and the second run finds the verifier already cleared
-// and reports a failure over a sign-in that actually worked.
-//
-// It belongs in boot() rather than on the sign-in screen. The intent can arrive
-// at a cold start -- Android may have killed the app while the Custom Tab was
-// in front -- and a listener registered when some component mounts has already
-// missed it.
-export async function listenForCallback(
+let urlListener: PluginListenerHandle | null = null;
+let listening: Promise<void> | null = null;
+let lastCallbackURL: string | null = null;
+
+// Attach before reading the initial intent, then deduplicate either delivery.
+export function listenForCallback(
   onResult: (result: OAuthResult) => void | Promise<void>,
 ): Promise<void> {
-  if (urlListener) return;
-
-  const { App } = await import("@capacitor/app");
-  urlListener = await App.addListener("appUrlOpen", (event) => {
-    if (!event.url?.startsWith(CALLBACK_PREFIX)) return;
-    void (async () => {
-      const result = await handleCallbackUrl(event.url);
-      // Close the Custom Tab whichever way it went. Left open, the user returns
-      // to the app and finds the consent screen still sitting behind it.
+  if (listening) return listening;
+  listening = (async () => {
+    const { App } = await import("@capacitor/app");
+    const deliver = async (url: string) => {
+      try {
+        if (!isCallbackURL(new URL(url))) return;
+      } catch {
+        return;
+      }
+      if (lastCallbackURL === url) return;
+      lastCallbackURL = url;
+      // Android retains the initial intent across WebView navigations. Once
+      // consumed, a page reload must not exchange it again or undo sign-in.
+      const pending = await SecureStore.get({ key: VERIFIER_KEY });
+      if (!pending.value) return;
+      const result = await handleCallbackUrl(url);
       try {
         const { Browser } = await import("@capacitor/browser");
         await Browser.close();
       } catch {
-        // Nothing to close, or no plugin. Not a reason to drop the result.
+        // Android may have already closed the tab.
       }
       await onResult(result);
-    })();
+    };
+    urlListener = await App.addListener("appUrlOpen", (event) => {
+      void deliver(event.url).catch(() => {
+        console.error("Could not deliver the sign-in result.");
+      });
+    });
+    const launch = await App.getLaunchUrl();
+    if (launch?.url) await deliver(launch.url);
+  })().catch(async (error) => {
+    await urlListener?.remove();
+    urlListener = null;
+    listening = null;
+    throw error;
   });
+  return listening;
 }
