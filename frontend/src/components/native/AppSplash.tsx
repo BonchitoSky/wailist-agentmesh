@@ -61,6 +61,74 @@ const MAX_VISIBLE_MS = 12_000;
 // to outlast the transition, and two numbers drifting apart would clip it.
 const FADE_MS = 220;
 
+// How long the native splash is allowed to wait for the wordmark's real font,
+// and why waiting at all is necessary.
+//
+// next/font builds its metric-corrected fallback face out of `local(Arial)`:
+//
+//   @font-face{font-family:geistSans Fallback;src:local(Arial);
+//              ascent-override:94.56%;size-adjust:106.28%}
+//
+// Android has no Arial. That face never resolves, so the WebView falls all the
+// way through to Roboto with NONE of those overrides applied, and Geist then
+// arrives a frame or two later under font-display:swap. Measured on the shipped
+// bundle at this component's own 600/34px: Geist sets "AgentMesh" at 179.97px,
+// Roboto at 160.09px. The mark is centred, so the swap moved each end of the
+// wordmark about ten CSS pixels sideways -- a visible flinch, once, per launch.
+//
+// It never showed on the web because desktops HAVE Arial: there the fallback
+// resolves and the same measurement is 176.67px, three pixels off rather than
+// twenty. This is an Android-only defect by construction.
+//
+// The fix is ordering, not metrics. The native splash is already held open by
+// launchAutoHide:false, so the fallback frame can simply be painted BEHIND it:
+// wait for fonts before hide(), and the first frame anyone sees is already set
+// in Geist. Hand-tuning a size-adjust for Roboto instead would be a guess that
+// has to be re-guessed for every device font.
+//
+// Capped, because a font that never arrives must not strand boot behind the
+// native splash. The woff2 is on the device and <link rel=preload>ed, so in
+// practice this settles in tens of milliseconds and the cap never fires.
+const FONT_WAIT_MS = 1000;
+
+// Is there anything behind the splash to reveal?
+//
+// authReady says the SHELL has booted. It does not say React has rendered a
+// screen, and on a slow device those are seconds apart -- long enough that
+// leaving on authReady alone uncovered an empty page and held it there.
+//
+// "Occupies space" was the first version of this test and it never waited for
+// anything. The static export ships a full-height placeholder as the second
+// child of <body>,
+//
+//   <div><div style="min-height:100dvh;background:var(--bg)"></div></div>
+//
+// which is exactly the empty screen this is supposed to hold past, and it has
+// height on the very first frame. app/page.tsx renders that same placeholder
+// while it decides between /signin and /workflows, so it is the normal state
+// during boot rather than an edge case: the gate returned true immediately,
+// every launch, and the guard behind it was decorative.
+//
+// So the test is CONTENT, not size: rendered text, or something that is content
+// without being text. Still deliberately generic -- it never has to know which
+// route the app opened on or what that route calls its root element.
+//
+// textContent rather than innerText: jsdom does not implement innerText, and
+// the difference (visibility-aware whitespace) buys nothing here.
+const CONTENTFUL = "img, svg, canvas, input, button, textarea, select";
+
+export function appHasPainted(body: HTMLElement = document.body): boolean {
+  return Array.from(body.children).some((el) => {
+    if (!(el instanceof HTMLElement)) return false;
+    if (el.classList.contains("splash")) return false;
+    if (el.getBoundingClientRect().height <= 0) return false;
+    return (
+      (el.textContent ?? "").trim() !== "" ||
+      el.querySelector(CONTENTFUL) !== null
+    );
+  });
+}
+
 export function AppSplash() {
   // Starts visible, and deliberately not behind a mounted check: the shell is a
   // static export, so this renders into index.html and is on screen in the very
@@ -74,6 +142,7 @@ export function AppSplash() {
     let done = false;
     let capTimer: number | undefined;
     let floorTimer: number | undefined;
+    let fontTimer: number | undefined;
     let frame: number | undefined;
 
     const leave = () => {
@@ -82,21 +151,6 @@ export function AppSplash() {
       setPhase("leaving");
       window.setTimeout(() => setPhase("gone"), FADE_MS);
     };
-
-    // Is there anything behind this to reveal?
-    //
-    // authReady says the SHELL has booted. It does not say React has rendered a
-    // screen, and on a slow device those are seconds apart -- long enough that
-    // leaving on authReady alone uncovered an empty page and held it there.
-    // Deliberately generic: any child of <body> that is not the splash and
-    // occupies real space counts, so this never has to know which route the app
-    // opened on or what that route calls its root element.
-    const appHasPainted = () =>
-      Array.from(document.body.children).some(
-        (el) =>
-          !el.classList.contains("splash") &&
-          (el as HTMLElement).getBoundingClientRect().height > 0,
-      );
 
     // Poll on frames rather than a timer: this is a question about what has been
     // drawn, so the moment after a paint is exactly when the answer changes. The
@@ -127,11 +181,34 @@ export function AppSplash() {
       });
     };
 
+    // Wait for the wordmark's real font, then one frame for the re-layout to
+    // paint. Both happen while the native splash is still on top, so the
+    // fallback setting of the wordmark never reaches the screen. See
+    // FONT_WAIT_MS for the measurements behind this.
+    //
+    // document.fonts.ready and not fonts.load(): the family name next/font
+    // generates is a build hash, so naming it here would be a string that
+    // silently stops matching one build later. This component is in the first
+    // frame of the document, so its font request is already pending by the time
+    // this effect runs and ready cannot resolve ahead of it.
+    const fontsSettled = () =>
+      Promise.race([
+        document.fonts
+          ? document.fonts.ready.then(
+              () => new Promise<void>((r) => requestAnimationFrame(() => r())),
+            )
+          : Promise.resolve(),
+        new Promise<void>((r) => {
+          fontTimer = window.setTimeout(r, FONT_WAIT_MS);
+        }),
+      ]);
+
     // Tell the OS it can drop the launch window: this component is painted, so
     // there is something behind it. The result is not awaited for correctness --
     // a missing plugin must not stall boot -- but begin() hangs off it either
     // way, so a rejection still starts the clock rather than stranding it.
-    void import("@capacitor/splash-screen")
+    void fontsSettled()
+      .then(() => import("@capacitor/splash-screen"))
       .then(({ SplashScreen }) => SplashScreen.hide())
       .catch(() => {})
       .finally(begin);
@@ -140,6 +217,7 @@ export function AppSplash() {
       done = true;
       window.clearTimeout(capTimer);
       window.clearTimeout(floorTimer);
+      window.clearTimeout(fontTimer);
       if (frame !== undefined) cancelAnimationFrame(frame);
     };
   }, []);
