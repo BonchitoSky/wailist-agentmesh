@@ -1,7 +1,12 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Topbar } from "@/components/Topbar";
-import { bazaar, BAZAAR_SORT_OPTIONS, type BazaarResource, type BazaarSort } from "@/lib/bazaar";
+import {
+  bazaar,
+  BAZAAR_SORT_OPTIONS,
+  type BazaarResource,
+  type BazaarSort,
+} from "@/lib/bazaar";
 import { ResourceCard } from "./ResourceCard";
 import { ConsoleCard } from "./ConsoleCard";
 import { EndpointRow } from "./EndpointRow";
@@ -432,10 +437,25 @@ export function BazaarPage() {
   const canGoNext = page < totalPages - 1;
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    // .am-viewport-min rather than a raw 100vh: on a phone browser 100vh
+    // measures the viewport with the toolbars retracted, so the page runs taller
+    // than the screen and its bottom sits behind the address bar. The class
+    // carries the vh -> dvh fallback pair, which an inline style cannot express.
+    // min-height, not height, because this list grows as it pages in.
+    <div
+      className="am-viewport-min"
+      style={{ display: "flex", flexDirection: "column" }}
+    >
       <style>{BAZAAR_CSS}</style>
       <Topbar />
-      <div style={{ padding: "24px 24px 64px", maxWidth: 1180, width: "100%", margin: "0 auto" }}>
+      <div
+        style={{
+          padding: "24px 24px 64px",
+          maxWidth: 1180,
+          width: "100%",
+          margin: "0 auto",
+        }}
+      >
         <h1
           style={{
             margin: 0,
@@ -470,7 +490,11 @@ export function BazaarPage() {
             {consoles.length > 0 && (
               <div style={CONSOLE_GRID}>
                 {consoles.map(([key, resources]) => (
-                  <ConsoleCard key={key} consoleKey={key} resources={resources} />
+                  <ConsoleCard
+                    key={key}
+                    consoleKey={key}
+                    resources={resources}
+                  />
                 ))}
               </div>
             )}
@@ -552,7 +576,11 @@ export function BazaarPage() {
           <div className="bz-list">
             {groupedItems.map(([host, resources]) =>
               resources.length === 1 ? (
-                <EndpointRow key={resources[0].id} resource={resources[0]} onAdd={setAdding} />
+                <EndpointRow
+                  key={resources[0].id}
+                  resource={resources[0]}
+                  onAdd={setAdding}
+                />
               ) : (
                 <ProviderGroupCard
                   key={host}
@@ -568,7 +596,9 @@ export function BazaarPage() {
           </div>
 
           {error && (
-            <p style={{ marginTop: 16, fontSize: 12.5, color: "var(--danger)" }}>
+            <p
+              style={{ marginTop: 16, fontSize: 12.5, color: "var(--danger)" }}
+            >
               {error}{" "}
               <button
                 type="button"
@@ -589,13 +619,17 @@ export function BazaarPage() {
           )}
 
           {loading && (
-            <p style={{ marginTop: 16, fontSize: 12.5, color: "var(--fg-dim)" }}>
+            <p
+              style={{ marginTop: 16, fontSize: 12.5, color: "var(--fg-dim)" }}
+            >
               Loading…
             </p>
           )}
 
           {!loading && !error && items.length === 0 && activeQuery && (
-            <p style={{ marginTop: 16, fontSize: 12.5, color: "var(--fg-dim)" }}>
+            <p
+              style={{ marginTop: 16, fontSize: 12.5, color: "var(--fg-dim)" }}
+            >
               Nothing matches “{activeQuery}”.
             </p>
           )}
@@ -623,7 +657,9 @@ export function BazaarPage() {
                 <span>Show</span>
                 <select
                   value={pageSize}
-                  onChange={(e) => setPageSize(Number(e.target.value) as PageSize)}
+                  onChange={(e) =>
+                    setPageSize(Number(e.target.value) as PageSize)
+                  }
                   aria-label="Results per page"
                   style={{
                     height: 28,
@@ -673,7 +709,10 @@ export function BazaarPage() {
       </div>
 
       {adding && (
-        <AddToWorkflowDialog resource={adding} onClose={() => setAdding(null)} />
+        <AddToWorkflowDialog
+          resource={adding}
+          onClose={() => setAdding(null)}
+        />
       )}
     </div>
   );
