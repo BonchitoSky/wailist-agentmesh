@@ -85,7 +85,10 @@ export function enablePush(): Promise<PushState> {
     try {
       let perm = await PushNotifications.checkPermissions();
       if (attempt !== generation) return "unavailable";
-      if (perm.receive === "prompt" || perm.receive === "prompt-with-rationale") {
+      if (
+        perm.receive === "prompt" ||
+        perm.receive === "prompt-with-rationale"
+      ) {
         perm = await PushNotifications.requestPermissions();
       }
       if (attempt !== generation) return "unavailable";
@@ -184,12 +187,21 @@ export function disablePush(): Promise<void> {
   const write = pendingWrite;
   const previousDisable = disabling;
   const promise = (async () => {
+    // Cleared first, and not conditional on holding a token. A cold start
+    // leaves currentToken null while the device is still registered
+    // server-side, so gating this on having a token would leave the flag set on
+    // exactly the devices that most need it cleared -- and boot() would then
+    // re-arm what the user just turned off.
     await clearOptedIn();
     await previousDisable;
     // Keep the session available until a pending server write has settled.
     // New enables wait for this cleanup before registering again.
     // The enable path reports a rejected registration; cleanup still runs.
     await write?.catch(() => {});
+    // Cleared a SECOND time, deliberately. The write awaited above can be an
+    // in-flight setOptedIn from an enable that started before this disable did;
+    // clearing only before that await would let it land afterwards and leave
+    // the device opted in with the switch showing off.
     await clearOptedIn();
     const token = currentToken;
     currentToken = null;
@@ -198,6 +210,12 @@ export function disablePush(): Promise<void> {
         console.error("push: could not unregister this device", err);
       });
     }
+    // NOT removeAllListeners(). The tap listener is attached once by boot() and
+    // is not part of any one session: removing it here left a sign-out followed
+    // by a sign-in, with no restart in between, unable to route a tapped
+    // notification anywhere until the next cold start. registerForToken removes
+    // the two listeners it owns as soon as it settles, so there is nothing of
+    // this function's to tidy up.
     await PushNotifications.unregister().catch(() => {});
   })();
   disabling = promise;
