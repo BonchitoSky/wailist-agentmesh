@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/agentmesh/backend/internal/engine/nodes"
@@ -137,9 +136,15 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 				res.Failed = true
 				return res // a run stops at its first failure, and so does this
 			}
-			// What this step was handed, read before its own output replaces
-			// it -- the same message a real run would pass it.
-			received := rc.Message()
+			// What a simulated step would have sent, worked out before its own
+			// placeholder output is Set: a body or message template reads
+			// {{ result }}, which must still be the step's input, exactly as
+			// it is when the real connector runs.
+			var pending carry
+			var sends bool
+			if reason != "" {
+				pending, sends = simulatedCarry(n, out, rc)
+			}
 			rc.Set(n.ID, out)
 			step.Output = clipOutput(out)
 			isStep := n.Type != models.NodeTypeTrigger && n.Type != models.NodeTypeEnd
@@ -147,8 +152,8 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 			case reason != "":
 				step.Status, step.Reason = "simulated", reason
 				wasSimulated[n.ID] = true
-				if c, ok := simulatedCarry(n, out, received, rc); ok {
-					carries[n.ID] = c
+				if sends {
+					carries[n.ID] = pending
 				}
 				source = n.Name
 				if source == "" {
@@ -320,12 +325,6 @@ type carry struct {
 	templated bool
 }
 
-// googleWrites are the Google templates that send something. The rest only
-// read, and never use their input.
-var googleWrites = map[string]bool{
-	"gmail_send": true, "gmail_reply": true, "sheets_append": true, "calendar_create": true,
-}
-
 // actionsWithoutMessage are simulated connectors that never send the run's
 // message: they read (calendly, telegram_get_updates), send their own query
 // (graphql), or build an email from their own fields. Taken from the
@@ -337,17 +336,17 @@ var actionsWithoutMessage = map[string]bool{
 }
 
 // simulatedCarry says what a simulated step would have sent, if it sends
-// anything at all. A step that only reads, writes state, or sends a body of
-// its own making has no carry: judging it by its input would flag a correct
-// workflow (manual trigger -> state get) as an empty send, or quote unrelated
-// upstream data as what it "would carry".
-func simulatedCarry(n models.WorkflowNode, out any, received string, rc *RunContext) (carry, bool) {
+// anything at all. http and Google ask the connector's own body/summary
+// decision (nodes.HTTPRequestBodyForDryRun, nodes.GoogleOutgoingForDryRun),
+// so this cannot drift from what the real connector does. A step that only
+// reads, writes state, or rents compute has no carry: judging it by its input
+// would flag a correct workflow as an empty send.
+//
+// Must be called before the step's own output is Set on rc.
+func simulatedCarry(n models.WorkflowNode, out any, rc *RunContext) (carry, bool) {
 	switch n.Type {
-	case models.NodeTypeAction, models.NodeTypeGoogle:
-		if n.Type == models.NodeTypeGoogle && !googleWrites[n.Template] {
-			return carry{}, false
-		}
-		if n.Type == models.NodeTypeAction && actionsWithoutMessage[n.Template] {
+	case models.NodeTypeAction:
+		if actionsWithoutMessage[n.Template] {
 			return carry{}, false
 		}
 		m, _ := out.(map[string]any)
@@ -356,18 +355,15 @@ func simulatedCarry(n models.WorkflowNode, out any, received string, rc *RunCont
 			return carry{}, false
 		}
 		return carry{text: msg, templated: n.Config["messageTemplate"] != ""}, true
+	case models.NodeTypeGoogle:
+		text, sends, templated := nodes.GoogleOutgoingForDryRun(n, rc)
+		return carry{text: text, templated: templated}, sends
 	case models.NodeTypeTool:
 		if n.Template != "http" {
 			return carry{}, false
 		}
-		// callHTTP: a body template is sent when set; with none, only POST
-		// sends the run's message, and PUT/PATCH/DELETE send no body.
-		if tmpl := n.Config["httpBodyTemplate"]; tmpl != "" {
-			return carry{text: nodes.ResolveTemplateForDryRun(tmpl, rc), templated: true}, true
-		}
-		if strings.EqualFold(strings.TrimSpace(n.Method), "POST") {
-			return carry{text: received}, true
-		}
+		body, sends, templated := nodes.HTTPRequestBodyForDryRun(n, rc)
+		return carry{text: body, templated: templated}, sends
 	}
 	return carry{}, false
 }

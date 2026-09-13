@@ -697,3 +697,69 @@ func TestDryRunDoesNotFlagStepsThatNeverSendTheirInput(t *testing.T) {
 		})
 	}
 }
+
+// Review findings (eeadb492..3fad251d): what a simulated step "would carry"
+// was worked out by hand and drifted from the real connectors. Each case is a
+// correct workflow and the exact thing the real connector would send.
+func TestDryRunCarryMatchesWhatTheRealConnectorSends(t *testing.T) {
+	srv := dataServer(t)
+	fetch := func() models.WorkflowNode {
+		f := dn("fetch", models.NodeTypeTool, "http")
+		f.URL = srv.URL + "/quote"
+		return f
+	}
+	extract := dn("x", models.NodeTypeTool, "json_extract")
+	extract.Config = map[string]string{"jsonPath": "data"}
+
+	// A body template reads the step's input, not its own placeholder.
+	postTmpl := dn("post", models.NodeTypeTool, "http")
+	postTmpl.Method = "POST"
+	postTmpl.URL = srv.URL + "/hook"
+	postTmpl.Config = map[string]string{"httpBodyTemplate": "{{ result.price }}"}
+
+	// callHTTP compares the no-template POST case-sensitively: "post" sends no body.
+	lowerPost := dn("post", models.NodeTypeTool, "http")
+	lowerPost.Method = "post"
+	lowerPost.URL = srv.URL + "/hook"
+
+	// HEAD never carries a body, whatever template is left on the node.
+	head := dn("post", models.NodeTypeTool, "http")
+	head.Method = "HEAD"
+	head.URL = srv.URL + "/hook"
+	head.Config = map[string]string{"httpBodyTemplate": "{{ result.missing }}"}
+
+	// calendar_create uses calendarSummary when it is set, not the message.
+	cal := dn("post", models.NodeTypeGoogle, "calendar_create")
+	cal.Config = map[string]string{"calendarSummary": "Standup", "messageTemplate": "{{ result.missing }}"}
+
+	cases := []struct {
+		name      string
+		steps     []models.WorkflowNode
+		wouldSend string
+	}{
+		{"POST body template reads the upstream output", []models.WorkflowNode{fetch(), extract, postTmpl}, "1.5"},
+		{"lowercase post with no template sends nothing", []models.WorkflowNode{fetch(), lowerPost}, ""},
+		{"HEAD ignores a leftover body template", []models.WorkflowNode{fetch(), head}, ""},
+		{"calendar_create sends its summary", []models.WorkflowNode{fetch(), cal}, "Standup"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			nodesIn := append([]models.WorkflowNode{dn("t", models.NodeTypeTrigger, "manual")}, c.steps...)
+			nodesIn = append(nodesIn, dn("e", models.NodeTypeEnd, "done"))
+			var edges []models.WorkflowEdge
+			for i := 0; i+1 < len(nodesIn); i++ {
+				edges = append(edges, flow(nodesIn[i].ID, nodesIn[i+1].ID))
+			}
+			res := DryRun(context.Background(), models.WorkflowGraph{Nodes: nodesIn, Edges: edges}, DryRunOptions{})
+			if !res.FinalSimulated {
+				t.Fatalf("setup: the run should end on the simulated step: %+v", res)
+			}
+			if res.Empty || res.Failed {
+				t.Fatalf("a correct workflow must not be flagged: Empty=%v Failed=%v Error=%q", res.Empty, res.Failed, res.Error)
+			}
+			if res.WouldSend != c.wouldSend {
+				t.Fatalf("want WouldSend %q (what the real connector sends), got %q", c.wouldSend, res.WouldSend)
+			}
+		})
+	}
+}

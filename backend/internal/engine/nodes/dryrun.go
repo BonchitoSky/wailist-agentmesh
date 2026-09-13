@@ -240,10 +240,3 @@ func IsCredentialSkip(out any) bool {
 	}
 	return false
 }
-
-// ResolveTemplateForDryRun expands a template exactly as a run would, so a
-// dry run can tell what a simulated step's own template (an http body) would
-// have sent without performing the request.
-func ResolveTemplateForDryRun(tmpl string, rc RunContexter) string {
-	return resolveTemplate(tmpl, rc)
-}
