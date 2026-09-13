@@ -236,6 +236,16 @@ func dryRunNode(ctx context.Context, n models.WorkflowNode, attach models.Attach
 			}
 		}
 		out, err := nodes.ExecuteAgent(ctx, n, safe, models.AgentWallet{}, nil, rc, nil, opts.PlatformKeys, nodes.X402RelayConfig{})
+		// A model call's 401 surfaces on the agent, but the key that was
+		// refused belongs to the attached provider. On BYOK that key is the
+		// user's own, pasted in the Inspector, so this is theirs to fix and
+		// not a workflow the builder should be sent to repair. A platform key
+		// is nobody's to paste, so it stays a plain failure.
+		if err != nil && nodes.IsAuthRejection(err.Error()) {
+			if p := attach.Provider; p != nil && p.KeyMode != "platform" {
+				return nil, "", unverifiable{nodes.CredentialRejectedOrMissing(*p)}
+			}
+		}
 		// Charged after the call, like a run (Runner.debitOrLog): the model
 		// has already been paid for by then, so a failed charge is logged
 		// rather than turned into a step failure.

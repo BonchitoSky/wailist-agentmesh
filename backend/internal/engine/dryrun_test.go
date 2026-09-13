@@ -514,3 +514,32 @@ func TestDryRunChargeSurvivesTheBuildContextEnding(t *testing.T) {
 		t.Fatalf("the charge must not be cancelled with the build: %v", chargeCtxErr)
 	}
 }
+
+// Review finding (b797e3c2): a model-call 401 surfaces on the agent, but the
+// key lives on the attached provider. For BYOK that key is the user's, pasted
+// in the Inspector, so it is exactly the case a test run must report as
+// uncheckable rather than send the builder off to "fix" the workflow.
+func TestDryRunTreatsARevokedByokKeyAsTheUsersToFix(t *testing.T) {
+	gem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":{"message":"API key not valid"}}`)
+	}))
+	defer gem.Close()
+	nodes.SetGeminiBaseURL(gem.URL)
+	defer nodes.SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	provider := dn("p", models.NodeTypeProvider, "gemini")
+	provider.APIKey = "user-key-revoked"
+	g := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{dn("t", models.NodeTypeTrigger, "manual"), dn("a", models.NodeTypeAgent, "agent"), provider, dn("e", models.NodeTypeEnd, "done")},
+		Edges: []models.WorkflowEdge{flow("t", "a"), flow("a", "e"),
+			{ID: "pa", From: "p", To: "a", Kind: models.EdgeKindAttach, ToPort: "model"}},
+	}
+	res := DryRun(context.Background(), g, DryRunOptions{})
+	if res.Failed || !res.Unverified {
+		t.Fatalf("the user's own rejected key is not a workflow to fix: want unverified, got %+v", res)
+	}
+	if s := stepOf(res, "a"); !strings.Contains(s.Reason, "rejected") {
+		t.Fatalf("want the step to say the credential was rejected, got %+v", s)
+	}
+}

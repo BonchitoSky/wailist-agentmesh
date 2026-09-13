@@ -1786,3 +1786,32 @@ func TestBuildGraphDoesNotRepeatALongAnswerItAlreadyQuoted(t *testing.T) {
 		t.Fatalf("the reply already quotes the answer; a clipped copy must not be appended")
 	}
 }
+
+// Review finding (b797e3c2): the agent's reply was quoted whenever the last
+// step was simulated, even when the agent does not feed it. In
+// agent -> json_extract -> slack the message slack would post is the extracted
+// JSON, so the answer to judge is that step's output, not the agent's prose.
+func TestBuildGraphQuotesTheStepThatFeedsASimulatedSend(t *testing.T) {
+	bodies := scriptedGemini(t, []string{callTestRun, text("Posted it to Slack."), text("still here")})
+	_, err := BuildGraph(context.Background(), BuildRequest{
+		APIKey: "k", Message: "post the price to slack", Graph: wiredAgentGraph(),
+		TestRun: func(ctx context.Context, g models.WorkflowGraph, input string) DryRunResult {
+			return DryRunResult{
+				Answer:      "BTC is 60000 dollars.",
+				FinalOutput: `{"reason":"it would send or change something (slack)","simulated":true}`,
+				Steps: []DryRunStep{
+					{NodeID: "a", Name: "Answer", Type: "agent", Status: "ran", Output: "BTC is 60000 dollars."},
+					{NodeID: "x", Name: "Extract", Type: "tool", Template: "json_extract", Status: "ran", Output: `{"price":60000}`},
+					{NodeID: "s", Name: "Post", Type: "action", Template: "slack", Status: "simulated"},
+					{NodeID: "e", Name: "", Type: "end", Status: "ran"},
+				},
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(*bodies, "\n"), "raw data") {
+		t.Fatal("slack would post the extracted JSON, so the builder must be told the answer is raw data")
+	}
+}

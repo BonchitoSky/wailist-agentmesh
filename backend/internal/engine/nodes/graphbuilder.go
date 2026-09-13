@@ -910,15 +910,40 @@ func withAnswerGuard(prompt string) string {
 // output, because when a real step follows the agent -- agent ->
 // json_extract -> end -- the agent's sentence is not what the workflow emits.
 //
-// The agent's reply wins in two cases. A run that ended with nothing. And a
-// run whose last step was only simulated (agent -> slack -> end): its output
-// is a placeholder standing in for the message, and the message the user
-// would actually receive is the agent's reply.
+// When the run ends on a simulated step (agent -> slack -> end) the final
+// output is only a placeholder for the message, so what the user would
+// receive is the output of the last step that really ran -- the agent's
+// reply there, but the extracted JSON in agent -> json_extract -> slack,
+// which is raw data and must be judged as such.
 func testedAnswer(r DryRunResult) string {
-	if strings.TrimSpace(r.FinalOutput) == "" || (lastStepNotReal(r) && strings.TrimSpace(r.Answer) != "") {
-		return r.Answer
+	if lastStepNotReal(r) {
+		if out := strings.TrimSpace(lastRealStepOutput(r)); out != "" {
+			return out
+		}
+		if strings.TrimSpace(r.Answer) != "" {
+			return r.Answer
+		}
 	}
-	return r.FinalOutput
+	if strings.TrimSpace(r.FinalOutput) != "" {
+		return r.FinalOutput
+	}
+	return r.Answer
+}
+
+// lastRealStepOutput is the output of the last step that actually ran: what
+// a simulated step at the end of the flow would have been handed to send.
+func lastRealStepOutput(r DryRunResult) string {
+	for i := len(r.Steps) - 1; i >= 0; i-- {
+		s := r.Steps[i]
+		if s.Type == string(models.NodeTypeEnd) || s.Type == string(models.NodeTypeTrigger) {
+			continue
+		}
+		if s.Status == "simulated" || s.Status == "unverified" {
+			continue
+		}
+		return s.Output
+	}
+	return ""
 }
 
 // lastStepNotReal reports whether the last step before the end was simulated

@@ -173,7 +173,7 @@ const RejectedCredentialReason = "the service rejected the credential on this no
 // failure. The status is read from the sanitized message, so an upstream body
 // that merely mentions "API 403" is never mistaken for one.
 func CredentialProblem(n models.WorkflowNode, msg string) (string, bool) {
-	if !authStatus.MatchString(SanitizeRunError(msg)) {
+	if !IsAuthRejection(msg) {
 		return "", false
 	}
 	tpl, ok := catalogTemplate(string(n.Type), n.Template)
@@ -186,9 +186,32 @@ func CredentialProblem(n models.WorkflowNode, msg string) (string, bool) {
 	return MissingCredentialReason, true
 }
 
+// IsAuthRejection reports whether an error is a service refusing the caller's
+// credentials. Read from the sanitized message, so an upstream body that
+// merely mentions "API 403" is never mistaken for one.
+func IsAuthRejection(msg string) bool {
+	return authStatus.MatchString(SanitizeRunError(msg))
+}
+
+// CredentialRejectedOrMissing is the reason to report for a node whose
+// credential a service refused: which of the two depends on whether the node
+// holds one at all.
+func CredentialRejectedOrMissing(n models.WorkflowNode) string {
+	if hasStoredCredential(n) {
+		return RejectedCredentialReason
+	}
+	return MissingCredentialReason
+}
+
 // credentialSkips are the skip codes a connector returns when a credential is
 // missing ("weather_skipped_no_api_key"). Every other skip -- no ids, no
 // query, no city, missing config -- is a setting the builder can fill in.
+//
+// Only the skips of the connectors a test run executes matter here, which is
+// readOnlyActions (coingecko, openweathermap, hackernews, rss); every other
+// action is simulated and never skips. Adding a connector to readOnlyActions
+// means checking its credential skip code is in this list, or its missing key
+// will be reported as a setting the builder should fill in.
 var credentialSkips = []string{
 	"_skipped_no_api_key", "_skipped_no_api_token", "_skipped_no_access_token",
 	"_skipped_no_token", "_skipped_no_bot_token", "_skipped_no_auth_token",
