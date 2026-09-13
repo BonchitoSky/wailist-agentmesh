@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/agentmesh/backend/internal/engine/nodes"
@@ -87,11 +88,11 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 	}
 
 	lastFedBySimulated := false
-	// simulated holds, for each simulated step, what it would have carried:
-	// a send's resolved message, or for any other simulated step (an HTTP
-	// POST, x402, Tendril, a state write) the input it was handed. The end of
-	// the run reads it when the run finished on that step.
-	simulated := map[string]string{}
+	// wasSimulated marks every simulated step; carries holds what one would
+	// have sent, for only the steps that send something (see simulatedCarry).
+	// The end of the run reads both when it finished on a simulated step.
+	wasSimulated := map[string]bool{}
+	carries := map[string]carry{}
 	typeOf := make(map[string]models.NodeType, len(graph.Nodes))
 	for _, n := range graph.Nodes {
 		typeOf[n.ID] = n.Type
@@ -145,13 +146,10 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 			switch {
 			case reason != "":
 				step.Status, step.Reason = "simulated", reason
-				carry := received
-				if m, ok := out.(map[string]any); ok {
-					if msg, ok := m["wouldSend"].(string); ok {
-						carry = msg
-					}
+				wasSimulated[n.ID] = true
+				if c, ok := simulatedCarry(n, out, received, rc); ok {
+					carries[n.ID] = c
 				}
-				simulated[n.ID] = carry
 				source = n.Name
 				if source == "" {
 					source = n.ID
@@ -196,17 +194,21 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 		if t := typeOf[order[i]]; t == models.NodeTypeEnd || t == models.NodeTypeTrigger {
 			continue
 		}
-		if carry, ok := simulated[order[i]]; ok {
+		if wasSimulated[order[i]] {
 			res.FinalSimulated = true
-			res.WouldSend = clipText(carry)
-			// The run's final output is only a placeholder here, so the
-			// ordinary empty-output check above cannot see this. A send that
-			// would post nothing -- a template field that does not exist --
-			// is exactly the broken workflow the test gate must send back.
-			if nodes.IsEmptyOutput(carry) {
-				res.Empty = true
-				if res.Error == "" {
-					res.Error = fmt.Sprintf("%q would have sent an empty message", stepLabel(graph, order[i]))
+			if c, ok := carries[order[i]]; ok {
+				res.WouldSend = clipText(c.text)
+				// The run's final output is only a placeholder here, so the
+				// ordinary empty-output check above cannot see this. Only an
+				// explicit template that resolved to nothing -- a field that
+				// does not exist -- is flagged: that is unambiguously a send
+				// that would post nothing. An input that happens to be empty
+				// (a manual trigger) is not, since the step may never use it.
+				if c.templated && nodes.IsEmptyOutput(c.text) {
+					res.Empty = true
+					if res.Error == "" {
+						res.Error = fmt.Sprintf("%q would have sent an empty message", stepLabel(graph, order[i]))
+					}
 				}
 			}
 		}
@@ -309,6 +311,65 @@ func dryRunNode(ctx context.Context, n models.WorkflowNode, attach models.Attach
 		return out, "", err
 	}
 	return nil, "", fmt.Errorf("a %s step cannot be test-run", n.Type)
+}
+
+// carry is what a simulated step would have sent, and whether it came from an
+// explicit template (and so can be judged empty).
+type carry struct {
+	text      string
+	templated bool
+}
+
+// googleWrites are the Google templates that send something. The rest only
+// read, and never use their input.
+var googleWrites = map[string]bool{
+	"gmail_send": true, "gmail_reply": true, "sheets_append": true, "calendar_create": true,
+}
+
+// actionsWithoutMessage are simulated connectors that never send the run's
+// message: they read (calendly, telegram_get_updates), send their own query
+// (graphql), or build an email from their own fields. Taken from the
+// connectors that do not call resolveMessage; the read-only connectors a test
+// run executes for real (coingecko, hackernews, rss) are never simulated.
+var actionsWithoutMessage = map[string]bool{
+	"calendly": true, "telegram_get_updates": true, "graphql": true,
+	"email": true, "resend": true, "sendgrid": true, "postmark": true, "brevo": true,
+}
+
+// simulatedCarry says what a simulated step would have sent, if it sends
+// anything at all. A step that only reads, writes state, or sends a body of
+// its own making has no carry: judging it by its input would flag a correct
+// workflow (manual trigger -> state get) as an empty send, or quote unrelated
+// upstream data as what it "would carry".
+func simulatedCarry(n models.WorkflowNode, out any, received string, rc *RunContext) (carry, bool) {
+	switch n.Type {
+	case models.NodeTypeAction, models.NodeTypeGoogle:
+		if n.Type == models.NodeTypeGoogle && !googleWrites[n.Template] {
+			return carry{}, false
+		}
+		if n.Type == models.NodeTypeAction && actionsWithoutMessage[n.Template] {
+			return carry{}, false
+		}
+		m, _ := out.(map[string]any)
+		msg, ok := m["wouldSend"].(string)
+		if !ok {
+			return carry{}, false
+		}
+		return carry{text: msg, templated: n.Config["messageTemplate"] != ""}, true
+	case models.NodeTypeTool:
+		if n.Template != "http" {
+			return carry{}, false
+		}
+		// callHTTP: a body template is sent when set; with none, only POST
+		// sends the run's message, and PUT/PATCH/DELETE send no body.
+		if tmpl := n.Config["httpBodyTemplate"]; tmpl != "" {
+			return carry{text: nodes.ResolveTemplateForDryRun(tmpl, rc), templated: true}, true
+		}
+		if strings.EqualFold(strings.TrimSpace(n.Method), "POST") {
+			return carry{text: received}, true
+		}
+	}
+	return carry{}, false
 }
 
 // stepLabel is a node's name, or its id when it has none.

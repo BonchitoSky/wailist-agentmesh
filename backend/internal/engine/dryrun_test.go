@@ -599,8 +599,8 @@ func TestDryRunWouldSendFollowsTheSendsOwnTemplate(t *testing.T) {
 }
 
 // A run that ends on a simulated step with no message of its own -- a state
-// write -- has only a placeholder as its final output. What it would carry is
-// the input it was handed, here the fetched data.
+// write -- has only a placeholder as its final output. It carries nothing: a
+// state write stores a value, it does not send the fetched data anywhere.
 func TestDryRunFlagsAFinalSimulatedStepWithNothingToSend(t *testing.T) {
 	srv := dataServer(t)
 	fetch := dn("fetch", models.NodeTypeTool, "http")
@@ -610,8 +610,8 @@ func TestDryRunFlagsAFinalSimulatedStepWithNothingToSend(t *testing.T) {
 		Edges: []models.WorkflowEdge{flow("t", "fetch"), flow("fetch", "st"), flow("st", "e")},
 	}
 	res := DryRun(context.Background(), g, DryRunOptions{})
-	if !res.FinalSimulated || !strings.Contains(res.WouldSend, `"price":1.5`) {
-		t.Fatalf("want FinalSimulated carrying the fetched data, got FinalSimulated=%v WouldSend=%q", res.FinalSimulated, res.WouldSend)
+	if !res.FinalSimulated || res.WouldSend != "" || res.Empty {
+		t.Fatalf("want FinalSimulated with no carry and no empty flag, got FinalSimulated=%v WouldSend=%q Empty=%v", res.FinalSimulated, res.WouldSend, res.Empty)
 	}
 }
 
@@ -661,5 +661,39 @@ func TestDryRunRecordsWhatAFinalNonMessageStepWouldReceive(t *testing.T) {
 	}
 	if !strings.Contains(res.WouldSend, `"price":1.5`) {
 		t.Fatalf("want what the POST would receive (the extracted JSON), got %q", res.WouldSend)
+	}
+}
+
+// Review finding (89c67c1a): every simulated step was judged by its input, so
+// a correct workflow ending on a step that never uses its input was flagged
+// "would have sent an empty message" and sent back for repair. With a manual
+// trigger that input is empty. None of these is a broken workflow.
+func TestDryRunDoesNotFlagStepsThatNeverSendTheirInput(t *testing.T) {
+	put := dn("put", models.NodeTypeTool, "http")
+	put.Method = "PUT"
+	put.URL = "https://example.invalid/resource"
+	cases := []struct {
+		name string
+		node models.WorkflowNode
+	}{
+		{"state get", dn("st", models.NodeTypeState, "get")},
+		{"google drive_list", dn("g", models.NodeTypeGoogle, "drive_list")},
+		{"http PUT with no body template", put},
+		{"calendly read", dn("c", models.NodeTypeAction, "calendly")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g := models.WorkflowGraph{
+				Nodes: []models.WorkflowNode{dn("t", models.NodeTypeTrigger, "manual"), c.node, dn("e", models.NodeTypeEnd, "done")},
+				Edges: []models.WorkflowEdge{flow("t", c.node.ID), flow(c.node.ID, "e")},
+			}
+			res := DryRun(context.Background(), g, DryRunOptions{})
+			if !res.FinalSimulated {
+				t.Fatalf("setup: the run should end on the simulated step: %+v", res)
+			}
+			if res.Empty || res.Failed {
+				t.Fatalf("a step that never sends its input is not an empty send: Empty=%v Failed=%v Error=%q", res.Empty, res.Failed, res.Error)
+			}
+		})
 	}
 }
