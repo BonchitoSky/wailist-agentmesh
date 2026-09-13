@@ -598,8 +598,9 @@ func TestDryRunWouldSendFollowsTheSendsOwnTemplate(t *testing.T) {
 	}
 }
 
-// A run that ends on a simulated step with nothing to send -- a state write --
-// has only a placeholder as its final output, and must say so.
+// A run that ends on a simulated step with no message of its own -- a state
+// write -- has only a placeholder as its final output. What it would carry is
+// the input it was handed, here the fetched data.
 func TestDryRunFlagsAFinalSimulatedStepWithNothingToSend(t *testing.T) {
 	srv := dataServer(t)
 	fetch := dn("fetch", models.NodeTypeTool, "http")
@@ -609,7 +610,56 @@ func TestDryRunFlagsAFinalSimulatedStepWithNothingToSend(t *testing.T) {
 		Edges: []models.WorkflowEdge{flow("t", "fetch"), flow("fetch", "st"), flow("st", "e")},
 	}
 	res := DryRun(context.Background(), g, DryRunOptions{})
-	if !res.FinalSimulated || res.WouldSend != "" {
-		t.Fatalf("want FinalSimulated with no message, got FinalSimulated=%v WouldSend=%q", res.FinalSimulated, res.WouldSend)
+	if !res.FinalSimulated || !strings.Contains(res.WouldSend, `"price":1.5`) {
+		t.Fatalf("want FinalSimulated carrying the fetched data, got FinalSimulated=%v WouldSend=%q", res.FinalSimulated, res.WouldSend)
+	}
+}
+
+// Review finding (e6622c49): a send whose template resolves to nothing -- here
+// a field the fetched data does not have -- recorded WouldSend "" and the run
+// was not flagged, so the builder called a workflow that posts an empty
+// message a working one.
+func TestDryRunFlagsASendThatWouldCarryNothing(t *testing.T) {
+	srv := dataServer(t)
+	fetch := dn("fetch", models.NodeTypeTool, "http")
+	fetch.URL = srv.URL + "/quote"
+	send := dn("s", models.NodeTypeAction, "slack")
+	send.Config = map[string]string{"messageTemplate": "{{ result.summary }}"}
+	g := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{dn("t", models.NodeTypeTrigger, "manual"), fetch, send, dn("e", models.NodeTypeEnd, "done")},
+		Edges: []models.WorkflowEdge{flow("t", "fetch"), flow("fetch", "s"), flow("s", "e")},
+	}
+	res := DryRun(context.Background(), g, DryRunOptions{})
+	if !res.FinalSimulated {
+		t.Fatalf("setup: the run should end on the simulated send: %+v", res)
+	}
+	if !res.Empty {
+		t.Fatalf("a send that would carry an empty message must flag the run as empty, got WouldSend=%q Empty=%v", res.WouldSend, res.Empty)
+	}
+}
+
+// Review finding (e6622c49): a simulated step that sends no message of its own
+// (an HTTP POST, x402, Tendril, a state write) recorded nothing, and the
+// builder fell back to the agent's reply from anywhere in the run. What such a
+// step would carry is its input -- here the extracted JSON the POST would send.
+func TestDryRunRecordsWhatAFinalNonMessageStepWouldReceive(t *testing.T) {
+	srv := dataServer(t)
+	fetch := dn("fetch", models.NodeTypeTool, "http")
+	fetch.URL = srv.URL + "/quote"
+	extract := dn("x", models.NodeTypeTool, "json_extract")
+	extract.Config = map[string]string{"jsonPath": "data"}
+	post := dn("post", models.NodeTypeTool, "http")
+	post.Method = "POST"
+	post.URL = srv.URL + "/hook"
+	g := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{dn("t", models.NodeTypeTrigger, "manual"), fetch, extract, post, dn("e", models.NodeTypeEnd, "done")},
+		Edges: []models.WorkflowEdge{flow("t", "fetch"), flow("fetch", "x"), flow("x", "post"), flow("post", "e")},
+	}
+	res := DryRun(context.Background(), g, DryRunOptions{})
+	if !res.FinalSimulated {
+		t.Fatalf("setup: the run should end on the simulated POST: %+v", res)
+	}
+	if !strings.Contains(res.WouldSend, `"price":1.5`) {
+		t.Fatalf("want what the POST would receive (the extracted JSON), got %q", res.WouldSend)
 	}
 }

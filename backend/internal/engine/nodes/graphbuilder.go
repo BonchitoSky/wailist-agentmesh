@@ -914,17 +914,20 @@ func withAnswerGuard(prompt string) string {
 // list interleaves parallel branches, and a step's Output is its whole node
 // output -- a platform-key agent's is a JSON object, not its sentence.
 //
-// A run that ended on a simulated step with nothing to send (a state write, a
-// Tendril rent) has only a placeholder, so the agent's reply stands in. So it
-// does for a run that ended with nothing at all.
+// For a simulated step that sends no message of its own (an HTTP POST, a
+// state write), WouldSend is the input it was handed -- what it would really
+// carry. Nothing else stands in for it: quoting an agent's reply from
+// elsewhere in the run would hide raw JSON headed for a webhook, or an empty
+// message headed for Slack. The agent's reply is only for a run that really
+// ran to the end and produced no output.
 func testedAnswer(r DryRunResult) string {
-	if strings.TrimSpace(r.WouldSend) != "" {
+	if r.FinalSimulated {
 		return r.WouldSend
 	}
-	if r.FinalSimulated || strings.TrimSpace(r.FinalOutput) == "" {
-		return r.Answer
+	if strings.TrimSpace(r.FinalOutput) != "" {
+		return r.FinalOutput
 	}
-	return r.FinalOutput
+	return r.Answer
 }
 
 // unverifiedSteps names the steps a test run could not check, and why.

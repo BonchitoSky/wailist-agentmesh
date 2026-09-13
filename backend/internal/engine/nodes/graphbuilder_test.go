@@ -1840,3 +1840,13 @@ func TestBuildGraphDoesNotReadAPlatformAgentsReplyAsRawData(t *testing.T) {
 		t.Fatal("a platform-key agent's sentence posted to slack is not raw data")
 	}
 }
+
+// Review finding (e6622c49): with a simulated last step, the agent's reply
+// from anywhere in the run stood in for the answer, hiding what that step
+// would really carry. The recorded WouldSend is the only answer to quote.
+func TestTestedAnswerNeverSubstitutesAnUnrelatedAgentReply(t *testing.T) {
+	r := DryRunResult{FinalSimulated: true, WouldSend: "", Answer: "BTC is 60000 dollars."}
+	if got := testedAnswer(r); got != "" {
+		t.Fatalf("a simulated step that would carry nothing has no answer, got %q", got)
+	}
+}

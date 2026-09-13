@@ -87,9 +87,11 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 	}
 
 	lastFedBySimulated := false
-	// simulated holds each simulated step's placeholder output, so the end
-	// of the run can tell whether it finished on one and what it would send.
-	simulated := map[string]any{}
+	// simulated holds, for each simulated step, what it would have carried:
+	// a send's resolved message, or for any other simulated step (an HTTP
+	// POST, x402, Tendril, a state write) the input it was handed. The end of
+	// the run reads it when the run finished on that step.
+	simulated := map[string]string{}
 	typeOf := make(map[string]models.NodeType, len(graph.Nodes))
 	for _, n := range graph.Nodes {
 		typeOf[n.ID] = n.Type
@@ -134,13 +136,22 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 				res.Failed = true
 				return res // a run stops at its first failure, and so does this
 			}
+			// What this step was handed, read before its own output replaces
+			// it -- the same message a real run would pass it.
+			received := rc.Message()
 			rc.Set(n.ID, out)
 			step.Output = clipOutput(out)
 			isStep := n.Type != models.NodeTypeTrigger && n.Type != models.NodeTypeEnd
 			switch {
 			case reason != "":
 				step.Status, step.Reason = "simulated", reason
-				simulated[n.ID] = out
+				carry := received
+				if m, ok := out.(map[string]any); ok {
+					if msg, ok := m["wouldSend"].(string); ok {
+						carry = msg
+					}
+				}
+				simulated[n.ID] = carry
 				source = n.Name
 				if source == "" {
 					source = n.ID
@@ -185,11 +196,17 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 		if t := typeOf[order[i]]; t == models.NodeTypeEnd || t == models.NodeTypeTrigger {
 			continue
 		}
-		if sim, ok := simulated[order[i]]; ok {
+		if carry, ok := simulated[order[i]]; ok {
 			res.FinalSimulated = true
-			if m, ok := sim.(map[string]any); ok {
-				if msg, ok := m["wouldSend"].(string); ok {
-					res.WouldSend = clipText(msg)
+			res.WouldSend = clipText(carry)
+			// The run's final output is only a placeholder here, so the
+			// ordinary empty-output check above cannot see this. A send that
+			// would post nothing -- a template field that does not exist --
+			// is exactly the broken workflow the test gate must send back.
+			if nodes.IsEmptyOutput(carry) {
+				res.Empty = true
+				if res.Error == "" {
+					res.Error = fmt.Sprintf("%q would have sent an empty message", stepLabel(graph, order[i]))
 				}
 			}
 		}
@@ -292,6 +309,16 @@ func dryRunNode(ctx context.Context, n models.WorkflowNode, attach models.Attach
 		return out, "", err
 	}
 	return nil, "", fmt.Errorf("a %s step cannot be test-run", n.Type)
+}
+
+// stepLabel is a node's name, or its id when it has none.
+func stepLabel(graph models.WorkflowGraph, id string) string {
+	for _, n := range graph.Nodes {
+		if n.ID == id && n.Name != "" {
+			return n.Name
+		}
+	}
+	return id
 }
 
 // credentialReason is nodes.CredentialProblem's reason, or "" when the
