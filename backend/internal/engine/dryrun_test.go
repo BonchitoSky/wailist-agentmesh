@@ -543,3 +543,73 @@ func TestDryRunTreatsARevokedByokKeyAsTheUsersToFix(t *testing.T) {
 		t.Fatalf("want the step to say the credential was rejected, got %+v", s)
 	}
 }
+
+// Review finding (eeadb492): for a platform-key agent -> slack the answer was
+// read from the agent step's Output, its whole node output as JSON. What the
+// send would really carry is the agent's sentence, and DryRun now records
+// exactly that.
+func TestDryRunRecordsWhatASimulatedSendWouldCarry(t *testing.T) {
+	gem := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"BTC is 60000 dollars."}]}}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":8}}`)
+	}))
+	defer gem.Close()
+	nodes.SetGeminiBaseURL(gem.URL)
+	defer nodes.SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	provider := dn("p", models.NodeTypeProvider, "gemini")
+	provider.KeyMode = "platform"
+	g := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{dn("t", models.NodeTypeTrigger, "manual"), dn("a", models.NodeTypeAgent, "agent"), provider, dn("s", models.NodeTypeAction, "slack"), dn("e", models.NodeTypeEnd, "done")},
+		Edges: []models.WorkflowEdge{flow("t", "a"), flow("a", "s"), flow("s", "e"),
+			{ID: "pa", From: "p", To: "a", Kind: models.EdgeKindAttach, ToPort: "model"}},
+	}
+	res := DryRun(context.Background(), g, DryRunOptions{PlatformKeys: map[string]string{"gemini": "k"}})
+	if !res.FinalSimulated {
+		t.Fatalf("the run ended on a simulated send: %+v", res)
+	}
+	if res.WouldSend != "BTC is 60000 dollars." {
+		t.Fatalf("want the agent's sentence as what slack would send, got %q", res.WouldSend)
+	}
+}
+
+// Review finding (eeadb492): the "last real step" was picked from the Steps
+// list, which interleaves branches and ignores message templates. The send's
+// own resolved message is the truth: here it pulls one field from a fetch that
+// is not the step just before it.
+func TestDryRunWouldSendFollowsTheSendsOwnTemplate(t *testing.T) {
+	srv := dataServer(t)
+	fetch := dn("fetch", models.NodeTypeTool, "http")
+	fetch.URL = srv.URL + "/quote"
+	note := dn("note", models.NodeTypeTool, "json_extract")
+	note.Config = map[string]string{"jsonPath": "data"}
+	send := dn("s", models.NodeTypeAction, "slack")
+	send.Config = map[string]string{"messageTemplate": "Price: {{ node.fetch.data.price }}"}
+	g := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{dn("t", models.NodeTypeTrigger, "manual"), fetch, note, send, dn("e", models.NodeTypeEnd, "done")},
+		Edges: []models.WorkflowEdge{flow("t", "fetch"), flow("fetch", "note"), flow("note", "s"), flow("s", "e")},
+	}
+	res := DryRun(context.Background(), g, DryRunOptions{})
+	if res.Failed {
+		t.Fatalf("unexpected failure: %+v", res)
+	}
+	if res.WouldSend != "Price: 1.5" {
+		t.Fatalf("want the send's own resolved message, got %q", res.WouldSend)
+	}
+}
+
+// A run that ends on a simulated step with nothing to send -- a state write --
+// has only a placeholder as its final output, and must say so.
+func TestDryRunFlagsAFinalSimulatedStepWithNothingToSend(t *testing.T) {
+	srv := dataServer(t)
+	fetch := dn("fetch", models.NodeTypeTool, "http")
+	fetch.URL = srv.URL + "/quote"
+	g := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{dn("t", models.NodeTypeTrigger, "manual"), fetch, dn("st", models.NodeTypeState, "set"), dn("e", models.NodeTypeEnd, "done")},
+		Edges: []models.WorkflowEdge{flow("t", "fetch"), flow("fetch", "st"), flow("st", "e")},
+	}
+	res := DryRun(context.Background(), g, DryRunOptions{})
+	if !res.FinalSimulated || res.WouldSend != "" {
+		t.Fatalf("want FinalSimulated with no message, got FinalSimulated=%v WouldSend=%q", res.FinalSimulated, res.WouldSend)
+	}
+}

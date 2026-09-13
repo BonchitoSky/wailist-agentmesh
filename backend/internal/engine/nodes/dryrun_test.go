@@ -141,3 +141,20 @@ func TestIsCredentialSkip(t *testing.T) {
 		}
 	}
 }
+
+// realAgentToSlackResult is a DryRunResult shaped as engine.DryRun returns it
+// for trigger -> agent (platform key) -> slack -> end.
+func realAgentToSlackResult() DryRunResult {
+	return DryRunResult{
+		Answer:         "BTC is 60000 dollars.",
+		FinalOutput:    `{"reason":"it would send or change something (slack)","simulated":true,"wouldSend":"BTC is 60000 dollars."}`,
+		FinalSimulated: true,
+		WouldSend:      "BTC is 60000 dollars.",
+		Steps: []DryRunStep{
+			{NodeID: "t", Name: "Start", Type: "trigger", Status: "ran"},
+			{NodeID: "a", Name: "Answer", Type: "agent", Status: "ran", Output: `{"message":"BTC is 60000 dollars.","platformKeyUsage":{"model":"gemini-2.5-flash","tokensIn":12,"tokensOut":8}}`},
+			{NodeID: "s", Name: "Post", Type: "action", Template: "slack", Status: "simulated", Output: `{"reason":"it would send or change something (slack)","simulated":true,"wouldSend":"BTC is 60000 dollars."}`},
+			{NodeID: "e", Type: "end", Status: "ran"},
+		},
+	}
+}

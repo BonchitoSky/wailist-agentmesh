@@ -41,7 +41,15 @@ type DryRunResult struct {
 	Answer string `json:"answer,omitempty"`
 	// FinalOutput is what the run ends with.
 	FinalOutput string `json:"finalOutput,omitempty"`
-	Failed      bool   `json:"failed"`
+	// FinalSimulated is set when the step the run ended on was only
+	// simulated, so FinalOutput is a placeholder rather than a result.
+	FinalSimulated bool `json:"finalSimulated,omitempty"`
+	// WouldSend is the exact message that simulated last step would have
+	// sent, resolved the way a real run resolves it (message template and
+	// all). It is what the user would actually receive, so it is the answer
+	// to judge -- never a reconstruction from the list of steps.
+	WouldSend string `json:"wouldSend,omitempty"`
+	Failed    bool   `json:"failed"`
 	// Empty is set when any executed step, or the run's end, produced nothing.
 	Empty bool `json:"empty"`
 	// Unverified is set when part of the workflow could not be checked. It

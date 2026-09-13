@@ -1745,8 +1745,10 @@ func TestBuildGraphDoesNotTakeASimulatedStepForTheAnswer(t *testing.T) {
 		APIKey: "k", Message: "btc price to slack", Graph: wiredAgentGraph(),
 		TestRun: func(ctx context.Context, g models.WorkflowGraph, input string) DryRunResult {
 			return DryRunResult{
-				Answer:      "BTC is 60000 dollars.",
-				FinalOutput: `{"reason":"it would send or change something (slack)","simulated":true}`,
+				Answer:         "BTC is 60000 dollars.",
+				FinalOutput:    `{"reason":"it would send or change something (slack)","simulated":true}`,
+				FinalSimulated: true,
+				WouldSend:      "BTC is 60000 dollars.",
 				Steps: []DryRunStep{
 					{NodeID: "a", Name: "Answer", Type: "agent", Status: "ran"},
 					{NodeID: "s", Name: "Post", Type: "action", Template: "slack", Status: "simulated"},
@@ -1797,8 +1799,10 @@ func TestBuildGraphQuotesTheStepThatFeedsASimulatedSend(t *testing.T) {
 		APIKey: "k", Message: "post the price to slack", Graph: wiredAgentGraph(),
 		TestRun: func(ctx context.Context, g models.WorkflowGraph, input string) DryRunResult {
 			return DryRunResult{
-				Answer:      "BTC is 60000 dollars.",
-				FinalOutput: `{"reason":"it would send or change something (slack)","simulated":true}`,
+				Answer:         "BTC is 60000 dollars.",
+				FinalOutput:    `{"reason":"it would send or change something (slack)","simulated":true}`,
+				FinalSimulated: true,
+				WouldSend:      `{"price":60000}`,
 				Steps: []DryRunStep{
 					{NodeID: "a", Name: "Answer", Type: "agent", Status: "ran", Output: "BTC is 60000 dollars."},
 					{NodeID: "x", Name: "Extract", Type: "tool", Template: "json_extract", Status: "ran", Output: `{"price":60000}`},
@@ -1813,5 +1817,26 @@ func TestBuildGraphQuotesTheStepThatFeedsASimulatedSend(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(*bodies, "\n"), "raw data") {
 		t.Fatal("slack would post the extracted JSON, so the builder must be told the answer is raw data")
+	}
+}
+
+// Review finding (eeadb492): the answer was taken from the agent step's
+// Output, which for a platform-key agent -- the builder's default -- is the
+// whole node output serialized, {"message":...,"platformKeyUsage":{...}}. The
+// raw-data check then sent a correct agent -> slack workflow back for repair.
+// The step list here is shaped exactly as DryRun produces it.
+func TestBuildGraphDoesNotReadAPlatformAgentsReplyAsRawData(t *testing.T) {
+	bodies := scriptedGemini(t, []string{callTestRun, text("BTC is 60000 dollars."), text("still here")})
+	_, err := BuildGraph(context.Background(), BuildRequest{
+		APIKey: "k", Message: "btc price to slack", Graph: wiredAgentGraph(),
+		TestRun: func(ctx context.Context, g models.WorkflowGraph, input string) DryRunResult {
+			return realAgentToSlackResult()
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(*bodies, "\n"), "raw data") {
+		t.Fatal("a platform-key agent's sentence posted to slack is not raw data")
 	}
 }

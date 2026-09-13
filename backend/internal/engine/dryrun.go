@@ -87,6 +87,13 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 	}
 
 	lastFedBySimulated := false
+	// simulated holds each simulated step's placeholder output, so the end
+	// of the run can tell whether it finished on one and what it would send.
+	simulated := map[string]any{}
+	typeOf := make(map[string]models.NodeType, len(graph.Nodes))
+	for _, n := range graph.Nodes {
+		typeOf[n.ID] = n.Type
+	}
 	for _, level := range levels {
 		for _, n := range level {
 			if attached[n.ID] {
@@ -133,6 +140,7 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 			switch {
 			case reason != "":
 				step.Status, step.Reason = "simulated", reason
+				simulated[n.ID] = out
 				source = n.Name
 				if source == "" {
 					source = n.ID
@@ -167,6 +175,26 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 	}
 	final := rc.Message()
 	res.FinalOutput = clipText(final)
+	// Which step the run really ended on: the last output Set, skipping the
+	// end node (which only passes its input along) and the trigger. This is
+	// the same order Message() reads, not the level-by-level order of Steps,
+	// which interleaves parallel branches. If that step was simulated, its
+	// wouldSend is exactly what a real run would have sent from it.
+	order := rc.OutputOrder()
+	for i := len(order) - 1; i >= 0; i-- {
+		if t := typeOf[order[i]]; t == models.NodeTypeEnd || t == models.NodeTypeTrigger {
+			continue
+		}
+		if sim, ok := simulated[order[i]]; ok {
+			res.FinalSimulated = true
+			if m, ok := sim.(map[string]any); ok {
+				if msg, ok := m["wouldSend"].(string); ok {
+					res.WouldSend = clipText(msg)
+				}
+			}
+		}
+		break
+	}
 	if nodes.IsEmptyOutput(final) && !lastFedBySimulated {
 		res.Empty = true
 	}

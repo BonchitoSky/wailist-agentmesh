@@ -906,57 +906,25 @@ func withAnswerGuard(prompt string) string {
 	return strings.TrimRight(prompt, " \n") + "\n\n" + agentAnswerGuard
 }
 
-// testedAnswer is what the user would read from a test run: the run's final
-// output, because when a real step follows the agent -- agent ->
-// json_extract -> end -- the agent's sentence is not what the workflow emits.
+// testedAnswer is what the user would read from a test run.
 //
-// When the run ends on a simulated step (agent -> slack -> end) the final
-// output is only a placeholder for the message, so what the user would
-// receive is the output of the last step that really ran -- the agent's
-// reply there, but the extracted JSON in agent -> json_extract -> slack,
-// which is raw data and must be judged as such.
+// When the run ended on a simulated send (agent -> slack -> end), that is the
+// message the send would have carried, which DryRun resolves exactly as a run
+// does (WouldSend). It is never reconstructed from the list of steps: that
+// list interleaves parallel branches, and a step's Output is its whole node
+// output -- a platform-key agent's is a JSON object, not its sentence.
+//
+// A run that ended on a simulated step with nothing to send (a state write, a
+// Tendril rent) has only a placeholder, so the agent's reply stands in. So it
+// does for a run that ended with nothing at all.
 func testedAnswer(r DryRunResult) string {
-	if lastStepNotReal(r) {
-		if out := strings.TrimSpace(lastRealStepOutput(r)); out != "" {
-			return out
-		}
-		if strings.TrimSpace(r.Answer) != "" {
-			return r.Answer
-		}
+	if strings.TrimSpace(r.WouldSend) != "" {
+		return r.WouldSend
 	}
-	if strings.TrimSpace(r.FinalOutput) != "" {
-		return r.FinalOutput
+	if r.FinalSimulated || strings.TrimSpace(r.FinalOutput) == "" {
+		return r.Answer
 	}
-	return r.Answer
-}
-
-// lastRealStepOutput is the output of the last step that actually ran: what
-// a simulated step at the end of the flow would have been handed to send.
-func lastRealStepOutput(r DryRunResult) string {
-	for i := len(r.Steps) - 1; i >= 0; i-- {
-		s := r.Steps[i]
-		if s.Type == string(models.NodeTypeEnd) || s.Type == string(models.NodeTypeTrigger) {
-			continue
-		}
-		if s.Status == "simulated" || s.Status == "unverified" {
-			continue
-		}
-		return s.Output
-	}
-	return ""
-}
-
-// lastStepNotReal reports whether the last step before the end was simulated
-// or unverified, so the run's final output is not something it produced.
-func lastStepNotReal(r DryRunResult) bool {
-	for i := len(r.Steps) - 1; i >= 0; i-- {
-		s := r.Steps[i]
-		if s.Type == string(models.NodeTypeEnd) || s.Type == string(models.NodeTypeTrigger) {
-			continue
-		}
-		return s.Status == "simulated" || s.Status == "unverified"
-	}
-	return false
+	return r.FinalOutput
 }
 
 // unverifiedSteps names the steps a test run could not check, and why.
