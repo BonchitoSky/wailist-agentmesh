@@ -124,7 +124,7 @@ describe("WorkflowSummary", () => {
     render(<WorkflowSummary workflowId="wf-1" />);
     expect(
       await screen.findByText(
-        "Not deployed yet — deploy it from the AgentMesh desktop app",
+        "Not deployed yet — finish and deploy it in the AgentMesh desktop app",
       ),
     ).toBeTruthy();
   });

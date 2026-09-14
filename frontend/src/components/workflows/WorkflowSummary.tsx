@@ -6,7 +6,6 @@ import { Topbar } from "@/components/Topbar";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
-import { runBlockedMessage } from "@/components/canvas/runBlocked";
 import { RunSheet } from "@/components/runs/RunSheet";
 import { RunStatusPill } from "@/components/runs/RunStatusPill";
 import {
@@ -242,14 +241,14 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   );
 
   const chat = workflow ? isChatWorkflow(workflow) : false;
+  // A handheld can neither build nor deploy, so whatever is keeping an
+  // undeployed workflow from running, the next step is the desktop app.
   const blocked = workflow
     ? chat
       ? "This workflow starts from a chat message — run it from the AgentMesh desktop app"
-      : runBlockedMessage({
-          deployed: workflow.status === "deployed",
-          hasProviderNode: workflow.nodes.some((n) => n.type === "provider"),
-          canDeploy: false,
-        })
+      : workflow.status !== "deployed"
+        ? "Not deployed yet — finish and deploy it in the AgentMesh desktop app"
+        : null
     : null;
   const status =
     WORKFLOW_STATUS[workflow?.status ?? "draft"] ?? WORKFLOW_STATUS.draft;
