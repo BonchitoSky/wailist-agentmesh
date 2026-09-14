@@ -103,7 +103,9 @@ export function AddToWorkflowDialog({
         </div>
 
         {error && (
-          <p style={{ margin: 0, fontSize: 12, color: "var(--danger)" }}>{error}</p>
+          <p style={{ margin: 0, fontSize: 12, color: "var(--danger)" }}>
+            {error}
+          </p>
         )}
         {!list && !error && (
           <p style={{ margin: 0, fontSize: 12, color: "var(--fg-dim)" }}>

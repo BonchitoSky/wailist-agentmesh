@@ -108,12 +108,16 @@ export function capabilityLabels(urls: string[]): string[] {
       continue;
     }
     const words = seg.split(/[-_]/).filter(Boolean);
-    if (words.length > 1 && TIER_SUFFIXES.includes(words[words.length - 1].toLowerCase())) {
+    if (
+      words.length > 1 &&
+      TIER_SUFFIXES.includes(words[words.length - 1].toLowerCase())
+    ) {
       words.pop();
     }
     if (words.length === 0) continue;
     const label =
-      words.join(" ").charAt(0).toUpperCase() + words.join(" ").slice(1).toLowerCase();
+      words.join(" ").charAt(0).toUpperCase() +
+      words.join(" ").slice(1).toLowerCase();
     if (!out.includes(label)) out.push(label);
   }
   return out;
@@ -169,7 +173,8 @@ export function ConsoleCard({
 
   const provider = resources[0].provider ?? resources[0].host;
   const capabilities =
-    CAPABILITY_OVERRIDES[consoleKey] ?? capabilityLabels(resources.map((r) => r.url));
+    CAPABILITY_OVERRIDES[consoleKey] ??
+    capabilityLabels(resources.map((r) => r.url));
   const copy = CONSOLE_COPY[consoleKey];
   const path = CONSOLE_PATHS[consoleKey];
   const template = TRY_WORKFLOW_TEMPLATES[consoleKey];
@@ -201,7 +206,11 @@ export function ConsoleCard({
       const id = await loadTemplateWorkflow(template);
       router.push(`/workflows/${id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not load this workflow. Try again.");
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Could not load this workflow. Try again.",
+      );
       setTrying(false);
     }
   };
@@ -353,7 +362,9 @@ export function ConsoleCard({
           type="button"
           onClick={open}
           disabled={!available}
-          title={available ? undefined : "This preview has no backend connected."}
+          title={
+            available ? undefined : "This preview has no backend connected."
+          }
           style={{
             height: 32,
             padding: "0 16px",
@@ -372,7 +383,9 @@ export function ConsoleCard({
       </div>
 
       {error && (
-        <div style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.5 }}>
+        <div
+          style={{ fontSize: 11.5, color: "var(--danger)", lineHeight: 1.5 }}
+        >
           {error}
         </div>
       )}
