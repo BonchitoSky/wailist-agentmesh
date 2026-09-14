@@ -111,6 +111,9 @@ jobs:
       - name: typecheck
         run: npm run typecheck
 
+      - name: typecheck ratchet (noUncheckedIndexedAccess)
+        run: node scripts/tsc-index-ratchet.mjs
+
       - name: test
         run: npm test
 
