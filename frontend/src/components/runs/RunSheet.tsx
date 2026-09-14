@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef } from "react";
 import { useScrollLock } from "@/hooks/useScrollLock";
+import { useCloseOnBack } from "@/hooks/useCloseOnBack";
 import { ghostBtn } from "@/components/ui/buttons";
 import { MarkdownContent } from "@/components/canvas/chat/MarkdownContent";
 import {
@@ -135,13 +136,15 @@ export function RunSheet({
     return () => clearTimeout(t);
   }, []);
 
-  const close = () => {
+  // Every way out, the system Back gesture included, hands focus back to the
+  // row that opened the sheet.
+  const close = useCloseOnBack(() => {
     onClose();
     const opener = openerRef.current;
     const fallback =
       opener instanceof HTMLElement && opener.isConnected ? opener : null;
     (returnFocusTo?.current ?? fallback)?.focus();
-  };
+  });
   const closeRef = useRef(close);
   useEffect(() => {
     closeRef.current = close;
