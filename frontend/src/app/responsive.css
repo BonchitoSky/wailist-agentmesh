@@ -497,3 +497,29 @@
     display: none;
   }
 }
+
+/* The studio top bar on a phone. At 360px it needed about 393px: the logo,
+   the "/" separator, the placeholder avatar and a 120px floor on the name
+   pushed the Run button past the edge. Below 520px those go, as does the
+   run-cost estimate (the credit balance stays, for the reason above), the
+   back button keeps only its arrow with a full 44px target, and the spacing,
+   the name floor and the Run width tighten. Every token falls back to the
+   desktop value in CanvasPage.tsx, so nothing above this step moves. */
+@media (max-width: 520px) {
+  .am-canvas-bar {
+    --canvas-bar-pad: 12px;
+    --canvas-bar-gap: 8px;
+    --canvas-name-min: 72px;
+    --canvas-stats-pad: 10px;
+    --canvas-run-min: 64px;
+  }
+  .am-canvas-bar__wide,
+  .am-canvas-bar__label {
+    display: none !important;
+  }
+  .am-canvas-bar__back {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+}

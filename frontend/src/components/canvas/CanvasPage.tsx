@@ -971,8 +971,9 @@ const nameFieldStyle: React.CSSProperties = {
   maxWidth: 480,
   // A floor, not 0. With minWidth:0 the field collapsed to 12px on a narrow
   // topbar -- the workflow name was simply gone. 120px keeps enough to read
-  // and to recognise, and the text ellipsizes from there.
-  minWidth: 120,
+  // and to recognise, and the text ellipsizes from there. A phone lowers the
+  // floor through the token (see .am-canvas-bar in responsive.css).
+  minWidth: "var(--canvas-name-min, 120px)",
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
@@ -1063,12 +1064,16 @@ function CanvasTopbar({
         borderBottom: "1px solid var(--border)",
         display: "flex",
         alignItems: "center",
-        padding: "0 14px",
-        gap: 14,
+        // Tokens, defaulting to the desktop values: see .am-canvas-bar in
+        // responsive.css for the phone step.
+        padding: "0 var(--canvas-bar-pad, 14px)",
+        gap: "var(--canvas-bar-gap, 14px)",
       }}
+      className="am-canvas-bar"
     >
       <button
         onClick={onBack}
+        className="am-canvas-bar__wide"
         style={{
           background: "transparent",
           border: "none",
@@ -1079,14 +1084,18 @@ function CanvasTopbar({
       >
         <Logo size={16} />
       </button>
-      <Hairline vertical length={20} />
+      <Hairline className="am-canvas-bar__wide" vertical length={20} />
       <button
         onClick={onBack}
+        aria-label="Back to workflows"
+        className="am-canvas-bar__back"
         style={{ ...ghostBtnSm, flexShrink: 0, whiteSpace: "nowrap" }}
       >
-        ← Workflows
+        ←<span className="am-canvas-bar__label"> Workflows</span>
       </button>
-      <span style={{ color: "var(--fg-dim)" }}>/</span>
+      <span className="am-canvas-bar__wide" style={{ color: "var(--fg-dim)" }}>
+        /
+      </span>
       {can("workflow.editGraph", readOnly) ? (
         <input
           value={workflow.name}
@@ -1118,13 +1127,6 @@ function CanvasTopbar({
         </span>
       )}
       {saveLabel && <Pill mono>{saveLabel}</Pill>}
-      {!can("workflow.editGraph", readOnly) && (
-        <span title="Editing happens in the AgentMesh desktop app.">
-          <Pill mono dot tone="warm">
-            viewing only
-          </Pill>
-        </span>
-      )}
 
       <div style={{ flex: 1 }} />
 
@@ -1133,7 +1135,7 @@ function CanvasTopbar({
           display: "flex",
           alignItems: "center",
           gap: 14,
-          padding: "0 14px",
+          padding: "0 var(--canvas-stats-pad, 14px)",
           borderLeft: "1px solid var(--border)",
           borderRight: "1px solid var(--border)",
           height: 36,
@@ -1142,10 +1144,13 @@ function CanvasTopbar({
       >
         {estLabel && (
           <>
-            <span title="Estimated credits for one run of this workflow. Refreshes when you deploy.">
+            <span
+              className="am-canvas-bar__wide"
+              title="Estimated credits for one run of this workflow. Refreshes when you deploy."
+            >
               <Stat label="est. run" value={estLabel} />
             </span>
-            <Hairline vertical length={18} />
+            <Hairline className="am-canvas-bar__wide" vertical length={18} />
           </>
         )}
         <Stat
@@ -1206,7 +1211,7 @@ function CanvasTopbar({
         title={runBlocked ?? "Run workflow"}
         style={{
           ...primaryBtnSm,
-          minWidth: 86,
+          minWidth: "var(--canvas-run-min, 86px)",
           justifyContent: "center",
           opacity: runBlocked ? 0.5 : 1,
         }}
@@ -1221,8 +1226,9 @@ function CanvasTopbar({
           </>
         )}
       </button>
-      <Hairline vertical length={20} />
+      <Hairline className="am-canvas-bar__wide" vertical length={20} />
       <div
+        className="am-canvas-bar__wide"
         style={{
           width: 28,
           height: 28,
