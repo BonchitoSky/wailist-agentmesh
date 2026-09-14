@@ -568,7 +568,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     // every render, and must not survive a refresh as a phantom pending node.
     consumedAdd.current = pendingAdd;
     router.replace(`/workflows/${workflow.id}`);
-    if (!meta) return;
+    // A client that cannot edit the graph drops the handoff as well. The
+    // Bazaar hides Add there, so this covers a link opened directly.
+    if (!meta || !canEdit) return;
     // Drop it slightly off-centre so it never lands exactly on an existing
     // node when several are added in a row. Wraps every 8 nodes instead of
     // growing with workflow.nodes.length forever -- otherwise a workflow
@@ -597,7 +599,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setWorkflow((wf) => (wf ? { ...wf, nodes: [...wf.nodes, node] } : wf));
     showToast(`Added ${meta.name ?? "endpoint"} to the canvas`);
-  }, [pendingAdd, workflow, router, setWorkflow, showToast]);
+  }, [pendingAdd, workflow, canEdit, router, setWorkflow, showToast]);
 
   // Wrapper typed as non-null so child components don't need to change.
   // Safe because children only render after the null guard above.
