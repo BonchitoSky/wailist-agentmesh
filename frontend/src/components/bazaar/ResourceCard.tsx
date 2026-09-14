@@ -15,7 +15,9 @@ export function ResourceCard({
   onAdd,
 }: {
   resource: BazaarResource;
-  onAdd: (r: BazaarResource) => void;
+  // Omitted where the workflow graph cannot be edited; the card is then shown
+  // without its "Add to workflow" button.
+  onAdd?: (r: BazaarResource) => void;
 }) {
   // (resource.params ?? []): defense in depth. The backend guarantees a
   // non-nil array, but a mirror of an external catalog should never trust
@@ -159,23 +161,25 @@ export function ResourceCard({
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={() => onAdd(resource)}
-        style={{
-          height: 32,
-          border: `1px solid ${resource.supported ? "var(--accent)" : "var(--border-strong)"}`,
-          background: resource.supported ? "var(--accent)" : "transparent",
-          color: resource.supported ? "var(--accent-fg)" : "var(--fg)",
-          borderRadius: "var(--r-2)",
-          fontSize: 12,
-          fontWeight: 500,
-          cursor: "pointer",
-          fontFamily: "var(--font-sans)",
-        }}
-      >
-        Add to workflow
-      </button>
+      {onAdd && (
+        <button
+          type="button"
+          onClick={() => onAdd(resource)}
+          style={{
+            height: 32,
+            border: `1px solid ${resource.supported ? "var(--accent)" : "var(--border-strong)"}`,
+            background: resource.supported ? "var(--accent)" : "transparent",
+            color: resource.supported ? "var(--accent-fg)" : "var(--fg)",
+            borderRadius: "var(--r-2)",
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: "pointer",
+            fontFamily: "var(--font-sans)",
+          }}
+        >
+          Add to workflow
+        </button>
+      )}
     </div>
   );
 }

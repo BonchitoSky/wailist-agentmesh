@@ -23,7 +23,9 @@ export function ProviderGroupCard({
   resources: BazaarResource[];
   expanded: boolean;
   onToggle: () => void;
-  onAdd: (r: BazaarResource) => void;
+  // Passed through to each EndpointRow; omitted where the graph cannot be
+  // edited.
+  onAdd?: (r: BazaarResource) => void;
   // True while the paged feed backing `resources` hasn't finished loading —
   // this host's entries can be spread across many pages (one host can be
   // over 70% of the raw catalog), so the count and cheapest price below are

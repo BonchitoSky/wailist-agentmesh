@@ -19,7 +19,9 @@ export function EndpointRow({
   indent = false,
 }: {
   resource: BazaarResource;
-  onAdd: (r: BazaarResource) => void;
+  // Omitted where the workflow graph cannot be edited; the row is then
+  // listed without an Add button.
+  onAdd?: (r: BazaarResource) => void;
   indent?: boolean;
 }) {
   const params = resource.params ?? [];
@@ -72,13 +74,15 @@ export function EndpointRow({
         )}
       </div>
 
-      <button
-        type="button"
-        className="bz-row__add"
-        onClick={() => onAdd(resource)}
-      >
-        Add
-      </button>
+      {onAdd && (
+        <button
+          type="button"
+          className="bz-row__add"
+          onClick={() => onAdd(resource)}
+        >
+          Add
+        </button>
+      )}
     </div>
   );
 }
