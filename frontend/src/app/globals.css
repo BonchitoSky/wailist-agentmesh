@@ -891,6 +891,16 @@ body {
     --us-chart-h: 150px;
   }
 }
+/* The credits card had a 300px floor and no grow, so on a 360px screen it
+   stopped short of the right edge beside empty space. On a phone it and its
+   group take the whole row. */
+@media (max-width: 520px) {
+  :root {
+    --us-credits-group-flex: 1 1 100%;
+    --us-credits-flex: 1 1 auto;
+    --us-credits-minw: 0px;
+  }
+}
 
 /* ── Canvas: narrow-screen notice ─────────────────────────────────────────
    CanvasPage renders this in place of the editor tree below the breakpoint

@@ -397,6 +397,9 @@ function UsageBody({
             alignItems: "flex-end",
             gap: 14,
             flexWrap: "wrap",
+            // Tokens, defaulting to what this was: see the 520 block beside
+            // --us-headspace in globals.css.
+            flex: "var(--us-credits-group-flex, 0 1 auto)",
           }}
         >
           {(() => {
@@ -423,8 +426,8 @@ function UsageBody({
             return (
               <div
                 style={{
-                  flex: "0 0 auto",
-                  minWidth: 300,
+                  flex: "var(--us-credits-flex, 0 0 auto)",
+                  minWidth: "var(--us-credits-minw, 300px)",
                   maxWidth: "100%",
                   background: "var(--bg-elev-1)",
                   border: "1px solid var(--border)",
