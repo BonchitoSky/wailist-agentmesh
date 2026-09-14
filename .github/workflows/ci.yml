@@ -6,9 +6,13 @@ on:
   push:
     branches: [master]
 
+# Pull-request runs are cancelled when a newer commit supersedes them. Runs on
+# master are not: pushes group by commit, so every merge gets a complete run and
+# a merge that breaks the build is visible on that merge, not hidden behind a
+# run the next merge cancelled.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend:
