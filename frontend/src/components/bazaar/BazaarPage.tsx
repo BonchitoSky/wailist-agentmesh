@@ -23,12 +23,19 @@ const DEFAULT_PAGE_SIZE: PageSize = 10;
 // The partner track is explicit, not auto-fill. There are two partners; an
 // auto-fill grid stretches to four columns on a wide screen and leaves them
 // adrift in it, which reads as "two things are missing" rather than "these are
-// the two". auto-fit with a max keeps each card at a readable width and lets a
-// third slot in cleanly when there is one.
+// the two".
+//
+// Flex rather than grid, and that is the whole point. A grid track count that
+// does not divide the partner count leaves the last card alone beside dead
+// space -- with three partners and room for two, the third sat in a half-empty
+// row looking like a loading failure. Flex lets that last card GROW into the
+// space instead (`flex: 1 1 <basis>` on the card itself), so a row is always
+// full whatever the count and the viewport. The basis sets the point at which
+// another card fits; nothing is ever stranded.
 const CONSOLE_GRID: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 460px))",
-  justifyContent: "start",
+  display: "flex",
+  flexWrap: "wrap",
+  alignItems: "stretch",
   gap: 14,
 };
 

@@ -23,7 +23,12 @@ func NewRouter(d *handlers.Deps) http.Handler {
 	r.Post("/auth/signin", d.SignIn)
 	r.Post("/auth/signout", d.SignOut)
 	r.Get("/auth/oauth/{provider}", d.OAuthStart)
+	r.Get("/auth/oauth/{provider}/url", d.OAuthStartURL)
 	r.Get("/auth/oauth/{provider}/callback", d.OAuthCallback)
+	// Public because the caller has no session yet — that is the whole point of
+	// it. The one-time code it takes is the credential, and it is worthless
+	// without the verifier that never left the device. See oauth_native.go.
+	r.Post("/auth/oauth/exchange", d.OAuthExchange)
 	r.Post("/waitlist", d.JoinWaitlist)
 	r.Post("/run/{workflowId}", d.PublicTrigger)
 	// Called by Cashfree's servers, not the browser — authenticated via HMAC signature
@@ -125,6 +130,12 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Get("/prism/console", d.PrismConsoleWorkflow)
 		r.Get("/prism/console/exists", d.PrismConsoleWorkflowExists)
 		r.Post("/prism/run", d.PrismConsoleRun)
+		r.Post("/prism/repo/files", d.PrismRepoFiles)
+		r.Post("/prism/repo/review", d.PrismRepoReview)
+		r.Get("/helixbox/endpoints", d.HelixboxEndpoints)
+		r.Get("/helixbox/console", d.HelixboxConsoleWorkflow)
+		r.Get("/helixbox/console/exists", d.HelixboxConsoleWorkflowExists)
+		r.Post("/helixbox/run", d.HelixboxConsoleRun)
 		r.Get("/leases", d.ListLeases)
 		r.Post("/leases/{id}/release", d.ReleaseLease)
 		r.Get("/leases/{id}/key", d.DownloadLeaseKey)

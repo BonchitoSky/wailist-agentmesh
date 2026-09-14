@@ -109,8 +109,31 @@ import (
 // PR's ErrPaymentAlreadyCommitted wrapping on top of it; the digest below
 // is freshly computed from that merged file, not copied from either side.
 // No amount/address/signing logic touched by the merge itself.
+// Updated 2026-09-08 for the repo-review batch fee, with explicit sign-off.
+// tool402.go gains X402RelayConfig.BatchPlatformFee: when set, executeTool402V2Relay
+// reserves/commits the vendor amount ONLY and settles no markup on-chain, so a
+// caller that makes N calls on one user instruction can charge
+// models.X402PlatformFeeUSDMicros once for the whole batch instead of N times.
+//
+// Why the payment path had to move: a repo-wide code review is one user action
+// that fans out to one x402 call per file. Billing the flat $1.50 per call made
+// a 30-file review cost $48 -- $45 of markup on $3 of vendor cost -- which is
+// not a pricing decision anyone made, just an artifact of the fee being keyed to
+// HTTP requests rather than to user actions.
+//
+// What did NOT change: no amount, address, asset, network, signing call, or
+// wallet-topology line. The three legs are the same three legs. The switch is a
+// single `perCallFee` variable that is models.X402PlatformFeeUSDMicros unless the
+// caller opts out, and every reserve/commit/settle site reads it instead of the
+// constant, so there is exactly one place the fee can be turned off.
+//
+// The zero value is OFF (fee charged normally) -- pinned by
+// nodes.TestBatchPlatformFeeIsOffByDefault, because a default that waived the
+// platform's fee on every call in the product is the most expensive possible
+// mistake here. The only caller that sets it is handlers.PrismRepoReview, which
+// is responsible for exactly one Commit + SettlePlatformFee covering the run.
 var frozenX402Files = map[string]string{
-	"nodes/tool402.go":             "af54224f3e2afd23ce5fb1f434bc1ff912b12af47f21e6f941291ae136e90860",
+	"nodes/tool402.go":             "4bbf33a779b3f9bc4002c90d56fd01cfefa11de71ce7de02181ce88d50fed16c",
 	"nodes/runfund.go":             "792e2a3c96465545119cebfcb744d487b79b27e5df7b9842ec643a98dce7b782",
 	"nodes/walletpay.go":           "98bb3f7d0cb167f8a50d050e04720738c63c68b9fd570758fa5b9604338a4e37",
 	"nodes/tendril.go":             "b787a18f17bc80f593159e46a0c7fd7e543a9db44f55a451ed8f47102fb9132a",

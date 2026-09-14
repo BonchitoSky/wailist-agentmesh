@@ -16,6 +16,7 @@ import {
 } from "@/lib/prism";
 import { formatFileSize, readFileAsBase64 } from "@/lib/fileEncoding";
 import { PrismResult } from "./PrismResult";
+import { PrismRepoReview } from "./PrismRepoReview";
 
 // A stable identity for "this endpoint has no values yet". Without it the
 // `?? {}` fallback allocates a fresh object every render and the memo that
@@ -385,6 +386,11 @@ export function PrismConsolePage() {
     Record<string, Record<string, PrismRunField>>
   >({});
 
+  // Code review comes in two shapes: one file, or a whole repository (one
+  // paid call per file). Only the code-review task has a repo mode — there is
+  // no such thing as screening a repository of resumes.
+  const [scope, setScope] = useState<"file" | "repo">("file");
+
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   // Set when the run was refused for want of credit (402). The error panel
@@ -552,6 +558,7 @@ export function PrismConsolePage() {
                     value={taskKey ?? ""}
                     onChange={(k) => {
                       setTaskKey(k);
+                      if (k !== "code-review") setScope("file");
                       setResult(null);
                       setRunError(null);
                     }}
@@ -581,10 +588,19 @@ export function PrismConsolePage() {
                       .map((e) => ({
                         key: e.tier,
                         label: e.tier === "fast" ? "Quick" : "Thorough",
-                        // The TOTAL, not Prism's share. Comparing tiers on the
-                        // vendor price alone understates both by $1.50 and
-                        // makes the cheaper one look 2x better than it is.
-                        note: `${formatUsd(totalCostMicros(e, fee))} a run`,
+                        // In repo mode the run covers N files with ONE fee, so
+                        // a single-run total here would contradict the real
+                        // total the repo panel works out. Quote per file
+                        // instead; the panel below owns the run total.
+                        //
+                        // For a single file it is the TOTAL, not Prism's share:
+                        // comparing tiers on the vendor price alone understates
+                        // both by $1.50 and makes the cheaper one look twice as
+                        // good as it is.
+                        note:
+                          scope === "repo"
+                            ? `${formatUsd(e.amountMicros)} a file`
+                            : `${formatUsd(totalCostMicros(e, fee))} a run`,
                       }))}
                   />
                 </div>
@@ -623,8 +639,36 @@ export function PrismConsolePage() {
                 )}
               </Panel>
 
+              {/* ── What to review ───────────────────────────────────── */}
+              {taskKey === "code-review" && (
+                <Panel style={{ padding: "18px 20px", marginBottom: 16 }}>
+                  <PanelLabel>What to review</PanelLabel>
+                  <div style={{ marginTop: 10 }}>
+                    <Segmented
+                      ariaLabel="What to review"
+                      value={scope}
+                      onChange={(v) => {
+                        setScope(v);
+                        setResult(null);
+                        setRunError(null);
+                      }}
+                      options={[
+                        { key: "file" as const, label: "One file", note: "paste a link to a single file" },
+                        { key: "repo" as const, label: "Whole repo", note: "every source file, one pass each" },
+                      ]}
+                    />
+                  </div>
+                </Panel>
+              )}
+
+              {taskKey === "code-review" && scope === "repo" && endpoint && (
+                <Panel style={{ padding: "18px 20px", marginBottom: 16 }}>
+                  <PrismRepoReview endpoint={endpoint} platformFee={fee} />
+                </Panel>
+              )}
+
               {/* ── Form ─────────────────────────────────────────────── */}
-              {endpoint && (
+              {endpoint && scope === "file" && (
                 <Panel style={{ padding: "18px 20px", marginBottom: 16 }}>
                   <PanelLabel>Input</PanelLabel>
                   <div
@@ -691,7 +735,7 @@ export function PrismConsolePage() {
                 </Panel>
               )}
 
-              {runError && (
+              {runError && scope === "file" && (
                 <Panel
                   style={{
                     padding: "14px 16px",
@@ -751,7 +795,7 @@ export function PrismConsolePage() {
                 </Panel>
               )}
 
-              {result && (
+              {result && scope === "file" && (
                 <Panel style={{ padding: "18px 20px" }}>
                   <div
                     style={{

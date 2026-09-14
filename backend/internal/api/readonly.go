@@ -80,6 +80,9 @@ var readOnlyBlocked = []struct {
 	// Same exception, same reason: find-or-creates the console's workflow
 	// row. /prism/console/exists is the non-creating variant and is exempt.
 	{http.MethodGet, regexp.MustCompile(`^/prism/console$`)},
+	// And again for HelixBox. /helixbox/console/exists is the non-creating
+	// variant and is exempt.
+	{http.MethodGet, regexp.MustCompile(`^/helixbox/console$`)},
 }
 
 // blocksWrite reports whether read-only mode rejects this method and path.

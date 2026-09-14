@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { NativeBoot } from "@/components/native/NativeBoot";
+import { AppSplash } from "@/components/native/AppSplash";
 import { BottomNav } from "@/components/nav/BottomNav";
 import { RouteTransition } from "@/components/nav/RouteTransition";
 import { IS_NATIVE } from "@/lib/nativeAuth";
@@ -125,6 +126,11 @@ export default function RootLayout({
         }}
       >
         <NativeBoot />
+        {/* Above NativeBoot in the tree on purpose: NativeBoot renders null and
+            does the work, this covers the screen while it happens. Both are
+            mounted here rather than per-route so the launch frame is the same
+            whichever route the app opens on. */}
+        <AppSplash />
         {/* Wraps the page so an arriving screen can be given a direction on a
             phone. A no-op on desktop and under reduced motion. */}
         <RouteTransition>{children}</RouteTransition>
