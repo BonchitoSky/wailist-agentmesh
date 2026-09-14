@@ -7,6 +7,7 @@ import {
   type BazaarResource,
 } from "@/lib/bazaar";
 import { can } from "@/lib/readonly";
+import { workflowHref } from "@/lib/routes";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import { TENDRIL_DEMO_WORKFLOW, PRISM_DEMO_WORKFLOW } from "@/lib/data";
 import { loadTemplateWorkflow } from "@/lib/templateWorkflow";
@@ -204,7 +205,7 @@ export function ConsoleCard({
     setError(null);
     try {
       const id = await loadTemplateWorkflow(template);
-      router.push(`/workflows/${id}`);
+      router.push(workflowHref(id));
     } catch (e) {
       setError(
         e instanceof Error

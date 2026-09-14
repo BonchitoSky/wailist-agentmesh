@@ -19,6 +19,7 @@ import { useCredits } from "@/lib/credits/store";
 import { DEMO_WORKFLOW } from "@/lib/data";
 import { loadTemplateWorkflow } from "@/lib/templateWorkflow";
 import { can } from "@/lib/readonly";
+import { workflowHref } from "@/lib/routes";
 import { ImportModal } from "./ImportModal";
 import { ShareModal } from "./ShareModal";
 import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
@@ -125,7 +126,7 @@ export function WorkflowsPage() {
     setCreating(true);
     try {
       const wf = await workflowsApi.create("Untitled workflow");
-      router.push(`/workflows/${wf.id}`);
+      router.push(workflowHref(wf.id));
     } catch {
       setCreating(false);
     }
@@ -143,7 +144,7 @@ export function WorkflowsPage() {
     setPageError((prev) => (prev?.source === "demo" ? null : prev));
     try {
       const id = await loadTemplateWorkflow(DEMO_WORKFLOW);
-      router.push(`/workflows/${id}`);
+      router.push(workflowHref(id));
     } catch (e) {
       setPageError({
         source: "demo",
@@ -482,8 +483,10 @@ export function WorkflowsPage() {
           ) : view === "rows" ? (
             <WorkflowRows
               items={filtered}
-              onOpen={(id) => router.push(`/workflows/${id}`)}
-              onGeofence={(id) => router.push(`/workflows/${id}/geofence`)}
+              onOpen={(id) => router.push(workflowHref(id))}
+              onGeofence={(id) =>
+                router.push(workflowHref(id, { geofence: true }))
+              }
               onDelete={handleDelete}
               onSetSchedule={handleSetSchedule}
               onClearSchedule={handleClearSchedule}
@@ -492,7 +495,7 @@ export function WorkflowsPage() {
           ) : (
             <WorkflowGrid
               items={filtered}
-              onOpen={(id) => router.push(`/workflows/${id}`)}
+              onOpen={(id) => router.push(workflowHref(id))}
             />
           )}
 
@@ -520,7 +523,7 @@ export function WorkflowsPage() {
           onClose={() => setImportOpen(false)}
           onImported={(id) => {
             setImportOpen(false);
-            router.push(`/workflows/${id}`);
+            router.push(workflowHref(id));
           }}
         />
       )}

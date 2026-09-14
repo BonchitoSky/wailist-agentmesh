@@ -5,6 +5,7 @@ import { useCredits } from "@/lib/credits/store";
 import { LowBalanceBanner } from "@/components/billing/LowBalanceBanner";
 import { IconSearch, Card, ghostBtnSm } from "@/components/ui";
 import { Topbar } from "@/components/Topbar";
+import { workflowHref } from "@/lib/routes";
 import { usage as usageApi } from "@/lib/api";
 import {
   UsageRange,
@@ -258,7 +259,7 @@ export function UsagePage() {
               range={range}
               onRangeChange={changeRange}
               scopedWf={scopedWf}
-              onOpenWorkflow={(id) => router.push(`/workflows/${id}`)}
+              onOpenWorkflow={(id) => router.push(workflowHref(id))}
               onTopUp={() => router.push("/billing")}
               loading={loading}
             />

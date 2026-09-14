@@ -25,6 +25,7 @@ import { ResizeHandle } from "./ResizeHandle";
 import { ChatRail } from "./chat/ChatRail";
 import { useChatConsole, type ChatConsole } from "./chat/useChatConsole";
 import { can } from "@/lib/readonly";
+import { workflowHref } from "@/lib/routes";
 import { ghostBtnSm, primaryBtnSm } from "@/components/ui/buttons";
 import { useIsCompact } from "@/hooks/useIsCompact";
 import { runBlockedMessage } from "./runBlocked";
@@ -194,7 +195,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
       workflowsApi
         .create("Untitled workflow")
         .then((wf) => {
-          if (!cancelled) router.replace(`/workflows/${wf.id}`);
+          if (!cancelled) router.replace(workflowHref(wf.id));
         })
         .catch(() => {
           if (!cancelled) setLoading(false);
@@ -567,7 +568,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     // Consume the param either way: a malformed value must not re-trigger on
     // every render, and must not survive a refresh as a phantom pending node.
     consumedAdd.current = pendingAdd;
-    router.replace(`/workflows/${workflow.id}`);
+    router.replace(workflowHref(workflow.id));
     // A client that cannot edit the graph drops the handoff as well. The
     // Bazaar hides Add there, so this covers a link opened directly.
     if (!meta || !canEdit) return;
