@@ -33,10 +33,7 @@ export function EndpointRow({
   }
 
   return (
-    <div
-      className="bz-row"
-      style={{ paddingLeft: indent ? 44 : 16 }}
-    >
+    <div className="bz-row" style={{ paddingLeft: indent ? 44 : 16 }}>
       <span
         aria-hidden
         className="bz-row__icon"
@@ -47,7 +44,9 @@ export function EndpointRow({
 
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-          <span className="bz-row__name">{resource.provider ?? resource.host}</span>
+          <span className="bz-row__name">
+            {resource.provider ?? resource.host}
+          </span>
           <span className="bz-row__path" title={resource.url}>
             {resource.method} {displayPath}
           </span>
@@ -73,7 +72,11 @@ export function EndpointRow({
         )}
       </div>
 
-      <button type="button" className="bz-row__add" onClick={() => onAdd(resource)}>
+      <button
+        type="button"
+        className="bz-row__add"
+        onClick={() => onAdd(resource)}
+      >
         Add
       </button>
     </div>

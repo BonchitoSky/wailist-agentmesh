@@ -44,9 +44,10 @@ export function ProviderGroupCard({
   // resource actually achieved the minimum, and labeling it with THAT
   // resource's own asset, at least never shows a currency the price doesn't
   // apply to.
-  const cheapest = resources.reduce((min, r) =>
-    r.amountMicros < min.amountMicros ? r : min,
-  resources[0]);
+  const cheapest = resources.reduce(
+    (min, r) => (r.amountMicros < min.amountMicros ? r : min),
+    resources[0],
+  );
 
   return (
     <div>
@@ -81,7 +82,8 @@ export function ProviderGroupCard({
             {partial ? "+" : ""} endpoint{resources.length === 1 ? "" : "s"}
           </span>
           <span className="bz-row__stat">
-            from {formatPrice(cheapest.amountMicros)} {assetSymbol(cheapest.asset)}
+            from {formatPrice(cheapest.amountMicros)}{" "}
+            {assetSymbol(cheapest.asset)}
             {partial ? " so far" : ""}
           </span>
         </span>

@@ -76,9 +76,9 @@ describe("isWriteBlocked", () => {
     expect(isWriteBlocked("PUT", "/workflows/wf_123/schedule", VIEWER)).toBe(
       true,
     );
-    expect(
-      isWriteBlocked("DELETE", "/workflows/wf_123/schedule", VIEWER),
-    ).toBe(true);
+    expect(isWriteBlocked("DELETE", "/workflows/wf_123/schedule", VIEWER)).toBe(
+      true,
+    );
     // GET, not a write verb -- listed because the backend handler behind it
     // creates a workflow row on first call (get-or-create), so it is a write
     // in effect. See lib/tendril.ts's console().
@@ -103,9 +103,9 @@ describe("isWriteBlocked", () => {
     expect(isWriteBlocked("PUT", "/workflows/wf_123/geofence", VIEWER)).toBe(
       false,
     );
-    expect(
-      isWriteBlocked("DELETE", "/workflows/wf_123/geofence", VIEWER),
-    ).toBe(false);
+    expect(isWriteBlocked("DELETE", "/workflows/wf_123/geofence", VIEWER)).toBe(
+      false,
+    );
   });
 
   // Guards the blast radius rather than the feature: the geofence rules were

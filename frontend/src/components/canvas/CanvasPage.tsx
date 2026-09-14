@@ -694,51 +694,55 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         {/* Collapsed: the column and its resize handle give way to a thin
             rail, so the canvas gets the full ~280px back without the palette
             disappearing with no way to bring it back. */}
-        {!compact && can("workflow.editGraph", readOnly) && paletteCollapsed && (
-          <button
-            type="button"
-            onClick={() => setPaletteCollapsed(false)}
-            title="Expand the library"
-            aria-label="Expand the library"
-            style={{
-              flexShrink: 0,
-              width: 26,
-              alignSelf: "stretch",
-              background: "var(--bg-elev-1)",
-              border: "none",
-              borderRight: "1px solid var(--border)",
-              color: "var(--fg-muted)",
-              cursor: "pointer",
-              fontSize: 12,
-            }}
-          >
-            ›
-          </button>
-        )}
-
-        {!compact && can("workflow.editGraph", readOnly) && !paletteCollapsed && (
-          <>
-            <PalettePanel
-              onDragNodeStart={onDragNodeStart}
-              onAddNode={(meta) => addAtCentre.current?.(meta)}
-              width={paletteW}
-              onCollapse={() => setPaletteCollapsed(true)}
-            />
-            <ResizeHandle
-              side="left"
-              value={paletteW}
-              min={PALETTE.min}
-              max={PALETTE.max}
-              ariaLabel="Resize palette panel"
-              onChange={resizePalette}
-              onCommit={persistWidths}
-              onReset={() => {
-                setPaletteW(PALETTE.default);
-                persistWidths();
+        {!compact &&
+          can("workflow.editGraph", readOnly) &&
+          paletteCollapsed && (
+            <button
+              type="button"
+              onClick={() => setPaletteCollapsed(false)}
+              title="Expand the library"
+              aria-label="Expand the library"
+              style={{
+                flexShrink: 0,
+                width: 26,
+                alignSelf: "stretch",
+                background: "var(--bg-elev-1)",
+                border: "none",
+                borderRight: "1px solid var(--border)",
+                color: "var(--fg-muted)",
+                cursor: "pointer",
+                fontSize: 12,
               }}
-            />
-          </>
-        )}
+            >
+              ›
+            </button>
+          )}
+
+        {!compact &&
+          can("workflow.editGraph", readOnly) &&
+          !paletteCollapsed && (
+            <>
+              <PalettePanel
+                onDragNodeStart={onDragNodeStart}
+                onAddNode={(meta) => addAtCentre.current?.(meta)}
+                width={paletteW}
+                onCollapse={() => setPaletteCollapsed(true)}
+              />
+              <ResizeHandle
+                side="left"
+                value={paletteW}
+                min={PALETTE.min}
+                max={PALETTE.max}
+                ariaLabel="Resize palette panel"
+                onChange={resizePalette}
+                onCommit={persistWidths}
+                onReset={() => {
+                  setPaletteW(PALETTE.default);
+                  persistWidths();
+                }}
+              />
+            </>
+          )}
 
         <ChatConsoleHost
           runId={runId}
@@ -1021,8 +1025,7 @@ function CanvasTopbar({
   // financial cluster. The value comes from the backend (the same row the
   // engine debits), so it is only meaningful once that fetch has landed —
   // hence balanceKnown, which separates a real $0 from "not asked yet".
-  const { balanceUSD, balanceKnown, refreshBalance } =
-    useCredits();
+  const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
   const lowBalance = balanceKnown && balanceUSD < LOW_BALANCE_THRESHOLD_USD;
   const [shareOpen, setShareOpen] = useState(false);
   const [estimate, setEstimate] = useState<CostEstimate | null>(null);
@@ -1136,9 +1139,7 @@ function CanvasTopbar({
       >
         {estLabel && (
           <>
-            <span
-              title="Estimated credits for one run of this workflow. Refreshes when you deploy."
-            >
+            <span title="Estimated credits for one run of this workflow. Refreshes when you deploy.">
               <Stat label="est. run" value={estLabel} />
             </span>
             <Hairline vertical length={18} />

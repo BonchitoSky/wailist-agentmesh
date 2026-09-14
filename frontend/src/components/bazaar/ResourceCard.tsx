@@ -34,7 +34,9 @@ export function ResourceCard({
     <div
       style={{
         border: `1px solid ${resource.supported ? "var(--accent-line)" : "var(--border)"}`,
-        background: resource.supported ? "var(--accent-soft)" : "var(--bg-elev-1)",
+        background: resource.supported
+          ? "var(--accent-soft)"
+          : "var(--bg-elev-1)",
         borderRadius: "var(--r-2)",
         padding: 14,
         display: "flex",
@@ -125,7 +127,9 @@ export function ResourceCard({
         </span>
         <span>/ call</span>
         {resource.testnet && <Pill>testnet</Pill>}
-        {resource.settleCount > 0 && <span>· {resource.settleCount} settles</span>}
+        {resource.settleCount > 0 && (
+          <span>· {resource.settleCount} settles</span>
+        )}
         {paramCount > 0 && (
           <span>
             · {paramCount} field{paramCount === 1 ? "" : "s"}
@@ -138,7 +142,8 @@ export function ResourceCard({
           ready to run. */}
       {!resource.supported && (
         <div style={{ fontSize: 11, color: "var(--fg-dim)", lineHeight: 1.5 }}>
-          Community listing — you&apos;ll configure its fields yourself after adding.
+          Community listing — you&apos;ll configure its fields yourself after
+          adding.
         </div>
       )}
 
