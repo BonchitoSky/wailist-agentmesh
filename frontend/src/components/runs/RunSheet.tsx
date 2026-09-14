@@ -156,7 +156,10 @@ export function RunSheet({
 
   const detailStatus = detail.run?.status;
   const status = isRunStatus(detailStatus) ? detailStatus : run.status;
-  const finishedAt = detail.run?.finishedAt ?? run.finishedAt;
+  // Both ends from the same record, so the duration never pairs the row's
+  // start with the detail's finish.
+  const startedAt = detail.run?.startedAt ?? run.startedAt;
+  const finishedAt = detail.run ? detail.run.finishedAt : run.finishedAt;
   const running = status === "running";
   const steps = [...detail.logs].sort((a, b) => a.stepIndex - b.stepIndex);
   const result = resultText(steps);
@@ -199,9 +202,7 @@ export function RunSheet({
           <dl style={facts}>
             <div>
               <dt style={factLabel}>{running ? "Running for" : "Took"}</dt>
-              <dd style={factValue}>
-                {formatDuration(run.startedAt, finishedAt)}
-              </dd>
+              <dd style={factValue}>{formatDuration(startedAt, finishedAt)}</dd>
             </div>
             <div>
               <dt style={factLabel}>{running ? "Spent so far" : "Spent"}</dt>

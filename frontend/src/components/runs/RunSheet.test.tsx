@@ -119,6 +119,17 @@ describe("RunSheet", () => {
     ).toContain("provider key rejected");
   });
 
+  it("times the run from the detail once it has loaded", () => {
+    const base = detail();
+    state.detail = {
+      ...base,
+      run: { ...base.run!, startedAt: "2026-09-14T10:00:05.000Z" },
+    };
+    render(<RunSheet run={RUN} onClose={() => {}} />);
+    // 10:00:05 to 10:00:08 from the detail, not 10:00:00 from the row.
+    expect(screen.getByText("3s")).toBeTruthy();
+  });
+
   it("says a run is loading before its detail arrives", () => {
     state.detail = { ...detail(), run: null, logs: [], loading: true };
     render(<RunSheet run={RUN} onClose={() => {}} />);
