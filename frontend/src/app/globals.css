@@ -1254,6 +1254,14 @@ body[data-bottomnav] .appnav__trigger {
 .appnav--landing .appnav__sheet-foot {
   border-top-color: rgba(242, 240, 247, 0.12);
 }
+/* Open Studio stays in the landing bar at every width. Its padding and arrow
+   are set here rather than inline so the 520px rung below can reach them. */
+.lp-open-studio {
+  padding: 8px 18px;
+}
+.lp-open-studio__arrow {
+  display: inline-flex;
+}
 @media (min-width: 769px) {
   .appnav--landing .appnav__inline {
     position: absolute;
@@ -1265,8 +1273,17 @@ body[data-bottomnav] .appnav__trigger {
   .appnav--landing {
     --nav-h: 66px;
   }
+  /* At 320px the logo, Open Studio and the menu button overran the bar by
+     28px. Tighter spacing, a narrower button and no arrow give that back. */
   .appnav--landing .appnav__bar {
-    padding: 0 20px;
+    padding: 0 16px;
+    gap: 8px;
+  }
+  .lp-open-studio {
+    padding: 8px 14px;
+  }
+  .lp-open-studio__arrow {
+    display: none;
   }
 }
 
