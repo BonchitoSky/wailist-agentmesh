@@ -263,6 +263,26 @@ const BAZAAR_CSS = `
     flex: 1 1 100%;
   }
 }
+/* Below 520px a row cannot hold the name, the price and the stats side by
+   side: the stats kept their width and the name shrank to a few characters.
+   The meta wraps onto its own line, indented to the text column (the 26px
+   icon plus the 12px gap), and Add stays on the first line. */
+@media (max-width: 520px) {
+  .bz-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .bz-row__add {
+    order: 2;
+  }
+  .bz-row__meta {
+    order: 3;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    row-gap: 2px;
+    padding-left: 38px;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .bz-row,
   .bz-row::before,
