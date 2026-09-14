@@ -902,6 +902,15 @@ body {
   }
 }
 
+/* Billing custom amount. The "≈ $x credits" hint beside the input kept its
+   full width and squeezed the "Custom amount" placeholder until it was cut
+   off. On a phone the "≈ $x" figure alone is enough. */
+@media (max-width: 520px) {
+  .bill-custom-unit {
+    display: none;
+  }
+}
+
 /* ── Canvas: narrow-screen notice ─────────────────────────────────────────
    CanvasPage renders this in place of the editor tree below the breakpoint
    (see the isNarrow check there) rather than overlaying it, so the graph, its

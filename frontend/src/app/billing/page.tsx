@@ -493,7 +493,8 @@ export default function BillingPage() {
                           whiteSpace: "nowrap",
                         }}
                       >
-                        ≈ {fmtUSD(credits)} credits
+                        ≈ {fmtUSD(credits)}
+                        <span className="bill-custom-unit"> credits</span>
                       </span>
                     )}
                   </div>
@@ -601,6 +602,10 @@ export default function BillingPage() {
                     onKeyDown={(e) => e.key === "Enter" && applyCoupon()}
                     style={{
                       flex: 1,
+                      // An input's default min-width is its intrinsic size, so
+                      // without this it could not shrink and pushed Apply past
+                      // the card's padding on a 360px screen.
+                      minWidth: 0,
                       height: 38,
                       padding: "0 12px",
                       borderRadius: "var(--r-2)",
