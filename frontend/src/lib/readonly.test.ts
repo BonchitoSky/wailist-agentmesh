@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { can, isWriteBlocked } from "./readonly";
 
 // The two modes the app ships in: a desktop editor and a small-screen viewer.
@@ -169,5 +169,31 @@ describe("isWriteBlocked", () => {
     expect(
       isWriteBlocked("POST", "/workflows/wf_1/agents/a_1/fund", VIEWER),
     ).toBe(false);
+  });
+});
+
+// IS_NATIVE is read from the environment when lib/nativeAuth.ts loads, so each
+// case sets the variable and then imports a fresh copy of the module.
+describe("isReadOnlyNow", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  // jsdom has no matchMedia, so lib/device.ts reads this test environment as a
+  // desktop. The native app must be read-only anyway: it is never an editor,
+  // whatever device it runs on.
+  it("treats the native app as read-only on a desktop-shaped device", async () => {
+    vi.stubEnv("NEXT_PUBLIC_NATIVE_CLIENT", "1");
+    vi.resetModules();
+    const { isReadOnlyNow } = await import("./readonly");
+    expect(isReadOnlyNow()).toBe(true);
+  });
+
+  it("leaves a desktop web client writable", async () => {
+    vi.stubEnv("NEXT_PUBLIC_NATIVE_CLIENT", "");
+    vi.resetModules();
+    const { isReadOnlyNow } = await import("./readonly");
+    expect(isReadOnlyNow()).toBe(false);
   });
 });
