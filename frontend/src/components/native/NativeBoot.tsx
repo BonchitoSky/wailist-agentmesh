@@ -23,7 +23,10 @@ import { IS_NATIVE, setAuthToken, markAuthReady } from "@/lib/nativeAuth";
 const BOOT_TIMEOUT_MS = 10_000;
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("native boot timed out")), ms);
+    const timer = setTimeout(
+      () => reject(new Error("native boot timed out")),
+      ms,
+    );
     p.then(
       (v) => {
         clearTimeout(timer);
@@ -44,7 +47,10 @@ export function NativeBoot() {
   useEffect(() => {
     if (!IS_NATIVE) return;
     let cancelled = false;
-    void withTimeout(import("@/native").then(({ boot }) => boot()), BOOT_TIMEOUT_MS)
+    void withTimeout(
+      import("@/native").then(({ boot }) => boot()),
+      BOOT_TIMEOUT_MS,
+    )
       .then((token) => {
         if (!cancelled && token) setAuthToken(token);
       })

@@ -14,7 +14,14 @@ function harness(opts: {
   optedIn: boolean;
   restore?: () => Promise<void>;
 }) {
-  const calls = { enable: 0, disable: 0, clears: 0, taps: 0, flushes: 0, oauth: 0 };
+  const calls = {
+    enable: 0,
+    disable: 0,
+    clears: 0,
+    taps: 0,
+    flushes: 0,
+    oauth: 0,
+  };
   const prefs = { optedIn: opts.optedIn };
   const navigate = vi.fn();
   const persistNativeSession = vi
@@ -82,7 +89,8 @@ function harness(opts: {
     navigate,
     persistNativeSession,
     async deliverOAuth(result: OAuthResult) {
-      if (!onOAuth) throw new Error("OAuth callback listener was not registered");
+      if (!onOAuth)
+        throw new Error("OAuth callback listener was not registered");
       await onOAuth(result);
     },
   };
