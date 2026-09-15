@@ -42,7 +42,9 @@ const PANEL_CSS = `
    cursor and hover affordance belong to the box, not the whole strip. */
 .checkout-agree { transition: border-color 0.15s var(--ease), background 0.15s var(--ease); }
 .checkout-agree:focus-within { border-color: var(--accent-line) !important; }
-.checkout-agree-box:hover span { border-color: var(--accent) !important; }
+@media (hover: hover) {
+  .checkout-agree-box:hover span { border-color: var(--accent) !important; }
+}
 @media (prefers-reduced-motion: reduce) {
   .checkout-pay, .checkout-provider { transition: none; }
 }

@@ -401,8 +401,12 @@
   cursor: pointer;
   transition: color 0.12s var(--ease);
 }
-.am-sheet-grip:hover {
-  color: var(--fg-muted);
+/* Hover only where a pointer hovers: a tap leaves :hover set on a touch
+   screen, and the grip would stay lit after the sheet moves. */
+@media (hover: hover) {
+  .am-sheet-grip:hover {
+    color: var(--fg-muted);
+  }
 }
 .am-sheet-grip:active {
   transform: scale(0.97);

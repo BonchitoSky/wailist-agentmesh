@@ -27,9 +27,13 @@ const HOW_IT_WORKS = [
 const BILLING_CSS = `
 .bill-reveal { animation: fade-up 0.45s var(--ease) both; }
 .bill-preset { transition: transform 0.15s var(--ease), border-color 0.15s var(--ease), background 0.15s var(--ease); }
-.bill-preset:hover { transform: translateY(-2px); border-color: var(--border-strong); }
 .bill-cta { transition: transform 0.12s var(--ease), box-shadow 0.2s var(--ease); }
-.bill-cta:not(:disabled):hover { box-shadow: 0 12px 34px var(--accent-glow); }
+/* Hover only where a pointer hovers: a tap on a touch screen leaves :hover set,
+   and the tapped preset would stay lifted. */
+@media (hover: hover) {
+  .bill-preset:hover { transform: translateY(-2px); border-color: var(--border-strong); }
+  .bill-cta:not(:disabled):hover { box-shadow: 0 12px 34px var(--accent-glow); }
+}
 .bill-cta:not(:disabled):active { transform: scale(0.99); }
 .bill-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 @media (max-width: 900px) { .bill-grid { grid-template-columns: minmax(0, 1fr); } }

@@ -1316,9 +1316,12 @@ function WorkflowRows({
             cursor: "pointer",
             transition: "background .12s",
           }}
-          onMouseEnter={(e) =>
-            (e.currentTarget.style.background = "var(--bg-elev-2)")
-          }
+          // Mouse only: a tap fires the enter event too, and the highlight
+          // then stays on the row after the finger lifts.
+          onPointerEnter={(e) => {
+            if (e.pointerType === "mouse")
+              e.currentTarget.style.background = "var(--bg-elev-2)";
+          }}
           onMouseLeave={(e) =>
             (e.currentTarget.style.background = "transparent")
           }
@@ -1476,7 +1479,10 @@ function WorkflowGrid({
             cursor: "pointer",
             transition: "border-color .15s, transform .15s",
           }}
-          onMouseEnter={(e) => {
+          // Mouse only, as on the row above: after a tap the card would stay
+          // lifted.
+          onPointerEnter={(e) => {
+            if (e.pointerType !== "mouse") return;
             (e.currentTarget as HTMLElement).style.borderColor =
               "var(--border-strong)";
             (e.currentTarget as HTMLElement).style.transform =

@@ -405,12 +405,17 @@ body {
     background 0.15s var(--ease),
     color 0.15s var(--ease);
 }
-.profile-menu__item:hover {
-  background: var(--bg-elev-3);
-  color: var(--fg);
-}
-.profile-menu__item--danger:hover {
-  color: var(--danger);
+/* Hover rules in this file sit under (hover: hover). On a touch screen a tap
+   also sets :hover, and it stays set after the finger lifts, so the control
+   looks selected until something else is tapped. */
+@media (hover: hover) {
+  .profile-menu__item:hover {
+    background: var(--bg-elev-3);
+    color: var(--fg);
+  }
+  .profile-menu__item--danger:hover {
+    color: var(--danger);
+  }
 }
 .profile-menu__divider {
   height: 1px;
@@ -450,15 +455,17 @@ body {
   cursor: pointer;
   transition: color 0.18s var(--ease);
 }
-.credit-topup:hover {
-  color: var(--accent);
-}
 .credit-topup svg {
   display: block;
   transition: transform 0.3s var(--ease);
 }
-.credit-topup:hover svg {
-  transform: rotate(90deg) scale(1.15);
+@media (hover: hover) {
+  .credit-topup:hover {
+    color: var(--accent);
+  }
+  .credit-topup:hover svg {
+    transform: rotate(90deg) scale(1.15);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .credit-topup,
@@ -1053,8 +1060,10 @@ body {
   flex-shrink: 0;
   transition: color var(--nav-rate-slow) var(--ease-nav);
 }
-.appnav__trigger:hover {
-  color: var(--fg);
+@media (hover: hover) {
+  .appnav__trigger:hover {
+    color: var(--fg);
+  }
 }
 
 /* ── Bottom navigation (handheld) ───────────────────────────────────────────
@@ -1097,11 +1106,13 @@ body {
   color: var(--accent);
 }
 
-.bottomnav__item:hover {
-  color: var(--fg);
-}
-.bottomnav__item[data-active]:hover {
-  color: var(--accent);
+@media (hover: hover) {
+  .bottomnav__item:hover {
+    color: var(--fg);
+  }
+  .bottomnav__item[data-active]:hover {
+    color: var(--accent);
+  }
 }
 
 /* Physical acknowledgement of the press, per the app's motion rules. Scaling
@@ -1266,9 +1277,13 @@ body[data-bottomnav] .appnav__trigger {
 .appnav--landing .appnav__trigger {
   color: rgba(242, 240, 247, 0.9);
 }
-.appnav--landing .appnav__link[aria-current="page"],
-.appnav--landing .appnav__trigger:hover {
+.appnav--landing .appnav__link[aria-current="page"] {
   color: #fff;
+}
+@media (hover: hover) {
+  .appnav--landing .appnav__trigger:hover {
+    color: #fff;
+  }
 }
 .appnav--landing .appnav__sheet-foot {
   border-top-color: rgba(242, 240, 247, 0.12);

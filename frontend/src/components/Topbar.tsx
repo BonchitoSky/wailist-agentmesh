@@ -401,8 +401,11 @@ function NavLink({
       className="am-nav-link"
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = "var(--bg-elev-2)";
+      // Mouse only: on a tablet, where these links show, a tap would leave the
+      // link highlighted.
+      onPointerEnter={(e) => {
+        if (!active && e.pointerType === "mouse")
+          e.currentTarget.style.background = "var(--bg-elev-2)";
       }}
       onMouseLeave={(e) => {
         if (!active) e.currentTarget.style.background = "transparent";
