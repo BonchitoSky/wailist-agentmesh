@@ -143,7 +143,10 @@ export function useAuth() {
     try {
       await auth.signOut();
     } catch (err) {
-      console.error("sign-out request failed; clearing local session anyway", err);
+      console.error(
+        "sign-out request failed; clearing local session anyway",
+        err,
+      );
     } finally {
       clearLocalSession();
     }
