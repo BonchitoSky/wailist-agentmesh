@@ -46,7 +46,8 @@ const page: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   background: "var(--bg)",
-  padding: "calc(24px + var(--safe-top)) 16px calc(24px + var(--safe-bottom))",
+  padding:
+    "calc(24px + var(--safe-top)) calc(16px + var(--safe-right)) calc(24px + var(--safe-bottom)) calc(16px + var(--safe-left))",
 };
 
 const card: React.CSSProperties = {

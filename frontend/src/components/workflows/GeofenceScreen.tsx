@@ -630,7 +630,8 @@ function Wrap({ children }: { children: React.ReactNode }) {
 const page: React.CSSProperties = {
   minHeight: "100dvh",
   background: "var(--bg)",
-  padding: "calc(24px + var(--safe-top)) 16px calc(40px + var(--safe-bottom))",
+  padding:
+    "calc(24px + var(--safe-top)) calc(16px + var(--safe-right)) calc(40px + var(--safe-bottom)) calc(16px + var(--safe-left))",
 };
 
 function SectionLabel({ children }: { children: React.ReactNode }) {

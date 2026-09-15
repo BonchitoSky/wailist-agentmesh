@@ -3,6 +3,10 @@
 
 /* ── Design tokens ────────────────────────────────────────────────────── */
 :root {
+  /* The app has one theme, and it is dark. Saying so lets the controls the
+     browser draws itself (select pop-ups, date pickers, autofill, scrollbars)
+     match, instead of rendering light. */
+  color-scheme: dark;
   --bg: #08070c;
   --bg-elev-1: #0f0e18;
   --bg-elev-2: #161526;
@@ -647,8 +651,9 @@ body {
   padding: calc(
       40px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))
     )
-    56px
-    calc(40px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    calc(56px + var(--safe-right))
+    calc(40px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))
+    calc(56px + var(--safe-left));
   overflow: auto;
 }
 /* The form's own width. It was an inline `maxWidth: 360` on the element, which
@@ -675,10 +680,11 @@ body {
     padding: calc(
         28px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))
       )
-      24px
+      calc(24px + var(--safe-right))
       calc(
         28px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))
-      );
+      )
+      calc(24px + var(--safe-left));
   }
   .auth-card {
     max-width: 420px;
@@ -689,10 +695,11 @@ body {
     padding: calc(
         20px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px))
       )
-      20px
+      calc(20px + var(--safe-right))
       calc(
         24px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))
-      );
+      )
+      calc(20px + var(--safe-left));
   }
   /* On a phone the form IS the screen: no card, no centred column, just the
      full width inside the padding. */
@@ -1080,6 +1087,9 @@ body {
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
+  /* In landscape a navigation bar or a cutout can sit on either side. */
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
   background: var(--bg-elev-1);
   border-top: 1px solid var(--border);
 }
@@ -1143,6 +1153,13 @@ body[data-bottomnav] .appnav__trigger {
   display: none;
 }
 
+/* While a text field has focus the on-screen keyboard is up, and the fixed
+   bar would ride up above it, over the field being typed in. BottomNav sets
+   the attribute. */
+body[data-typing] .bottomnav {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .bottomnav__item {
     transition: none;
@@ -1163,7 +1180,9 @@ body[data-bottomnav] .appnav__trigger {
   overflow-y: auto;
   overscroll-behavior: contain;
   background: var(--bg-elev-1);
-  padding: 8px 16px 40px;
+  /* Clear of the gesture bar, and of a side navigation bar in landscape. */
+  padding: 8px calc(16px + var(--safe-right)) calc(40px + var(--safe-bottom))
+    calc(16px + var(--safe-left));
   opacity: 0;
   visibility: hidden;
   transform: translateY(-6px);

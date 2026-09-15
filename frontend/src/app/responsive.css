@@ -60,6 +60,15 @@
   min-height: 100dvh;
 }
 
+/* In landscape a navigation bar or a camera cutout can sit on the left or
+   right edge. App screens keep their content, top bar included, clear of it.
+   The values are zero in portrait and in a browser. */
+.am-viewport,
+.am-viewport-min {
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+
 /* ── Safe areas ─────────────────────────────────────────────────────────────
    The app targets Android SDK 36, so from Android 15 the WebView draws behind
    the status and navigation bars and the page is responsible for keeping its
@@ -81,7 +90,8 @@
    The top and bottom values are also published as custom properties, because a
    bar that has to GROW by the inset needs it inside a calc() rather than as
    padding, and repeating the whole var/env/floor chain inline is where a typo
-   hides. Only those two: nothing yet needs to compute against the side insets.
+   hides. The side values are for landscape, where 3-button navigation and a
+   camera cutout sit on the left or right edge.
    This is the one place in this file that is not an `.am-*` class; it defines
    new custom properties rather than overriding any existing rule. */
 :root {
@@ -90,6 +100,8 @@
     --safe-area-inset-bottom,
     env(safe-area-inset-bottom, 0px)
   );
+  --safe-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+  --safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
 }
 
 .am-safe-top {
@@ -121,12 +133,14 @@
    That bleed fits inside 32px of page padding but not inside 16px, so on a
    phone the section sits inside the column instead. */
 .am-legal-bar {
-  padding: calc(16px + var(--safe-top)) 32px 16px;
+  padding: calc(16px + var(--safe-top)) calc(32px + var(--safe-right)) 16px
+    calc(32px + var(--safe-left));
 }
 .am-legal-main {
   max-width: 740px;
   margin: 0 auto;
-  padding: 64px 32px calc(96px + var(--safe-bottom));
+  padding: 64px calc(32px + var(--safe-right)) calc(96px + var(--safe-bottom))
+    calc(32px + var(--safe-left));
 }
 .am-legal-callout {
   margin: 8px -24px;
@@ -134,11 +148,12 @@
 }
 @media (max-width: 520px) {
   .am-legal-bar {
-    padding-left: 16px;
-    padding-right: 16px;
+    padding-left: calc(16px + var(--safe-left));
+    padding-right: calc(16px + var(--safe-right));
   }
   .am-legal-main {
-    padding: 40px 16px calc(64px + var(--safe-bottom));
+    padding: 40px calc(16px + var(--safe-right)) calc(64px + var(--safe-bottom))
+      calc(16px + var(--safe-left));
   }
   .am-legal-callout {
     margin: 8px 0;
