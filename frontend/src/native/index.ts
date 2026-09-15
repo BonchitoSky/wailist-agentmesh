@@ -18,6 +18,7 @@ import {
   type PushState,
 } from "./push";
 import { listenForCallback } from "./oauth";
+import { listenForBack } from "./back";
 import { navigateInApp } from "@/lib/nativeNav";
 
 export interface NativeShell {
@@ -75,6 +76,9 @@ export async function boot(): Promise<string | null> {
   // and a listener registered after that has already missed it -- the app
   // would open on its front page having been asked to open a specific run.
   void listenForTaps().catch(() => {});
+  // Back steps through the app's history and leaves the app on its first
+  // screen. See back.ts for why that needs a listener at all.
+  void listenForBack().catch(() => {});
   // Re-register with FCM if this device was already turned on for
   // notifications. Two reasons, and the second is the one that is easy to
   // miss:

@@ -19,6 +19,7 @@ function harness(opts: {
     disable: 0,
     clears: 0,
     taps: 0,
+    back: 0,
     flushes: 0,
     oauth: 0,
   };
@@ -35,6 +36,11 @@ function harness(opts: {
     listenForCallback: async (callback: typeof onOAuth) => {
       calls.oauth += 1;
       onOAuth = callback;
+    },
+  }));
+  vi.doMock("./back", () => ({
+    listenForBack: async () => {
+      calls.back += 1;
     },
   }));
 
@@ -140,7 +146,7 @@ describe("boot", () => {
     expect(calls.enable).toBe(0);
   });
 
-  it("still attaches the tap listener and flushes whatever the push state", async () => {
+  it("still attaches the tap and Back listeners and flushes whatever the push state", async () => {
     // The re-arm is an addition to boot(), not a gate on it. A notification
     // tapped from a cold start arrives during launch, so the listener has to
     // go on regardless.
@@ -149,6 +155,7 @@ describe("boot", () => {
 
     await boot();
     expect(calls.taps).toBe(1);
+    expect(calls.back).toBe(1);
     expect(calls.flushes).toBe(1);
   });
 
