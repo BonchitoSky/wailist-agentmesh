@@ -30,7 +30,7 @@ const MODAL_CSS = `
 .checkout-panel {
   position: relative;
   display: flex; flex-direction: column;
-  max-height: 90vh; max-width: min(980px, calc(100vw - 48px));
+  max-height: 90vh; max-height: 90dvh; max-width: min(980px, calc(100vw - 48px));
   width: 100%;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-4);
