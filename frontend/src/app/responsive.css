@@ -112,6 +112,40 @@
   padding-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
 }
 
+/* Legal pages (/privacy, /terms, /refund-policy). They have no app top bar, so
+   in the Android app, where content draws under the status bar, their own
+   header takes the inset. The phone step narrows the 32px desktop margins,
+   which left 256px for the text at 320px wide.
+
+   A highlighted section bleeds 24px past the text column on wider screens.
+   That bleed fits inside 32px of page padding but not inside 16px, so on a
+   phone the section sits inside the column instead. */
+.am-legal-bar {
+  padding: calc(16px + var(--safe-top)) 32px 16px;
+}
+.am-legal-main {
+  max-width: 740px;
+  margin: 0 auto;
+  padding: 64px 32px calc(96px + var(--safe-bottom));
+}
+.am-legal-callout {
+  margin: 8px -24px;
+  padding: 32px 24px;
+}
+@media (max-width: 520px) {
+  .am-legal-bar {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .am-legal-main {
+    padding: 40px 16px calc(64px + var(--safe-bottom));
+  }
+  .am-legal-callout {
+    margin: 8px 0;
+    padding: 24px 16px;
+  }
+}
+
 /* ── Touch ──────────────────────────────────────────────────────────────────
    Scoped to `pointer: coarse` rather than to a width, for the same reason
    lib/device.ts is: a laptop dragged narrow is still driven by a mouse, and
