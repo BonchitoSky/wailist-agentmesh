@@ -417,6 +417,7 @@ export function WorkflowsPage() {
               {["all", "active", "paused", "draft"].map((s) => (
                 <button
                   key={s}
+                  className="wf-filter"
                   onClick={() => setStatus(s)}
                   style={{
                     border: "none",
@@ -448,6 +449,7 @@ export function WorkflowsPage() {
               }}
             >
               <button
+                className="wf-view-toggle"
                 onClick={() => setView("rows")}
                 style={{
                   ...ghostBtnSm,
@@ -460,6 +462,7 @@ export function WorkflowsPage() {
                 ☰ Rows
               </button>
               <button
+                className="wf-view-toggle"
                 onClick={() => setView("grid")}
                 style={{
                   ...ghostBtnSm,

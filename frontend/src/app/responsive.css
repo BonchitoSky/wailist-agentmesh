@@ -189,6 +189,36 @@
   body {
     overscroll-behavior-y: contain;
   }
+
+  /* 44px touch targets. These controls are drawn small for a mouse, and a
+     fingertip needs more. Where the control's own box can grow it does; the
+     avatar and the Usage "+" keep their size and take the tap through an
+     invisible 44px square centred on them. */
+  .wf-filter,
+  .profile-menu__item {
+    min-height: 44px;
+  }
+  /* ghostBtnSm sets its height inline, and an inline style beats a
+     stylesheet rule unless the rule is important. */
+  .wf-row-actions > button,
+  .wf-view-toggle {
+    min-height: 44px !important;
+  }
+  .profile-menu__trigger {
+    position: relative;
+  }
+  /* .credit-topup is already absolutely positioned, so it anchors the square
+     without a position rule of its own. */
+  .profile-menu__trigger::before,
+  .credit-topup::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
 }
 
 @media (pointer: coarse) and (prefers-reduced-motion: reduce) {
