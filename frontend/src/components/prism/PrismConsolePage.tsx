@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Topbar } from "@/components/Topbar";
 import { Tag, ghostBtnSm } from "@/components/ui";
+import { ExternalLink } from "@/components/ExternalLink";
 import {
   prism as prismApi,
   formatUsd,
@@ -492,7 +493,7 @@ export function PrismConsolePage() {
     >
       <Topbar />
       <div style={{ flex: 1, overflow: "auto" }}>
-        <div style={{ maxWidth: 860, margin: "0 auto", padding: "28px 24px 96px" }}>
+        <div className="am-console-page">
           {/* ghostBtnSm is inline-flex (so its own icon+label stay aligned),
               and Tag is inline-flex too -- with no block-level element
               between them, the button's marginBottom did nothing and the
@@ -506,15 +507,7 @@ export function PrismConsolePage() {
           </div>
 
           <Tag>prism · ai routing</Tag>
-          <h1
-            style={{
-              margin: "14px 0 6px",
-              fontSize: 34,
-              fontWeight: 500,
-              letterSpacing: "-0.02em",
-              color: "var(--fg)",
-            }}
-          >
+          <h1 className="am-console-title">
             Run an AI task
           </h1>
           <p
@@ -859,27 +852,17 @@ export function PrismConsolePage() {
                       {result.txId && (
                         <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
                           Paid to Prism{" "}
-                          <a
-                            href={result.explorerURL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={txLinkStyle}
-                          >
+                          <ExternalLink href={result.explorerURL} style={txLinkStyle}>
                             {result.txId}
-                          </a>
+                          </ExternalLink>
                         </div>
                       )}
                       {result.platformFeeTxId && (
                         <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
                           AgentMesh fee{" "}
-                          <a
-                            href={result.platformFeeExplorerURL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={txLinkStyle}
-                          >
+                          <ExternalLink href={result.platformFeeExplorerURL} style={txLinkStyle}>
                             {result.platformFeeTxId}
-                          </a>
+                          </ExternalLink>
                         </div>
                       )}
                     </div>

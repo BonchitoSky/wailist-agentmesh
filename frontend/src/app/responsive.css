@@ -161,6 +161,48 @@
   }
 }
 
+/* Partner console pages (/bazaar/tendril, /bazaar/prism, /bazaar/helixbox).
+   Their padding and heading were fixed at desktop sizes, which left a 360px
+   phone about 312px for the page; the phone step gives some of that back. */
+.am-console-page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 28px 24px 96px;
+}
+.am-console-title {
+  margin: 14px 0 6px;
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+@media (max-width: 520px) {
+  .am-console-page {
+    padding: 20px 16px 64px;
+  }
+  .am-console-title {
+    font-size: 26px;
+  }
+}
+/* The consoles size their buttons and inputs at 26–32px for a mouse. A finger
+   needs 44px. min-height wins over the inline height; !important is only for
+   ghostBtnSm, which sets an inline minHeight of its own. */
+@media (pointer: coarse) {
+  .am-console-page
+    :is(
+      button,
+      select,
+      input:not(
+        [type="checkbox"],
+        [type="radio"],
+        [type="range"],
+        [type="file"]
+      )
+    ) {
+    min-height: 44px !important;
+  }
+}
+
 /* ── Touch ──────────────────────────────────────────────────────────────────
    Scoped to `pointer: coarse` rather than to a width, for the same reason
    lib/device.ts is: a laptop dragged narrow is still driven by a mouse, and

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { Topbar } from "@/components/Topbar";
 import { Tag, ghostBtnSm } from "@/components/ui";
+import { ExternalLink } from "@/components/ExternalLink";
 import {
   helixbox as helixboxApi,
   formatUsd,
@@ -535,7 +536,7 @@ export function HelixboxConsolePage() {
     >
       <Topbar />
       <div style={{ flex: 1, overflow: "auto" }}>
-        <div style={{ maxWidth: 860, margin: "0 auto", padding: "28px 24px 96px" }}>
+        <div className="am-console-page">
           <div style={{ marginBottom: 18 }}>
             <button onClick={() => router.push("/workflows")} style={ghostBtnSm}>
               ← Workflows
@@ -543,15 +544,7 @@ export function HelixboxConsolePage() {
           </div>
 
           <Tag>helixbox · mobile ide</Tag>
-          <h1
-            style={{
-              margin: "14px 0 6px",
-              fontSize: 34,
-              fontWeight: 500,
-              letterSpacing: "-0.02em",
-              color: "var(--fg)",
-            }}
-          >
+          <h1 className="am-console-title">
             Buy a HelixBox session
           </h1>
           <p
@@ -930,27 +923,17 @@ export function HelixboxConsolePage() {
                       {result.txId && (
                         <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
                           Paid to HelixBox{" "}
-                          <a
-                            href={result.explorerURL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={txLinkStyle}
-                          >
+                          <ExternalLink href={result.explorerURL} style={txLinkStyle}>
                             {result.txId}
-                          </a>
+                          </ExternalLink>
                         </div>
                       )}
                       {result.platformFeeTxId && (
                         <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
                           AgentMesh fee{" "}
-                          <a
-                            href={result.platformFeeExplorerURL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={txLinkStyle}
-                          >
+                          <ExternalLink href={result.platformFeeExplorerURL} style={txLinkStyle}>
                             {result.platformFeeTxId}
-                          </a>
+                          </ExternalLink>
                         </div>
                       )}
                     </div>

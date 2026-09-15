@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Topbar } from "@/components/Topbar";
 import { Tag, ghostBtnSm } from "@/components/ui";
+import { ExternalLink } from "@/components/ExternalLink";
 import { TerminalTab } from "@/components/canvas/TerminalTab";
 import {
   tendril as tendrilApi,
@@ -293,7 +294,7 @@ export function TendrilConsolePage() {
     >
       <Topbar />
       <div style={{ flex: 1, overflow: "auto" }}>
-        <div style={{ maxWidth: 860, margin: "0 auto", padding: "28px 24px 96px" }}>
+        <div className="am-console-page">
           {/* ghostBtnSm and Tag are both inline-flex; with no block-level
               element between them the button's marginBottom did nothing and
               the two sat on one crowded line (see PrismConsolePage's same
@@ -306,15 +307,7 @@ export function TendrilConsolePage() {
           </div>
 
           <Tag>tendril · compute</Tag>
-          <h1
-            style={{
-              margin: "14px 0 6px",
-              fontSize: 34,
-              fontWeight: 500,
-              letterSpacing: "-0.02em",
-              color: "var(--fg)",
-            }}
-          >
+          <h1 className="am-console-title">
             Rent a machine
           </h1>
           <p style={{ margin: "0 0 14px", color: "var(--fg-muted)", fontSize: 14, maxWidth: 520 }}>
@@ -342,7 +335,15 @@ export function TendrilConsolePage() {
 
           {/* ── Balance ledger ─────────────────────────────────────────── */}
           <Panel style={{ padding: "18px 20px", marginBottom: 20 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 12,
+              }}
+            >
               <div>
                 <PanelLabel>Tendril credit</PanelLabel>
                 <div
@@ -378,7 +379,7 @@ export function TendrilConsolePage() {
                 </button>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                  <div style={{ display: "flex", gap: 6 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 6 }}>
                     <span
                       style={{
                         ...monoInput,
@@ -446,14 +447,9 @@ export function TendrilConsolePage() {
                     <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
                       <span style={{ color: "var(--fg-dim)" }}>Wallet 1 → Wallet 2</span>
                       {topupResult.explorerURL ? (
-                        <a
-                          href={topupResult.explorerURL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={txLinkStyle}
-                        >
+                        <ExternalLink href={topupResult.explorerURL} style={txLinkStyle}>
                           {topupResult.txId.slice(0, 10)}…
-                        </a>
+                        </ExternalLink>
                       ) : (
                         <code style={{ fontFamily: "var(--font-mono)", color: "var(--fg-muted)" }}>
                           {topupResult.txId.slice(0, 10)}…
@@ -465,14 +461,9 @@ export function TendrilConsolePage() {
                     <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
                       <span style={{ color: "var(--fg-dim)" }}>Wallet 2 → Tendril</span>
                       {topupResult.outboundExplorerURL ? (
-                        <a
-                          href={topupResult.outboundExplorerURL}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={txLinkStyle}
-                        >
+                        <ExternalLink href={topupResult.outboundExplorerURL} style={txLinkStyle}>
                           {topupResult.outboundTxId.slice(0, 10)}…
-                        </a>
+                        </ExternalLink>
                       ) : (
                         <code style={{ fontFamily: "var(--font-mono)", color: "var(--fg-muted)" }}>
                           {topupResult.outboundTxId.slice(0, 10)}…
@@ -489,8 +480,10 @@ export function TendrilConsolePage() {
           <div
             style={{
               display: "flex",
+              flexWrap: "wrap",
               justifyContent: "space-between",
               alignItems: "baseline",
+              gap: "6px 12px",
               marginBottom: 10,
             }}
           >
@@ -533,12 +526,15 @@ export function TendrilConsolePage() {
                   style={{
                     padding: "14px 18px",
                     display: "flex",
+                    flexWrap: "wrap",
                     alignItems: "center",
-                    gap: 16,
+                    gap: "10px 16px",
                   }}
                 >
                   <Dot color={GREEN} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  {/* The 180px basis moves the price and Rent onto their own
+                      line on a phone rather than squeezing the name. */}
+                  <div style={{ flex: "1 1 180px", minWidth: 0 }}>
                     <div
                       style={{
                         fontFamily: "var(--font-mono)",
@@ -555,7 +551,8 @@ export function TendrilConsolePage() {
                     <div
                       style={{
                         display: "flex",
-                        gap: 10,
+                        flexWrap: "wrap",
+                        gap: "2px 10px",
                         marginTop: 2,
                         fontFamily: "var(--font-mono)",
                         fontSize: 11,
@@ -575,7 +572,7 @@ export function TendrilConsolePage() {
                       )}
                     </div>
                   </div>
-                  <div style={{ textAlign: "right", fontSize: 11, color: overBudget ? "var(--danger)" : "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>
+                  <div style={{ marginLeft: "auto", textAlign: "right", fontSize: 11, color: overBudget ? "var(--danger)" : "var(--fg-dim)", fontFamily: "var(--font-mono)" }}>
                     ${cost.toFixed(2)}
                   </div>
                   <button
@@ -682,10 +679,11 @@ export function TendrilConsolePage() {
               </div>
 
               <div style={{ padding: 18 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
                   <code
                     style={{
-                      flex: 1,
+                      flex: "1 1 220px",
+                      minWidth: 0,
                       background: "var(--bg)",
                       border: "1px solid var(--border)",
                       borderRadius: "var(--r-1)",
@@ -701,7 +699,14 @@ export function TendrilConsolePage() {
                   </code>
                   <button
                     style={quietButton()}
-                    onClick={() => navigator.clipboard?.writeText(activeLease.sshCommand)}
+                    // Clipboard access can be refused (no permission, or a
+                    // WebView without it). The command stays selectable in
+                    // the box beside the button, so the failure is ignored.
+                    onClick={() => {
+                      navigator.clipboard
+                        ?.writeText(activeLease.sshCommand)
+                        .catch(() => {});
+                    }}
                   >
                     copy
                   </button>
@@ -713,7 +718,9 @@ export function TendrilConsolePage() {
                 {showTerminal && (
                   <div
                     style={{
-                      height: 320,
+                      // 60dvh keeps the terminal and its keyboard row in
+                      // view on a landscape phone.
+                      height: "min(320px, 60dvh)",
                       marginTop: 14,
                       border: "1px solid var(--border)",
                       borderRadius: "var(--r-2)",
