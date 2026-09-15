@@ -39,6 +39,18 @@ const BILLING_CSS = `
 .bill-cta:not(:disabled):active { transform: scale(0.99); }
 .bill-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 @media (max-width: 900px) { .bill-grid { grid-template-columns: minmax(0, 1fr); } }
+.bill-page { max-width: 1040px; margin: 0 auto; padding: 40px 24px 96px; }
+@media (max-width: 520px) { .bill-page { padding: 24px 16px 64px; } }
+/* The amount field, Repeat and the coupon row are 36–42px for a mouse. */
+@media (pointer: coarse) { .bill-touch { min-height: 44px; } }
+/* The "+5%" badge sits in the card's corner. A card under about 130px wide
+   has no room for it beside "₹20000" (phones narrower than about 345px, and
+   four cards in the 901–1000px two-column layout), so the badge moves under
+   the price there. The query measures the content box, inside the card's
+   12px padding. */
+.bill-preset { container-type: inline-size; }
+.bill-preset-badge { position: absolute; top: 8px; right: 8px; }
+@container (max-width: 104px) { .bill-preset-badge { position: static; margin-top: 2px; } }
 @media (prefers-reduced-motion: reduce) {
   .bill-reveal, .bill-preset, .bill-cta { animation: none; transition: none; }
 }
@@ -251,13 +263,7 @@ export default function BillingPage() {
 
       {/* Main scroll area */}
       <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>
-        <div
-          style={{
-            maxWidth: 1040,
-            margin: "0 auto",
-            padding: "40px 24px 96px",
-          }}
-        >
+        <div className="bill-page">
           {/* Header */}
           <div className="bill-reveal" style={{ marginBottom: 24 }}>
             <h1
@@ -494,11 +500,9 @@ export default function BillingPage() {
                           </span>
                           {hasBonus && (
                             <span
+                              className="bill-preset-badge"
                               style={{
-                                position: "absolute",
-                                top: 8,
-                                right: 8,
-                                fontSize: 9,
+                                fontSize: 11,
                                 fontWeight: 700,
                                 color: "var(--accent)",
                                 background: "var(--accent-soft)",
@@ -518,6 +522,7 @@ export default function BillingPage() {
                   {/* Custom amount */}
                   <div style={{ marginTop: 14 }}>
                     <div
+                      className="bill-touch"
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -601,6 +606,7 @@ export default function BillingPage() {
                   {lastPurchase?.amountINR !== undefined && (
                     <button
                       type="button"
+                      className="bill-touch"
                       onClick={() => openCheckoutFor(lastPurchase.amountINR!)}
                       style={{
                         width: "100%",
@@ -681,6 +687,7 @@ export default function BillingPage() {
                 <div style={{ display: "flex", gap: 8 }}>
                   <input
                     type="text"
+                    className="bill-touch"
                     placeholder="Coupon code"
                     value={couponCode}
                     onChange={(e) => {
@@ -708,6 +715,7 @@ export default function BillingPage() {
                   />
                   <button
                     type="button"
+                    className="bill-touch"
                     onClick={applyCoupon}
                     disabled={!couponCode.trim() || couponState === "loading"}
                     style={{
