@@ -157,8 +157,7 @@ export function CheckoutModal({
                 <p
                   style={{ fontSize: 13, color: "var(--fg-muted)", margin: 0 }}
                 >
-                  ${creditedUSD.toFixed(2)} credits added to your
-                  wallet.
+                  ${creditedUSD.toFixed(2)} credits added to your wallet.
                 </p>
                 <div
                   style={{
