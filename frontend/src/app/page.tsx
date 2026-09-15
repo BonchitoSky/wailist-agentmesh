@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { LandingPage } from "@/components/landing/LandingPage";
 import { useAuth } from "@/hooks/useAuth";
 import { IS_NATIVE } from "@/lib/nativeAuth";
+import { takePendingRoute } from "@/lib/nativeNav";
 
 // `/` is two different things depending on who is asking.
 //
@@ -33,9 +34,19 @@ export default function Home() {
     // known, and a shell that fails to boot resolves to signed-out rather than
     // hanging, which lands the user on /signin.
     if (!IS_NATIVE || loading) return;
+    // A notification tapped or a sign-in result delivered during launch is
+    // held until now (lib/nativeNav.ts), and wins over the default. A route
+    // that needs a session is only followed when there is one.
+    const held = takePendingRoute()?.href;
+    const target =
+      held && (signedIn || held.startsWith("/signin"))
+        ? held
+        : signedIn
+          ? "/workflows"
+          : "/signin";
     // replace, not push: the marketing page must not sit in the back stack, or
     // Android's back gesture from /signin returns to it.
-    router.replace(signedIn ? "/workflows" : "/signin");
+    router.replace(target);
   }, [signedIn, loading, router]);
 
   // IS_NATIVE is a build-time constant, so the web bundle keeps the landing

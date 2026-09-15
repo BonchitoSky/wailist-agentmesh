@@ -29,7 +29,7 @@ function harness(opts: {
     .mockResolvedValue(undefined);
   let onOAuth: ((result: OAuthResult) => void | Promise<void>) | undefined;
 
-  vi.stubGlobal("window", { location: { assign: navigate } });
+  vi.doMock("@/lib/nativeNav", () => ({ navigateInApp: navigate }));
   vi.doMock("@/hooks/useAuth", () => ({ persistNativeSession }));
   vi.doMock("./oauth", () => ({
     listenForCallback: async (callback: typeof onOAuth) => {
@@ -97,7 +97,6 @@ function harness(opts: {
 }
 
 afterEach(() => {
-  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -164,7 +163,8 @@ describe("boot", () => {
     expect(h.calls.taps).toBe(1);
     expect(h.calls.enable).toBe(0);
     expect(h.persistNativeSession).toHaveBeenCalledWith("tok_oauth");
-    expect(h.navigate).toHaveBeenCalledWith("/workflows");
+    // Inside the app, replacing the sign-in screen, not a page load.
+    expect(h.navigate).toHaveBeenCalledWith("/workflows", { replace: true });
   });
 
   it("handles OAuth while notification restoration is still pending", async () => {
@@ -184,7 +184,7 @@ describe("boot", () => {
     expect(h.calls.enable).toBe(0);
     expect(h.calls.taps).toBe(1);
     expect(h.persistNativeSession).toHaveBeenCalledWith("tok_oauth");
-    expect(h.navigate).toHaveBeenCalledWith("/workflows");
+    expect(h.navigate).toHaveBeenCalledWith("/workflows", { replace: true });
 
     finishRestore();
     await settle();
@@ -206,7 +206,7 @@ describe("boot", () => {
     await h.deliverOAuth({ ok: true, token: "tok_oauth" });
 
     expect(h.persistNativeSession).toHaveBeenCalledWith("tok_oauth");
-    expect(h.navigate).toHaveBeenCalledWith("/workflows");
+    expect(h.navigate).toHaveBeenCalledWith("/workflows", { replace: true });
     expect(h.calls.taps).toBe(1);
     expect(h.calls.enable).toBe(0);
   });
@@ -221,7 +221,23 @@ describe("boot", () => {
 
     expect(h.calls.enable).toBe(1);
     expect(h.persistNativeSession).not.toHaveBeenCalled();
-    expect(h.navigate).toHaveBeenCalledWith("/signin?error=cancelled");
+    // The reason survives to the sign-in screen.
+    expect(h.navigate).toHaveBeenCalledWith("/signin?error=cancelled", {
+      replace: true,
+    });
+  });
+
+  it("sends a session the device could not keep back to sign-in with its reason", async () => {
+    const h = harness({ token: null, optedIn: false });
+    h.persistNativeSession.mockRejectedValueOnce(new Error("keystore"));
+    const { boot } = await import("./index");
+
+    await boot();
+    await h.deliverOAuth({ ok: true, token: "tok_oauth" });
+
+    expect(h.navigate).toHaveBeenCalledWith("/signin?error=session_persist", {
+      replace: true,
+    });
   });
 });
 

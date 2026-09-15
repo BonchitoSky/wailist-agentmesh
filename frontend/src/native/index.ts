@@ -18,6 +18,7 @@ import {
   type PushState,
 } from "./push";
 import { listenForCallback } from "./oauth";
+import { navigateInApp } from "@/lib/nativeNav";
 
 export interface NativeShell {
   onSignedIn(token: string): Promise<void>;
@@ -106,19 +107,23 @@ export async function boot(): Promise<string | null> {
   // The token goes in through the same seam password sign-in uses rather than
   // through saveToken directly -- see persistNativeSession -- so a failed write
   // rolls the session back instead of leaving the app half signed in.
+  //
+  // The result is routed inside the app, not by a page load, which would
+  // reopen the launch page and drop the error reason (see lib/nativeNav.ts).
+  // Replacing the entry keeps Back from returning to the sign-in screen.
   void listenForCallback(async (result) => {
     if (!result.ok) {
-      window.location.assign(
-        `/signin?error=${encodeURIComponent(result.reason)}`,
-      );
+      navigateInApp(`/signin?error=${encodeURIComponent(result.reason)}`, {
+        replace: true,
+      });
       return;
     }
     const { persistNativeSession } = await import("@/hooks/useAuth");
     try {
       await persistNativeSession(result.token);
-      window.location.assign("/workflows");
+      navigateInApp("/workflows", { replace: true });
     } catch {
-      window.location.assign("/signin?error=session_persist");
+      navigateInApp("/signin?error=session_persist", { replace: true });
     }
   }).catch(() => {});
   return token;
