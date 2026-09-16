@@ -86,6 +86,35 @@ body {
   display: none;
 }
 
+/* No vertical scrollbar on a touchscreen.
+
+   The rules above are a mouse design -- an 8px pill with a :hover state, and a
+   hover state is meaningless under a finger. On a phone that pill sits
+   permanently down the page edge, which is one of the things that makes a
+   screen read as a web page in a WebView instead of an app. A touch user
+   scrolls by dragging the content, not by aiming at a thumb.
+
+   Vertical ONLY, and that is deliberate. A horizontal bar appears only inside a
+   table somebody is already scrolling, and in two places -- the workflows row
+   list and the Helixbox console -- it is the only sign there is more to the
+   side. .am-hscroll does not need it (its fade is measured and says so on its
+   own), but those two are not wrapped in it, so hiding both axes would leave
+   them scrolling with nothing to announce it.
+
+   Here and not in responsive.css's `pointer: coarse` block, even though that
+   block is where touch rules live. responsive.css is imported at the TOP of
+   this file, so at equal specificity it loses to the *::-webkit-scrollbar rule
+   above and would silently do nothing. A rule that has to beat a globals.css
+   declaration belongs beside it -- responsive.css's own header says so.
+
+   useScrollLock needs no change: it measures the gutter as offsetWidth minus
+   clientWidth rather than assuming 8px, so a hidden bar measures as zero. */
+@media (pointer: coarse) {
+  *::-webkit-scrollbar:vertical {
+    display: none;
+  }
+}
+
 /* ── Keyframes ────────────────────────────────────────────────────────── */
 @keyframes fade-up {
   from {
