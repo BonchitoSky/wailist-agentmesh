@@ -294,7 +294,7 @@ export function AuthPage({ initialMode = "signin" }: AuthPageProps) {
                       style={{
                         color: "var(--fg-dim)",
                         fontFamily: "var(--font-mono)",
-                        fontSize: 10,
+                        fontSize: 11,
                       }}
                     >
                       min 12 chars

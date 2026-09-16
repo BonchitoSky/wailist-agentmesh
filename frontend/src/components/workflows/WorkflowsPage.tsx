@@ -1130,7 +1130,7 @@ function SchedulePopover({
           color: "var(--fg)",
         }}
       />
-      <div style={{ fontSize: 9.5, color: "var(--fg-dim)", marginBottom: 8 }}>
+      <div style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 8 }}>
         Stored in UTC — may shift by an hour across daylight saving.
       </div>
       {cadence === "weekly" && (
@@ -1350,13 +1350,20 @@ function WorkflowRows({
               >
                 {wf.name}
               </div>
-              <div style={{ display: "flex", gap: 5, marginTop: 4 }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "2px 5px",
+                  marginTop: 4,
+                }}
+              >
                 {wf.tags?.map((t) => (
                   <span
                     key={t}
                     style={{
                       fontFamily: "var(--font-mono)",
-                      fontSize: 9,
+                      fontSize: 11,
                       color: "var(--fg-dim)",
                       textTransform: "uppercase",
                       letterSpacing: "0.06em",
@@ -1517,13 +1524,20 @@ function WorkflowGrid({
           >
             {wf.name}
           </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "2px 6px",
+              marginTop: 6,
+            }}
+          >
             {wf.tags?.map((t) => (
               <span
                 key={t}
                 style={{
                   fontFamily: "var(--font-mono)",
-                  fontSize: 9,
+                  fontSize: 11,
                   color: "var(--fg-dim)",
                   textTransform: "uppercase",
                   letterSpacing: "0.06em",
@@ -1561,7 +1575,7 @@ function WorkflowGrid({
                 <div
                   style={{
                     color: "var(--fg-dim)",
-                    fontSize: 9,
+                    fontSize: 11,
                     textTransform: "uppercase",
                     letterSpacing: "0.06em",
                   }}
