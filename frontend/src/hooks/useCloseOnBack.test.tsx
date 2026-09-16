@@ -41,6 +41,57 @@ describe("useCloseOnBack", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("adds nothing while inactive, and adds the entry when it opens", () => {
+    window.history.replaceState({ page: 1 }, "");
+    const push = vi.spyOn(window.history, "pushState");
+    const { rerender } = renderHook(
+      ({ active }: { active: boolean }) => useCloseOnBack(() => {}, active),
+      { initialProps: { active: false } },
+    );
+
+    expect(push).not.toHaveBeenCalled();
+
+    rerender({ active: true });
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes the entry when the sheet closes without calling back", () => {
+    vi.useFakeTimers();
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const { rerender } = renderHook(
+      ({ active }: { active: boolean }) => useCloseOnBack(() => {}, active),
+      { initialProps: { active: true } },
+    );
+
+    rerender({ active: false });
+    expect(back).not.toHaveBeenCalled();
+    vi.runAllTimers();
+
+    expect(back).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("keeps the entry when the effect re-runs, as it does in development", () => {
+    vi.useFakeTimers();
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const onClose = vi.fn();
+    const { rerender } = renderHook(
+      ({ active }: { active: boolean }) => useCloseOnBack(onClose, active),
+      { initialProps: { active: true } },
+    );
+
+    // Off and straight back on, before the scheduled removal can run.
+    rerender({ active: false });
+    rerender({ active: true });
+    vi.runAllTimers();
+
+    expect(back).not.toHaveBeenCalled();
+    // The entry is still the sheet's, so Back still closes it.
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it("does not add a second entry when one is already there", () => {
     window.history.replaceState({ __amSheet: true }, "");
     const push = vi.spyOn(window.history, "pushState");
