@@ -736,6 +736,17 @@ body {
   display: flex;
   gap: 8px;
 }
+/* The device check that hides these cannot answer until after hydration (see
+   hooks/useIsHandheld: the server has no device to inspect), so on a phone
+   browser the create controls paint for one frame and then disappear. The two
+   signals the hook reads, as a media query, keep them out of that frame. The
+   hook still owns the policy; this only stops the flash, and a touchscreen
+   laptop -- coarse pointer, but it hovers -- is untouched. */
+@media (pointer: coarse) and (hover: none) {
+  .wf-actions {
+    display: none;
+  }
+}
 .wf-controls {
   display: flex;
   align-items: center;
