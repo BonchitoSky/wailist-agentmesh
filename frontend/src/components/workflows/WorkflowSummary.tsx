@@ -47,9 +47,10 @@ function mergeRuns(fresh: RunSummary[], old: RunSummary[]): RunSummary[] {
 
 const WORKFLOW_STATUS: Record<
   string,
-  { tone: "ok" | "danger" | "default"; label: string }
+  { tone: "ok" | "warm" | "danger" | "default"; label: string }
 > = {
   deployed: { tone: "ok", label: "Deployed" },
+  paused: { tone: "warm", label: "Paused" },
   error: { tone: "danger", label: "Error" },
   draft: { tone: "default", label: "Draft" },
 };
@@ -246,9 +247,11 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   const blocked = workflow
     ? chat
       ? "This workflow starts from a chat message — run it from the AgentMesh desktop app"
-      : workflow.status !== "deployed"
-        ? "Not deployed yet — finish and deploy it in the AgentMesh desktop app"
-        : null
+      : workflow.status === "paused"
+        ? "Paused — resume it in the AgentMesh desktop app"
+        : workflow.status !== "deployed"
+          ? "Not deployed yet — finish and deploy it in the AgentMesh desktop app"
+          : null
     : null;
   const status =
     WORKFLOW_STATUS[workflow?.status ?? "draft"] ?? WORKFLOW_STATUS.draft;

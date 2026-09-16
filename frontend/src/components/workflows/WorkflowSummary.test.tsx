@@ -129,6 +129,17 @@ describe("WorkflowSummary", () => {
     ).toBeTruthy();
   });
 
+  it("labels a paused workflow and says where to resume it", async () => {
+    api.get.mockResolvedValue(workflow({ status: "paused" }));
+    render(<WorkflowSummary workflowId="wf-1" />);
+    expect(
+      await screen.findByText(
+        "Paused — resume it in the AgentMesh desktop app",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Paused")).toBeTruthy();
+  });
+
   it("says so when the server has no run history", async () => {
     api.listForWorkflow.mockRejectedValue(new api.RunsUnavailableError());
     render(<WorkflowSummary workflowId="wf-1" />);
