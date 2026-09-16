@@ -19,6 +19,7 @@ public class MainActivity extends BridgeActivity {
         // super.onCreate, or the bridge is built without it.
         registerPlugin(GeofencePlugin.class);
         registerPlugin(SecureStorePlugin.class);
+        registerPlugin(PushAvailabilityPlugin.class);
         super.onCreate(savedInstanceState);
 
         // Belt and braces on WebView debugging.
