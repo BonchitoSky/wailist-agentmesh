@@ -252,7 +252,8 @@
      avatar and the Usage "+" keep their size and take the tap through an
      invisible 44px square centred on them. */
   .wf-filter,
-  .profile-menu__item {
+  .profile-menu__item,
+  .am-touch {
     min-height: 44px;
   }
   /* ghostBtnSm sets its height inline, and an inline style beats a

@@ -290,12 +290,19 @@ function OnboardingModal({
         alignItems: "center",
         justifyContent: "center",
         zIndex: 1000,
+        // Keeps the form clear of the system bars and screen edges. On a
+        // landscape phone the form is taller than the screen and scrolls.
+        padding:
+          "calc(16px + var(--safe-top)) calc(16px + var(--safe-right)) calc(16px + var(--safe-bottom)) calc(16px + var(--safe-left))",
       }}
     >
       <form
         onSubmit={handleSubmit}
         style={{
-          width: 340,
+          width: "min(340px, 100%)",
+          maxHeight: "100%",
+          overflowY: "auto",
+          boxSizing: "border-box",
           background: "var(--bg-elev-1)",
           border: "1px solid var(--border)",
           borderRadius: "var(--r-2)",
@@ -325,6 +332,7 @@ function OnboardingModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Ada Lovelace"
+            className="am-touch"
             style={onboardingInputStyle}
           />
         </label>
@@ -336,6 +344,7 @@ function OnboardingModal({
             value={org}
             onChange={(e) => setOrg(e.target.value)}
             placeholder="Acme Capital"
+            className="am-touch"
             style={onboardingInputStyle}
           />
         </label>
@@ -352,6 +361,7 @@ function OnboardingModal({
         )}
         <button
           type="submit"
+          className="am-touch"
           disabled={saving || !name.trim()}
           style={{
             height: 38,

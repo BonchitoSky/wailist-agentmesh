@@ -67,15 +67,20 @@ export function AddToWorkflowDialog({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 50,
-        padding: 20,
+        // Above the top and bottom bars (60), level with the app's other
+        // dialogs, so the scrim covers the bottom tabs on a phone.
+        zIndex: 1000,
+        padding:
+          "calc(20px + var(--safe-top)) calc(20px + var(--safe-right)) calc(20px + var(--safe-bottom)) calc(20px + var(--safe-left))",
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
           width: "min(440px, 100%)",
-          maxHeight: "70vh",
+          // dvh: the visible height, so the list's end is not under the
+          // browser toolbar.
+          maxHeight: "70dvh",
           overflowY: "auto",
           background: "var(--bg-elev-1)",
           border: "1px solid var(--border)",
