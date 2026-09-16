@@ -252,6 +252,12 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     : null;
   const status =
     WORKFLOW_STATUS[workflow?.status ?? "draft"] ?? WORKFLOW_STATUS.draft;
+  // The screen waits for BOTH the workflow and its runs before it draws
+  // anything but the skeleton. The header's height depends on the runs -- a
+  // running one turns Run into Stop and takes the "not deployed" line away --
+  // so drawing it first moved the runs below it twice as each fetch landed.
+  const ready =
+    workflow !== null && (runsLoaded || runsUnavailable || runsError !== null);
   const hasZone = workflow?.geofenceLat !== undefined;
 
   return (
@@ -283,7 +289,7 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
             <p role="alert" style={{ ...copy, marginTop: 20 }}>
               {loadError}
             </p>
-          ) : !workflow ? (
+          ) : !ready ? (
             <div
               aria-busy="true"
               style={{ marginTop: 20, display: "grid", gap: 10 }}
@@ -378,82 +384,91 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
             </header>
           )}
 
-          <section aria-labelledby="wf-summary-runs" style={{ marginTop: 28 }}>
-            <h2 id="wf-summary-runs" style={sectionLabel}>
-              Recent runs
-            </h2>
+          {ready && (
+            <section
+              aria-labelledby="wf-summary-runs"
+              style={{ marginTop: 28 }}
+            >
+              <h2 id="wf-summary-runs" style={sectionLabel}>
+                Recent runs
+              </h2>
 
-            {runsUnavailable ? (
-              <p style={copy}>
-                Run history is not available on this server yet.
-              </p>
-            ) : !runsLoaded ? (
-              <div aria-busy="true" style={{ display: "grid", gap: 8 }}>
-                <Skeleton width="100%" height={56} radius="var(--r-2)" />
-                <Skeleton width="100%" height={56} radius="var(--r-2)" />
-              </div>
-            ) : shown.length === 0 ? (
-              <p style={copy}>
-                {runsError ?? "No runs yet. Runs show up here as they start."}
-              </p>
-            ) : (
-              <>
-                {runsError && (
-                  <p
-                    role="alert"
-                    style={{ ...copy, marginBottom: 8, color: "var(--danger)" }}
-                  >
-                    {runsError}
-                  </p>
-                )}
-                {groupRunsByDay(shown).map((group) => (
-                  <div key={group.key} style={{ marginBottom: 16 }}>
-                    <h3 style={dayLabel}>{group.label}</h3>
-                    <ul style={list}>
-                      {group.runs.map((r) => (
-                        <li key={r.id}>
-                          <button
-                            type="button"
-                            className="wf-summary-row"
-                            style={row}
-                            onClick={(e) => {
-                              openerRef.current = e.currentTarget;
-                              setSelected(r);
-                            }}
-                          >
-                            <span style={rowMain}>
-                              <RunStatusPill status={r.status} />
-                              <span style={rowMeta}>
-                                {triggerLabel(r.triggeredBy)} ·{" "}
-                                {formatRunTime(r.startedAt)}
+              {runsUnavailable ? (
+                <p style={copy}>
+                  Run history is not available on this server yet.
+                </p>
+              ) : !runsLoaded ? (
+                <div aria-busy="true" style={{ display: "grid", gap: 8 }}>
+                  <Skeleton width="100%" height={56} radius="var(--r-2)" />
+                  <Skeleton width="100%" height={56} radius="var(--r-2)" />
+                </div>
+              ) : shown.length === 0 ? (
+                <p style={copy}>
+                  {runsError ?? "No runs yet. Runs show up here as they start."}
+                </p>
+              ) : (
+                <>
+                  {runsError && (
+                    <p
+                      role="alert"
+                      style={{
+                        ...copy,
+                        marginBottom: 8,
+                        color: "var(--danger)",
+                      }}
+                    >
+                      {runsError}
+                    </p>
+                  )}
+                  {groupRunsByDay(shown).map((group) => (
+                    <div key={group.key} style={{ marginBottom: 16 }}>
+                      <h3 style={dayLabel}>{group.label}</h3>
+                      <ul style={list}>
+                        {group.runs.map((r) => (
+                          <li key={r.id}>
+                            <button
+                              type="button"
+                              className="wf-summary-row"
+                              style={row}
+                              onClick={(e) => {
+                                openerRef.current = e.currentTarget;
+                                setSelected(r);
+                              }}
+                            >
+                              <span style={rowMain}>
+                                <RunStatusPill status={r.status} />
+                                <span style={rowMeta}>
+                                  {triggerLabel(r.triggeredBy)} ·{" "}
+                                  {formatRunTime(r.startedAt)}
+                                </span>
                               </span>
-                            </span>
-                            <span style={rowFigures}>
-                              <span>{formatSpend(r.spendUsdMicros)}</span>
-                              <span style={{ color: "var(--fg-dim)" }}>
-                                {formatDuration(r.startedAt, r.finishedAt)}
+                              <span style={rowFigures}>
+                                <span>{formatSpend(r.spendUsdMicros)}</span>
+                                <span style={{ color: "var(--fg-dim)" }}>
+                                  {formatDuration(r.startedAt, r.finishedAt)}
+                                </span>
                               </span>
-                            </span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-                {nextCursor && (
-                  <button
-                    type="button"
-                    className="wf-summary-action"
-                    style={{ ...ghostBtn, ...fullWidth }}
-                    onClick={loadMore}
-                    disabled={loadingMore}
-                  >
-                    {loadingMore ? "Loading…" : "Show older runs"}
-                  </button>
-                )}
-              </>
-            )}
-          </section>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                  {nextCursor && (
+                    <button
+                      type="button"
+                      className="wf-summary-action"
+                      style={{ ...ghostBtn, ...fullWidth }}
+                      onClick={loadMore}
+                      disabled={loadingMore}
+                    >
+                      {loadingMore ? "Loading…" : "Show older runs"}
+                    </button>
+                  )}
+                </>
+              )}
+            </section>
+          )}
         </main>
       </PullToRefresh>
 
