@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fixtureRunPage } from "./runFixtures";
+import { WORKFLOWS } from "./data";
+import {
+  fixtureRunDetail,
+  fixtureRunPage,
+  recordStartedRun,
+} from "./runFixtures";
+import { fixtureWorkflow } from "./workflowFixtures";
 
 const NOW = Date.UTC(2026, 8, 14, 12, 0, 0);
 
@@ -30,6 +36,113 @@ describe("fixtureRunPage", () => {
       if (r.status === "running") expect(r.finishedAt).toBeUndefined();
       else expect(r.finishedAt).toBeDefined();
     }
+  });
+});
+
+// Every run sheet used to show the same weather run, whatever was tapped.
+describe("fixtureRunDetail", () => {
+  const rows = fixtureRunPage({ limit: 50 }, NOW).runs;
+  const detailOf = (id: string) => {
+    const detail = fixtureRunDetail(id, NOW);
+    if (!detail) throw new Error(`no detail for ${id}`);
+    return detail;
+  };
+
+  it("agrees with its list row", () => {
+    for (const row of rows) {
+      const { run } = detailOf(row.id);
+      expect(run).toMatchObject({
+        id: row.id,
+        workflowId: row.workflowId,
+        triggeredBy: row.triggeredBy,
+        status: row.status,
+        startedAt: row.startedAt,
+      });
+      expect(run.finishedAt).toBe(row.finishedAt);
+    }
+  });
+
+  it("pays exactly what the row says was spent", () => {
+    for (const row of rows) {
+      const paid = detailOf(row.id)
+        .logs.map((l) => l.output as { settledUsdMicros?: number })
+        .reduce((sum, o) => sum + (o.settledUsdMicros ?? 0), 0);
+      expect(paid).toBe(row.spendUsdMicros);
+    }
+  });
+
+  it("gives every run its own result", () => {
+    const results = rows.flatMap((row) =>
+      detailOf(row.id).logs.flatMap((l) => {
+        const m = (l.output as { message?: string }).message;
+        return m ? [m] : [];
+      }),
+    );
+    expect(results.length).toBeGreaterThan(5);
+    expect(new Set(results).size).toBe(results.length);
+  });
+
+  it("explains a failure and leaves a stopped or running run without a result", () => {
+    for (const row of rows) {
+      const detail = detailOf(row.id);
+      const hasResult = detail.logs.some(
+        (l) =>
+          l.status === "success" && (l.output as { message?: string }).message,
+      );
+      if (row.status === "failed") {
+        expect(detail.deadLetters.length).toBeGreaterThan(0);
+        expect(detail.logs.some((l) => l.status === "failed")).toBe(true);
+      } else {
+        expect(detail.deadLetters).toEqual([]);
+      }
+      if (row.status === "success") expect(hasResult).toBe(true);
+      else expect(hasResult).toBe(false);
+    }
+  });
+
+  it("names each step after a node in the run's own workflow", () => {
+    for (const row of rows) {
+      const wf = fixtureWorkflow(row.workflowId);
+      const ids = new Set(wf?.nodes.map((n) => n.id));
+      for (const log of detailOf(row.id).logs) {
+        expect(ids.has(log.nodeId)).toBe(true);
+      }
+    }
+  });
+
+  it("plays a run started from the app through to success", () => {
+    recordStartedRun("r-1850", "wf-brief", NOW);
+    const early = fixtureRunDetail("r-1850", NOW + 2_000);
+    expect(early?.run.status).toBe("running");
+    expect(early?.logs.at(-1)?.status).toBe("running");
+    expect(
+      fixtureRunPage({ workflowId: "wf-brief" }, NOW + 2_000).runs[0].id,
+    ).toBe("r-1850");
+
+    const late = fixtureRunDetail("r-1850", NOW + 60_000);
+    expect(late?.run.status).toBe("success");
+    expect(late?.run.finishedAt).toBeDefined();
+  });
+
+  it("knows nothing about an id it never made", () => {
+    expect(fixtureRunDetail("r-unknown", NOW)).toBeNull();
+  });
+});
+
+describe("fixtureWorkflow", () => {
+  it("opens a different workflow for every row in the list", () => {
+    const opened = WORKFLOWS.map((row) => fixtureWorkflow(row.id));
+    expect(opened.every((wf) => wf !== null && wf.nodes.length > 0)).toBe(true);
+    expect(opened.map((wf) => wf?.id)).toEqual(WORKFLOWS.map((w) => w.id));
+    expect(new Set(opened.map((wf) => wf?.name)).size).toBe(WORKFLOWS.length);
+    const firstAgent = opened.map(
+      (wf) => wf?.nodes.find((n) => n.type === "agent")?.name,
+    );
+    expect(new Set(firstAgent).size).toBe(WORKFLOWS.length);
+  });
+
+  it("returns null for an id the list does not have", () => {
+    expect(fixtureWorkflow("wf-weather")).toBeNull();
   });
 });
 

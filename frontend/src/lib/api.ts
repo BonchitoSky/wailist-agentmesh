@@ -13,7 +13,12 @@ import {
   RunPage,
 } from "./types";
 import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
-import { fixtureRunPage } from "./runFixtures";
+import {
+  fixtureRunDetail,
+  fixtureRunPage,
+  recordStartedRun,
+} from "./runFixtures";
+import { fixtureWorkflow } from "./workflowFixtures";
 import { assertWritable } from "./readonly";
 import { IS_NATIVE, authHeaders } from "./nativeAuth";
 import type { PaymentMethod } from "@/components/checkout/types";
@@ -262,7 +267,9 @@ export const workflows = {
     await delay(150);
     if (id === "new")
       return { id: "wf-new", name: "Untitled workflow", nodes: [], edges: [] };
-    return JSON.parse(JSON.stringify(SAMPLE_WORKFLOW));
+    // Each workflow in the mock list opens its own graph; anything else (the
+    // canvas's sample) still gets the weather workflow.
+    return fixtureWorkflow(id) ?? JSON.parse(JSON.stringify(SAMPLE_WORKFLOW));
   },
 
   // GET /workflows/:id/estimate -- static low/high cost band for one run.
@@ -382,7 +389,9 @@ export const workflows = {
       return data;
     }
     await delay(200);
-    return { runId: `r-${Math.floor(1800 + Math.random() * 200)}` };
+    const runId = `r-${Math.floor(1800 + Math.random() * 100)}`;
+    recordStartedRun(runId, id);
+    return { runId };
   },
 
   // TODO: POST /workflows/:id/build
@@ -761,8 +770,12 @@ export const runs = {
       return data;
     }
     await delay(150);
-    // Mock mode returns a realistic finished run rather than an empty one, so
-    // the console and the chat panel can be exercised with no backend
+    // A run from the mock history, or one started in this session, comes back
+    // as itself: its own status, steps, result and payments.
+    const fixture = fixtureRunDetail(runId);
+    if (fixture) return fixture;
+    // Anything else returns a realistic finished run rather than an empty one,
+    // so the console and the chat panel can be exercised with no backend
     // attached: an agent answer to render as prose, and a paid tool402 step
     // so the activity strip has a real tool count and settled amount. Mirrors
     // SAMPLE_WORKFLOW's node ids and its $0.065/call x402 weather endpoint.
