@@ -1245,6 +1245,11 @@ function Th({
         textTransform: "uppercase",
         letterSpacing: "0.08em",
         display: "inline-flex",
+        // Centred, not the flex default of stretch: on a touch screen the
+        // button is given a 44px floor, and without this the label would sit
+        // at the top of it while the plain header cells beside it stay
+        // centred.
+        alignItems: "center",
         gap: 3,
         justifyContent: align === "right" ? "flex-end" : "flex-start",
       }}

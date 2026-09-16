@@ -736,6 +736,45 @@ body {
   display: flex;
   gap: 8px;
 }
+/* ── Touch targets ─────────────────────────────────────────────────────────
+   Nearly every control in this app is sized for a mouse: 26px to 40px tall.
+   A fingertip needs 44px (WCAG 2.5.8, and Material and HIG agree within a
+   couple of pixels), so on a touch screen every control gets that as a floor.
+
+   !important because these heights are set inline, in the shared button
+   styles, and an inline style beats a stylesheet rule without it.
+
+   Not links in prose: growing one would break the line of text it sits in,
+   and the target-size rule exempts a link inside a sentence. The avatar and
+   the Usage "+" are also left alone -- they keep their drawn size and take
+   the tap through an invisible 44px square instead (see responsive.css), so
+   forcing a height here would only make the visible box bigger.
+
+   hover: none alongside pointer: coarse, so a touchscreen LAPTOP -- which has
+   a mouse as well -- keeps the compact layout it is drawn for. */
+@media (pointer: coarse) and (hover: none) {
+  button:not(.credit-topup):not(.profile-menu__trigger),
+  [role="button"],
+  select,
+  input:not(
+    [type="checkbox"],
+    [type="radio"],
+    [type="range"],
+    [type="file"],
+    [type="hidden"]
+  ) {
+    min-height: 44px !important;
+  }
+  /* A button that only grew because of the floor has to keep its label in the
+     middle. Several are inline-flex with no cross-axis alignment, where the
+     flex default would leave the text at the top of the taller box. A button
+     that sets its own alignment inline still wins over this. */
+  button,
+  [role="button"] {
+    align-items: center;
+  }
+}
+
 /* The device check that hides these cannot answer until after hydration (see
    hooks/useIsHandheld: the server has no device to inspect), so on a phone
    browser the create controls paint for one frame and then disappear. The two
