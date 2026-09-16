@@ -35,7 +35,7 @@ const SHEET_CSS = `
   position: relative;
   width: 100%; max-width: min(560px, 100vw);
   max-height: 88dvh; overflow-y: auto; overscroll-behavior: contain;
-  padding: 20px 20px calc(20px + var(--safe-bottom, 0px));
+  padding: 20px calc(20px + var(--safe-right, 0px)) calc(20px + var(--safe-bottom, 0px)) calc(20px + var(--safe-left, 0px));
   border: 1px solid var(--border-strong);
   border-radius: var(--r-4) var(--r-4) 0 0;
   background: var(--bg-elev-1);
