@@ -580,7 +580,7 @@ function AuthVisual() {
               <div
                 style={{
                   fontFamily: "var(--font-mono)",
-                  fontSize: 9.5,
+                  fontSize: 11,
                   color: accent,
                   textTransform: "uppercase",
                   letterSpacing: "0.08em",
@@ -655,7 +655,7 @@ function FormField({
           alignItems: "center",
           justifyContent: "space-between",
           fontFamily: "var(--font-mono)",
-          fontSize: 10,
+          fontSize: 11,
           color: "var(--fg-muted)",
           textTransform: "uppercase",
           letterSpacing: "0.08em",
