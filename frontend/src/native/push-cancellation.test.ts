@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   onRegistration: vi.fn<(token: { value: string }) => void>(),
 }));
 vi.mock("./api", () => mocks);
+vi.mock("./pushAvailability", () => ({ pushAvailable: async () => true }));
 vi.mock("./pushPrefs", () => ({
   hasOptedIn: mocks.hasOptedIn,
   setOptedIn: mocks.setOptedIn,

@@ -5,12 +5,15 @@
 // itself with being reachable, and with what happens when one arrives.
 //
 // None of it works until a Firebase project exists and its
-// google-services.json is in place -- without that the Android build does not
-// include FCM at all, register() fails, and every function below reports it
-// honestly rather than pretending. See mobile/README.md.
+// google-services.json is in place. Without that, register() and unregister()
+// do not fail politely: they throw inside the native plugin and the app
+// closes. So every path into the plugin that can reach Firebase first asks
+// pushAvailable(), and a build without Firebase reports "unavailable" instead
+// of calling it. See mobile/README.md.
 import type { PluginListenerHandle } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
 import { registerDevice, unregisterDevice } from "./api";
+import { pushAvailable } from "./pushAvailability";
 import { clearOptedIn, hasOptedIn, setOptedIn } from "./pushPrefs";
 import { workflowHref } from "@/lib/routes";
 import { navigateInApp } from "@/lib/nativeNav";
@@ -85,6 +88,10 @@ export function enablePush(): Promise<PushState> {
     if (attempt !== generation) return "unavailable";
     disabled = false;
     try {
+      // Before the permission prompt, not just before register(): asking for
+      // a permission this build can never use is a one-shot wasted.
+      if (!(await pushAvailable())) return "unavailable";
+      if (attempt !== generation) return "unavailable";
       let perm = await PushNotifications.checkPermissions();
       if (attempt !== generation) return "unavailable";
       if (
@@ -147,12 +154,14 @@ export async function restorePush(): Promise<void> {
  * "permission granted, opted out" as a case.
  *
  * "off" therefore covers never-asked and opted-out alike, which is the same
- * thing to a reader. "unavailable" means the plugin could not answer at all --
- * a build with no google-services.json, or a device with no Play services.
+ * thing to a reader. "unavailable" means this build has no Firebase (so the
+ * sheet never offers a switch that would close the app), or the plugin could
+ * not answer at all.
  */
 export async function notificationState(): Promise<PushReadState> {
   const attempt = generation;
   try {
+    if (!(await pushAvailable())) return "unavailable";
     const { receive } = await PushNotifications.checkPermissions();
     // Denied first: a refusal is worth saying out loud whatever the opt-in
     // records, because the route back is Settings rather than this app, and
@@ -218,7 +227,11 @@ export function disablePush(): Promise<void> {
     // notification anywhere until the next cold start. registerForToken removes
     // the two listeners it owns as soon as it settles, so there is nothing of
     // this function's to tidy up.
-    await PushNotifications.unregister().catch(() => {});
+    // Only with Firebase built in. This runs on every sign-out, and without
+    // Firebase unregister() closed the app mid sign-out.
+    if (await pushAvailable()) {
+      await PushNotifications.unregister().catch(() => {});
+    }
   })();
   disabling = promise;
   void promise.finally(() => {
@@ -267,9 +280,8 @@ function registerForToken(): Promise<string | null> {
       resolve(value);
     };
 
-    // Neither event is guaranteed to arrive. A device with no Play services,
-    // or one whose google-services.json was never added, can leave both
-    // unfired -- and an unresolved promise here would hang sign-in behind a
+    // Neither event is guaranteed to arrive. A device with no Play services
+    // can leave both unfired -- and an unresolved promise here would hang sign-in behind a
     // notification the user never asked for.
     const cancel = () => finish(null);
     cancelRegistration = cancel;
