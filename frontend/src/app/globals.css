@@ -1145,6 +1145,26 @@ body[data-bottomnav] .am-viewport-min {
   padding-bottom: calc(56px + var(--safe-bottom));
 }
 
+/* Short screens: a phone on its side is about 360px tall, and the keyboard
+   takes half of that. The bar keeps the 44px touch floor but puts the icon
+   and the label on one line, and the top bar gives up 8px. Together that is
+   20px of content back, on the screens with the least to spare. */
+@media (max-height: 480px) {
+  :root {
+    --nav-h: 48px;
+  }
+  .bottomnav__item {
+    min-height: 44px;
+    flex-direction: row;
+    gap: 6px;
+    padding: 4px;
+  }
+  body[data-bottomnav] .am-viewport,
+  body[data-bottomnav] .am-viewport-min {
+    padding-bottom: calc(44px + var(--safe-bottom));
+  }
+}
+
 /* Two navigations for the same four routes is one too many. While the bottom
    bar is up, the hamburger goes away; on a detail screen the bottom bar hides
    and the hamburger comes back, so there is never a screen with no way out.
