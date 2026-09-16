@@ -50,6 +50,15 @@ export const LANDING_NAV_ITEMS: readonly NavItem[] = [
   { label: "Waitlist", sectionId: "waitlist" },
 ];
 
+/**
+ * Whether `pathname` is the root of a handheld tab, as opposed to a screen
+ * pushed on top of one. The bottom bar only shows at these routes, and the top
+ * bar's hamburger only hides at them, so both ask this one question.
+ */
+export function isTabRoot(pathname: string): boolean {
+  return HANDHELD_TAB_ITEMS.some((item) => item.href === pathname);
+}
+
 /** Whether `item` represents the currently open page. */
 export function isNavItemActive(item: NavItem, pathname: string): boolean {
   if (item.match) return item.match(pathname);

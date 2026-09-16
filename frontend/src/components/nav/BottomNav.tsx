@@ -3,7 +3,12 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useIsHandheld } from "@/hooks/useIsHandheld";
-import { HANDHELD_TAB_ITEMS, isNavItemActive, type NavItem } from "@/lib/nav";
+import {
+  HANDHELD_TAB_ITEMS,
+  isNavItemActive,
+  isTabRoot,
+  type NavItem,
+} from "@/lib/nav";
 import { IconGrid } from "@/components/ui";
 
 // The app's navigation on a phone.
@@ -26,16 +31,13 @@ import { IconGrid } from "@/components/ui";
 // where you are among peers; on a detail screen the question is "how do I get
 // back", which is what the back affordance answers. A workflow at
 // /workflows/[id] is such a screen and carries its own way back to the list.
-const TAB_ROOTS = new Set(
-  HANDHELD_TAB_ITEMS.map((item) => item.href).filter(
-    (href): href is string => typeof href === "string",
-  ),
-);
+// isTabRoot lives in lib/nav.ts because the top bar asks the same question
+// about its hamburger.
 
 export function BottomNav() {
   const handheld = useIsHandheld();
   const pathname = usePathname();
-  const visible = handheld && TAB_ROOTS.has(pathname);
+  const visible = handheld && isTabRoot(pathname);
 
   // Tells the stylesheet to reserve room at the bottom of the app shell, so the
   // last row of a list is not sitting underneath a fixed bar. An attribute on
