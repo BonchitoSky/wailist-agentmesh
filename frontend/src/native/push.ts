@@ -13,6 +13,7 @@ import { PushNotifications } from "@capacitor/push-notifications";
 import { registerDevice, unregisterDevice } from "./api";
 import { clearOptedIn, hasOptedIn, setOptedIn } from "./pushPrefs";
 import { workflowHref } from "@/lib/routes";
+import { navigateInApp } from "@/lib/nativeNav";
 
 // What the user is told BEFORE Android's own dialog, for the same reason
 // permissions.ts explains background location first: a cold system prompt is
@@ -299,9 +300,10 @@ let tapListener: PluginListenerHandle | null = null;
  * for a run on its own -- a run is shown inside its workflow's page, so a tap
  * carrying only a run id would have nowhere to go.
  *
- * Navigation is a full location assignment rather than a router push: the tap
- * can arrive when the app was not running at all, in which case there is no
- * router mounted yet to push onto.
+ * Navigation goes through the mounted router (lib/nativeNav.ts), not a page
+ * load: in the app a page load reopens the launch page and drops the workflow
+ * id. When the tap arrives before the router can take it, as on a cold start,
+ * the launch page follows it instead of its default.
  */
 export async function listenForTaps(): Promise<void> {
   // Idempotent. boot() is the only caller today, but a second attachment
@@ -316,7 +318,7 @@ export async function listenForTaps(): Promise<void> {
       if (!workflowId) return;
       // The native shell is a static export: every workflow shares one page
       // and the real id travels as ?id=. workflowHref() builds that form.
-      window.location.assign(workflowHref(workflowId));
+      navigateInApp(workflowHref(workflowId));
     },
   );
 }

@@ -624,10 +624,14 @@ function Wrap({ children }: { children: React.ReactNode }) {
   );
 }
 
+// This screen has no top bar, so it clears the status bar itself: in the
+// Android app the page draws underneath it, and the back link and heading sat
+// behind the clock.
 const page: React.CSSProperties = {
   minHeight: "100dvh",
   background: "var(--bg)",
-  padding: "24px 16px 40px",
+  padding:
+    "calc(24px + var(--safe-top)) calc(16px + var(--safe-right)) calc(40px + var(--safe-bottom)) calc(16px + var(--safe-left))",
 };
 
 function SectionLabel({ children }: { children: React.ReactNode }) {

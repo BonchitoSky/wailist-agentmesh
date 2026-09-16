@@ -1096,7 +1096,7 @@ function EndpointTable({
                   <div
                     style={{
                       fontFamily: "var(--font-mono)",
-                      fontSize: 9,
+                      fontSize: 11,
                       color: "var(--fg-dim)",
                       overflow: "hidden",
                       textOverflow: "ellipsis",

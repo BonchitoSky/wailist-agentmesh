@@ -114,13 +114,21 @@ const BAZAAR_CSS = `
    a plain row is just as much a target (its own Add button) and reading a
    long list is easier when the row under the pointer is visually obvious,
    not only the ones that happen to expand. */
-.bz-row:hover,
 .bz-row:focus-within {
   background: var(--bg-elev-2);
 }
-.bz-row:hover::before,
 .bz-row:focus-within::before {
   transform: scaleY(1);
+}
+/* Pointer hover only where a pointer hovers. On a touch screen a tap sets
+   :hover and leaves it set, so the tapped row would stay highlighted. */
+@media (hover: hover) {
+  .bz-row:hover {
+    background: var(--bg-elev-2);
+  }
+  .bz-row:hover::before {
+    transform: scaleY(1);
+  }
 }
 .bz-row__icon {
   width: 26px;
@@ -207,10 +215,12 @@ const BAZAAR_CSS = `
     border-color 0.15s var(--ease),
     color 0.15s var(--ease);
 }
-.bz-row__add:hover {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-fg);
+@media (hover: hover) {
+  .bz-row__add:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-fg);
+  }
 }
 .bz-group-body {
   display: grid;

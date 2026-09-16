@@ -417,6 +417,7 @@ export function WorkflowsPage() {
               {["all", "active", "paused", "draft"].map((s) => (
                 <button
                   key={s}
+                  className="wf-filter"
                   onClick={() => setStatus(s)}
                   style={{
                     border: "none",
@@ -448,6 +449,7 @@ export function WorkflowsPage() {
               }}
             >
               <button
+                className="wf-view-toggle"
                 onClick={() => setView("rows")}
                 style={{
                   ...ghostBtnSm,
@@ -460,6 +462,7 @@ export function WorkflowsPage() {
                 ☰ Rows
               </button>
               <button
+                className="wf-view-toggle"
                 onClick={() => setView("grid")}
                 style={{
                   ...ghostBtnSm,
@@ -1127,7 +1130,7 @@ function SchedulePopover({
           color: "var(--fg)",
         }}
       />
-      <div style={{ fontSize: 9.5, color: "var(--fg-dim)", marginBottom: 8 }}>
+      <div style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 8 }}>
         Stored in UTC — may shift by an hour across daylight saving.
       </div>
       {cadence === "weekly" && (
@@ -1316,9 +1319,12 @@ function WorkflowRows({
             cursor: "pointer",
             transition: "background .12s",
           }}
-          onMouseEnter={(e) =>
-            (e.currentTarget.style.background = "var(--bg-elev-2)")
-          }
+          // Mouse only: a tap fires the enter event too, and the highlight
+          // then stays on the row after the finger lifts.
+          onPointerEnter={(e) => {
+            if (e.pointerType === "mouse")
+              e.currentTarget.style.background = "var(--bg-elev-2)";
+          }}
           onMouseLeave={(e) =>
             (e.currentTarget.style.background = "transparent")
           }
@@ -1344,13 +1350,20 @@ function WorkflowRows({
               >
                 {wf.name}
               </div>
-              <div style={{ display: "flex", gap: 5, marginTop: 4 }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "2px 5px",
+                  marginTop: 4,
+                }}
+              >
                 {wf.tags?.map((t) => (
                   <span
                     key={t}
                     style={{
                       fontFamily: "var(--font-mono)",
-                      fontSize: 9,
+                      fontSize: 11,
                       color: "var(--fg-dim)",
                       textTransform: "uppercase",
                       letterSpacing: "0.06em",
@@ -1476,7 +1489,10 @@ function WorkflowGrid({
             cursor: "pointer",
             transition: "border-color .15s, transform .15s",
           }}
-          onMouseEnter={(e) => {
+          // Mouse only, as on the row above: after a tap the card would stay
+          // lifted.
+          onPointerEnter={(e) => {
+            if (e.pointerType !== "mouse") return;
             (e.currentTarget as HTMLElement).style.borderColor =
               "var(--border-strong)";
             (e.currentTarget as HTMLElement).style.transform =
@@ -1508,13 +1524,20 @@ function WorkflowGrid({
           >
             {wf.name}
           </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "2px 6px",
+              marginTop: 6,
+            }}
+          >
             {wf.tags?.map((t) => (
               <span
                 key={t}
                 style={{
                   fontFamily: "var(--font-mono)",
-                  fontSize: 9,
+                  fontSize: 11,
                   color: "var(--fg-dim)",
                   textTransform: "uppercase",
                   letterSpacing: "0.06em",
@@ -1552,7 +1575,7 @@ function WorkflowGrid({
                 <div
                   style={{
                     color: "var(--fg-dim)",
-                    fontSize: 9,
+                    fontSize: 11,
                     textTransform: "uppercase",
                     letterSpacing: "0.06em",
                   }}
