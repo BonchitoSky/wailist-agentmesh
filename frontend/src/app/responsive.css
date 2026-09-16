@@ -146,6 +146,15 @@
   margin: 8px -24px;
   padding: 32px 24px;
 }
+/* The bar's link is a standalone control, not a link inside a sentence, so it
+   takes the 44px touch floor the app's buttons get. */
+@media (pointer: coarse) and (hover: none) {
+  .am-legal-bar a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
 @media (max-width: 520px) {
   .am-legal-bar {
     padding-left: calc(16px + var(--safe-left));
