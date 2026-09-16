@@ -13,6 +13,7 @@ import {
 const state = vi.hoisted(() => ({
   native: false,
   push: vi.fn(),
+  replace: vi.fn(),
   signOut: vi.fn(),
   refreshBalance: vi.fn(),
 }));
@@ -22,7 +23,9 @@ vi.mock("@/lib/nativeAuth", () => ({
     return state.native;
   },
 }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: state.push }) }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: state.push, replace: state.replace }),
+}));
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({
     user: {
@@ -92,10 +95,13 @@ describe("AccountPage", () => {
     expect(screen.getByRole("dialog").textContent).toBe("notifications");
   });
 
-  it("signs out and goes back to the start", async () => {
+  it("signs out to the sign-in screen, without leaving this page behind", async () => {
     await renderPage();
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
-    await waitFor(() => expect(state.push).toHaveBeenCalledWith("/"));
+    // replace, not push: Back must not return to an account page this
+    // session can no longer load.
+    await waitFor(() => expect(state.replace).toHaveBeenCalledWith("/signin"));
+    expect(state.push).not.toHaveBeenCalled();
     expect(state.signOut).toHaveBeenCalledTimes(1);
   });
 });

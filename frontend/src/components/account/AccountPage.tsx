@@ -34,7 +34,9 @@ export function AccountPage() {
 
   const handleSignOut = async () => {
     await signOut();
-    router.push("/");
+    // replace, not push: Back from the signed-out screen would otherwise
+    // return to a page this account can no longer load.
+    router.replace("/signin");
   };
 
   return (
