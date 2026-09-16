@@ -79,23 +79,30 @@ export function RouteTransition({ children }: { children: React.ReactNode }) {
     el.classList.add(direction);
   }, [pathname, handheld]);
 
-  // A plain wrapper with no styles of its own, so it cannot disturb the layout
-  // of anything inside it. Deliberately NOT keyed on the pathname: keying would
-  // remount the whole page subtree on every navigation, throwing away component
-  // state and re-running every fetch to buy an animation.
+  // Plain wrappers with no styles of their own, so they cannot disturb the
+  // layout of anything inside them. Deliberately NOT keyed on the pathname:
+  // keying would remount the whole page subtree on every navigation, throwing
+  // away component state and re-running every fetch to buy an animation.
+  //
+  // The outer frame exists to clip the 16px offset while the inner wrapper
+  // slides (.route-frame in responsive.css). The clip cannot go on <body>:
+  // body passes its overflow to the viewport, and the page would still be
+  // measured 16px wider.
   return (
-    <div
-      ref={ref}
-      onAnimationEnd={(e) => {
-        // Only this element's own animation. A card animating inside the page
-        // bubbles its animationend up here too, and stripping the class on
-        // someone else's event would cut the screen transition short.
-        if (e.target === e.currentTarget) {
-          e.currentTarget.classList.remove(FORWARD, BACK);
-        }
-      }}
-    >
-      {children}
+    <div className="route-frame">
+      <div
+        ref={ref}
+        onAnimationEnd={(e) => {
+          // Only this element's own animation. A card animating inside the
+          // page bubbles its animationend up here too, and stripping the class
+          // on someone else's event would cut the screen transition short.
+          if (e.target === e.currentTarget) {
+            e.currentTarget.classList.remove(FORWARD, BACK);
+          }
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }

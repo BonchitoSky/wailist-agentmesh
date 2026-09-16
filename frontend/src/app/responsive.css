@@ -327,6 +327,13 @@
 .route-enter-back {
   animation: route-in-back 0.22s var(--ease);
 }
+/* The arriving screen starts 16px to one side, which would widen the page for
+   the length of the animation. Clipped only while a class is on, so overflow
+   that is a real layout bug still shows at rest. `clip`, not `hidden`, so the
+   frame does not become a scroll container. */
+.route-frame:has(> .route-enter-fwd, > .route-enter-back) {
+  overflow-x: clip;
+}
 
 /* Not decoration, so it goes entirely rather than being shortened: someone who
    has asked for less motion is not asking for faster motion.
