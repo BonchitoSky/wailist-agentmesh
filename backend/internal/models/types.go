@@ -532,6 +532,11 @@ const (
 	// adversarial or compromised target quoting near int64's range to
 	// force the running sum to overflow negative.
 	MaxSingleX402QuoteUSDMicros int64 = 1_000_000_000 // $1,000/call
+	// LowBalanceThresholdUSDMicros gates both the frontend's LowBalanceBanner
+	// (frontend/src/lib/credits/fx.ts) and the backend's low-balance push --
+	// one number, so the banner shown in the app and the notification sent
+	// when it's not open never disagree about what "low" means.
+	LowBalanceThresholdUSDMicros int64 = 5_000_000 // $5
 )
 
 type X402RelaySettlement struct {
