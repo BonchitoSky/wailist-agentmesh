@@ -109,6 +109,8 @@ const STEP_STATUS: Record<RunLogRecord["status"], string> = {
   running: "Running",
   success: "Done",
   failed: "Failed",
+  // Finished, but only partly: the run carried on instead of failing.
+  degraded: "Degraded",
 };
 
 export function RunSheet({
