@@ -330,13 +330,7 @@ func (d *Deps) CashfreeWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if applied {
 			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s, via cashfree webhook)", float64(creditedMicros)/1e6, orderID, paymentID))
-			// No session on a webhook -- the owner has to be looked up rather
-			// than read from context, unlike the client verify path above.
-			if ownerID, err := d.Store.GetCreditTransactionUserID(r.Context(), "cashfree", orderID); err != nil {
-				log.Printf("cashfree webhook: could not look up owner for push: %v", err)
-			} else {
-				go push.NotifyTopUpCompleted(context.Background(), d.Store, ownerID, creditedMicros)
-			}
+			go d.notifyTopUpOwner("cashfree", orderID, creditedMicros)
 		}
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
@@ -447,11 +441,7 @@ func (d *Deps) NOWPaymentsWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if applied {
 			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s, via nowpayments)", float64(creditedMicros)/1e6, event.OrderID, paymentID))
-			if ownerID, err := d.Store.GetCreditTransactionUserID(r.Context(), "nowpayments", event.OrderID); err != nil {
-				log.Printf("nowpayments webhook: could not look up owner for push: %v", err)
-			} else {
-				go push.NotifyTopUpCompleted(context.Background(), d.Store, ownerID, creditedMicros)
-			}
+			go d.notifyTopUpOwner("nowpayments", event.OrderID, creditedMicros)
 		}
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
@@ -475,6 +465,20 @@ func (d *Deps) NOWPaymentsWebhook(w http.ResponseWriter, r *http.Request) {
 	default:
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ignored"})
 	}
+}
+
+// notifyTopUpOwner pushes a top-up confirmation for a webhook-completed
+// order. A webhook carries no session, so the owner comes from the ledger row
+// rather than the request. Call it with `go`, like alert.Notify: a push must
+// never delay the payment provider's acknowledgement.
+func (d *Deps) notifyTopUpOwner(provider, orderID string, creditedMicros int64) {
+	ctx := context.Background()
+	ownerID, err := d.Store.GetCreditTransactionUserID(ctx, provider, orderID)
+	if err != nil {
+		log.Printf("%s webhook: could not look up owner for push: %v", provider, err)
+		return
+	}
+	push.NotifyTopUpCompleted(ctx, d.Store, ownerID, creditedMicros)
 }
 
 // PaymentProviders reports which checkout providers this deployment can
