@@ -15,6 +15,7 @@ import {
 } from "@/lib/api";
 import type { RunPage, RunStatus, RunSummary, Workflow } from "@/lib/types";
 import { groupRunsByDay } from "@/lib/runDays";
+import { mergeRuns } from "@/lib/runMerge";
 import {
   formatDuration,
   formatRunTime,
@@ -30,20 +31,6 @@ import { workflowHref } from "@/lib/routes";
 const PAGE_SIZE = 20;
 // How often the list refreshes while a run is still going.
 const POLL_MS = 3_000;
-
-// Newest first, ties by id, as the backend orders them. Rows from `fresh`
-// replace rows with the same id in `old`, so a refresh updates a run that was
-// already on screen without dropping the older pages below it.
-function mergeRuns(fresh: RunSummary[], old: RunSummary[]): RunSummary[] {
-  const byId = new Map<string, RunSummary>();
-  for (const r of old) byId.set(r.id, r);
-  for (const r of fresh) byId.set(r.id, r);
-  return [...byId.values()].sort((a, b) =>
-    a.startedAt === b.startedAt
-      ? b.id.localeCompare(a.id)
-      : b.startedAt.localeCompare(a.startedAt),
-  );
-}
 
 const WORKFLOW_STATUS: Record<
   string,
@@ -179,6 +166,16 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     }, POLL_MS);
     return () => clearInterval(timer);
   }, [anyRunning, pendingShown?.id, refreshRuns]);
+
+  // A local clock, independent of the POLL_MS refresh above, so a running
+  // row's duration reads as ticking once a second instead of stepping every
+  // few seconds whenever a refresh happens to land.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!anyRunning) return;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [anyRunning]);
 
   const loadMore = async () => {
     if (!nextCursor || loadingMore) return;
@@ -448,7 +445,11 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
                               <span style={rowFigures}>
                                 <span>{formatSpend(r.spendUsdMicros)}</span>
                                 <span style={{ color: "var(--fg-dim)" }}>
-                                  {formatDuration(r.startedAt, r.finishedAt)}
+                                  {formatDuration(
+                                    r.startedAt,
+                                    r.finishedAt,
+                                    now,
+                                  )}
                                 </span>
                               </span>
                             </button>
