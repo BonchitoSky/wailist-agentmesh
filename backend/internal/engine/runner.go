@@ -1004,20 +1004,14 @@ func (r *Runner) finishRun(wf models.Workflow, run models.Run, status models.Run
 // happened. Split out so the crossing decision (store-side, atomic) and the
 // delivery (push package) each stay testable on their own terms.
 func (r *Runner) notifyIfBalanceLow(ctx context.Context, userID string) {
-	notify, err := r.store.CheckAndMarkLowBalance(ctx, userID, models.LowBalanceThresholdUSDMicros)
+	notify, balance, err := r.store.CheckAndMarkLowBalance(ctx, userID, models.LowBalanceThresholdUSDMicros)
 	if err != nil {
 		log.Printf("low balance check: %v", err)
 		return
 	}
-	if !notify {
-		return
+	if notify {
+		push.NotifyLowBalance(ctx, r.store, userID, balance)
 	}
-	balance, err := r.store.GetCreditBalance(ctx, userID)
-	if err != nil {
-		log.Printf("low balance check: read balance for notification: %v", err)
-		return
-	}
-	push.NotifyLowBalance(ctx, r.store, userID, balance)
 }
 
 // Run executes a workflow from scratch. Call via Start rather than directly.

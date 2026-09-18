@@ -446,7 +446,7 @@ func TestCheckAndMarkLowBalance(t *testing.T) {
 	workflowID, runID := mustWorkflowAndRun(t, store, user.ID)
 
 	// Above the threshold: no notification, nothing recorded.
-	notify, err := store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
+	notify, _, err := store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -454,20 +454,24 @@ func TestCheckAndMarkLowBalance(t *testing.T) {
 		t.Fatal("want no notification while above the threshold")
 	}
 
-	// Cross below the threshold: notifies exactly once.
+	// Cross below the threshold: notifies exactly once, quoting the balance
+	// the decision was made on.
 	if err := store.DebitCredits(ctx, user.ID, 6_000_000, "byok_flat_fee", workflowID, runID, "n1"); err != nil {
 		t.Fatal(err)
 	}
-	notify, err = store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
+	notify, balance, err := store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !notify {
 		t.Fatal("want a notification on the crossing")
 	}
+	if balance != 4_000_000 {
+		t.Fatalf("want balance 4000000 at the crossing, got %d", balance)
+	}
 
 	// A second check while still low must not notify again.
-	notify, err = store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
+	notify, _, err = store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +483,7 @@ func TestCheckAndMarkLowBalance(t *testing.T) {
 	if err := store.ReleaseReservedCredits(ctx, user.ID, 6_000_000); err != nil {
 		t.Fatal(err)
 	}
-	notify, err = store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
+	notify, _, err = store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +494,7 @@ func TestCheckAndMarkLowBalance(t *testing.T) {
 	if err := store.DebitCredits(ctx, user.ID, 6_000_000, "byok_flat_fee", workflowID, runID, "n2"); err != nil {
 		t.Fatal(err)
 	}
-	notify, err = store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
+	notify, _, err = store.CheckAndMarkLowBalance(ctx, user.ID, threshold)
 	if err != nil {
 		t.Fatal(err)
 	}

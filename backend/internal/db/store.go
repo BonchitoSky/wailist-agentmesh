@@ -1366,46 +1366,43 @@ func (s *Store) CreditBalance(ctx context.Context, userID string) (int64, error)
 // next time it dips back down notifies again.
 //
 // Same FOR UPDATE shape as debitCredits/ReserveCredits above: read the row
-// locked, decide, write, commit.
-func (s *Store) CheckAndMarkLowBalance(ctx context.Context, userID string, thresholdUSDMicros int64) (bool, error) {
+// locked, decide, write, commit. The balance it read is returned too, so the
+// notification quotes the figure the decision was made on.
+func (s *Store) CheckAndMarkLowBalance(ctx context.Context, userID string, thresholdUSDMicros int64) (notify bool, balance int64, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	defer tx.Rollback(ctx)
 
-	var (
-		balance    int64
-		notifiedAt *time.Time
-	)
+	var notifiedAt *time.Time
 	if err := tx.QueryRow(ctx, `
 		SELECT credit_balance_usd_micros, low_balance_notified_at
 		FROM users WHERE id = $1 FOR UPDATE
 	`, userID).Scan(&balance, &notifiedAt); err != nil {
-		return false, err
+		return false, 0, err
 	}
 
-	notify := false
 	switch {
 	case balance < thresholdUSDMicros && notifiedAt == nil:
 		if _, err := tx.Exec(ctx, `
 			UPDATE users SET low_balance_notified_at = NOW() WHERE id = $1
 		`, userID); err != nil {
-			return false, err
+			return false, 0, err
 		}
 		notify = true
 	case balance >= thresholdUSDMicros && notifiedAt != nil:
 		if _, err := tx.Exec(ctx, `
 			UPDATE users SET low_balance_notified_at = NULL WHERE id = $1
 		`, userID); err != nil {
-			return false, err
+			return false, 0, err
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return false, err
+		return false, 0, err
 	}
-	return notify, nil
+	return notify, balance, nil
 }
 
 // ListCreditTransactions returns a user's top-up history, newest first.
