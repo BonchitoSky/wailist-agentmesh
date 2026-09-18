@@ -17,6 +17,7 @@ import (
 	"github.com/agentmesh/backend/internal/alert"
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/payments"
+	"github.com/agentmesh/backend/internal/push"
 	"github.com/agentmesh/backend/internal/respond"
 )
 
@@ -219,6 +220,8 @@ func (d *Deps) RedeemCoupon(w http.ResponseWriter, r *http.Request) {
 // reports payment completion. It fetches the order status from Cashfree's API
 // (server-to-server, so it cannot be spoofed) and credits the user if PAID.
 func (d *Deps) VerifyCashfreePayment(w http.ResponseWriter, r *http.Request) {
+	userID, _ := r.Context().Value(CtxUserID).(string)
+
 	var body struct {
 		OrderID string `json:"order_id"`
 	}
@@ -250,6 +253,7 @@ func (d *Deps) VerifyCashfreePayment(w http.ResponseWriter, r *http.Request) {
 	}
 	if applied {
 		go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, via cashfree)", float64(creditedMicros)/1e6, body.OrderID))
+		go push.NotifyTopUpCompleted(context.Background(), d.Store, userID, creditedMicros)
 	}
 
 	respond.JSON(w, http.StatusOK, map[string]any{
@@ -326,6 +330,13 @@ func (d *Deps) CashfreeWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if applied {
 			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s, via cashfree webhook)", float64(creditedMicros)/1e6, orderID, paymentID))
+			// No session on a webhook -- the owner has to be looked up rather
+			// than read from context, unlike the client verify path above.
+			if ownerID, err := d.Store.GetCreditTransactionUserID(r.Context(), "cashfree", orderID); err != nil {
+				log.Printf("cashfree webhook: could not look up owner for push: %v", err)
+			} else {
+				go push.NotifyTopUpCompleted(context.Background(), d.Store, ownerID, creditedMicros)
+			}
 		}
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
@@ -436,6 +447,11 @@ func (d *Deps) NOWPaymentsWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if applied {
 			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s, via nowpayments)", float64(creditedMicros)/1e6, event.OrderID, paymentID))
+			if ownerID, err := d.Store.GetCreditTransactionUserID(r.Context(), "nowpayments", event.OrderID); err != nil {
+				log.Printf("nowpayments webhook: could not look up owner for push: %v", err)
+			} else {
+				go push.NotifyTopUpCompleted(context.Background(), d.Store, ownerID, creditedMicros)
+			}
 		}
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
