@@ -699,9 +699,10 @@ export interface RunDetail {
   status: string;
   startedAt: string;
   finishedAt?: string;
-  // Everything debit_ledger has charged for this run so far. Grows while the
-  // run is still "running" — see models.Run's own comment on the same field.
-  spendUsdMicros: number;
+  // Everything debit_ledger has charged for this run so far; grows while the
+  // run is still "running". Optional because a server older than this field
+  // omits it, and RunSheet then falls back to the list row's figure.
+  spendUsdMicros?: number;
 }
 
 // Thrown when the backend has no run history routes yet. An older server

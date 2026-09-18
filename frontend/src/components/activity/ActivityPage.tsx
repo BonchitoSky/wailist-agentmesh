@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ghostBtn } from "@/components/ui/buttons";
 import { RunSheet } from "@/components/runs/RunSheet";
 import { RunStatusPill } from "@/components/runs/RunStatusPill";
+import { useNow } from "@/hooks/useNow";
 import { runs as runsApi, RunsUnavailableError } from "@/lib/api";
 import type { RunPage, RunSummary } from "@/lib/types";
 import { groupRunsByDay } from "@/lib/runDays";
@@ -96,15 +97,7 @@ export function ActivityPage() {
     return () => clearInterval(timer);
   }, [anyRunning]);
 
-  // A local clock, independent of the refresh above, so a running row's
-  // duration reads as ticking once a second instead of stepping every few
-  // seconds whenever a refresh happens to land.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!anyRunning) return;
-    const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, [anyRunning]);
+  const now = useNow(anyRunning);
 
   const loadMore = async () => {
     if (!nextCursor || loadingMore) return;

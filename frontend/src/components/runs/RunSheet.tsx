@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useScrollLock } from "@/hooks/useScrollLock";
 import { useCloseOnBack } from "@/hooks/useCloseOnBack";
+import { useNow } from "@/hooks/useNow";
 import { ghostBtn } from "@/components/ui/buttons";
 import { MarkdownContent } from "@/components/canvas/chat/MarkdownContent";
 import {
@@ -109,9 +110,7 @@ const STEP_STATUS: Record<RunLogRecord["status"], string> = {
   running: "Running",
   success: "Done",
   failed: "Failed",
-  // Added on master after this branch diverged: a step that finished but
-  // only partially -- the run carried on rather than failing outright. See
-  // frontend/src/lib/api.ts's own comment on isSettledLogStatus.
+  // Finished, but only partly: the run carried on instead of failing.
   degraded: "Degraded",
 };
 
@@ -172,17 +171,7 @@ export function RunSheet({
   // going. The static `run` prop is only what was known when the sheet
   // opened, the same fallback shape already used for startedAt above.
   const spendUsdMicros = detail.run?.spendUsdMicros ?? run.spendUsdMicros;
-
-  // A local clock, independent of useRunDetail's 2s poll, so the duration
-  // reads as ticking once a second rather than stepping whenever a poll
-  // happens to land. Same pattern already used in TendrilConsolePage and
-  // HelixboxConsolePage: a plain re-render tick, no data fetch.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!running) return;
-    const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, [running]);
+  const now = useNow(running);
   const steps = [...detail.logs].sort((a, b) => a.stepIndex - b.stepIndex);
   const result = resultText(steps);
   const payments = steps
