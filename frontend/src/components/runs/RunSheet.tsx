@@ -109,9 +109,7 @@ const STEP_STATUS: Record<RunLogRecord["status"], string> = {
   running: "Running",
   success: "Done",
   failed: "Failed",
-  // Added on master after this branch diverged: a step that finished but
-  // only partially -- the run carried on rather than failing outright. See
-  // frontend/src/lib/api.ts's own comment on isSettledLogStatus.
+  // Finished, but only partly: the run carried on instead of failing.
   degraded: "Degraded",
 };
 
