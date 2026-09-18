@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
 import { RunSheet } from "@/components/runs/RunSheet";
 import { RunStatusPill } from "@/components/runs/RunStatusPill";
+import { useNow } from "@/hooks/useNow";
 import {
   runs as runsApi,
   workflows as workflowsApi,
@@ -167,15 +168,7 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     return () => clearInterval(timer);
   }, [anyRunning, pendingShown?.id, refreshRuns]);
 
-  // A local clock, independent of the POLL_MS refresh above, so a running
-  // row's duration reads as ticking once a second instead of stepping every
-  // few seconds whenever a refresh happens to land.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!anyRunning) return;
-    const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, [anyRunning]);
+  const now = useNow(anyRunning);
 
   const loadMore = async () => {
     if (!nextCursor || loadingMore) return;
