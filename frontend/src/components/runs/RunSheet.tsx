@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useScrollLock } from "@/hooks/useScrollLock";
 import { useCloseOnBack } from "@/hooks/useCloseOnBack";
 import { ghostBtn } from "@/components/ui/buttons";
@@ -164,6 +164,21 @@ export function RunSheet({
   const startedAt = detail.run?.startedAt ?? run.startedAt;
   const finishedAt = detail.run ? detail.run.finishedAt : run.finishedAt;
   const running = status === "running";
+  // Prefer the polled detail's spend — it grows while the run is still
+  // going. The static `run` prop is only what was known when the sheet
+  // opened, the same fallback shape already used for startedAt above.
+  const spendUsdMicros = detail.run?.spendUsdMicros ?? run.spendUsdMicros;
+
+  // A local clock, independent of useRunDetail's 2s poll, so the duration
+  // reads as ticking once a second rather than stepping whenever a poll
+  // happens to land. Same pattern already used in TendrilConsolePage and
+  // HelixboxConsolePage: a plain re-render tick, no data fetch.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [running]);
   const steps = [...detail.logs].sort((a, b) => a.stepIndex - b.stepIndex);
   const result = resultText(steps);
   const payments = steps
@@ -205,11 +220,13 @@ export function RunSheet({
           <dl style={facts}>
             <div>
               <dt style={factLabel}>{running ? "Running for" : "Took"}</dt>
-              <dd style={factValue}>{formatDuration(startedAt, finishedAt)}</dd>
+              <dd style={factValue}>
+                {formatDuration(startedAt, finishedAt, now)}
+              </dd>
             </div>
             <div>
               <dt style={factLabel}>{running ? "Spent so far" : "Spent"}</dt>
-              <dd style={factValue}>{formatSpend(run.spendUsdMicros)}</dd>
+              <dd style={factValue}>{formatSpend(spendUsdMicros)}</dd>
             </div>
           </dl>
 

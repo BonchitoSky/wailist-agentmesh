@@ -655,6 +655,12 @@ function build(
       ]
     : [];
 
+  // Computed once and shared: a running run's step list only includes what
+  // has completed so far (stepsSoFar), so this already grows call to call —
+  // both the list row and the detail must report the same figure, or the
+  // sheet would show a spend that disagrees with the row it was opened from.
+  const spendUsdMicros = spentMicros(run.steps);
+
   const summary: RunSummary = {
     id: run.id,
     workflowId: run.workflowId,
@@ -662,7 +668,7 @@ function build(
     triggeredBy: run.triggeredBy,
     status: run.status,
     startedAt: startIso,
-    spendUsdMicros: spentMicros(run.steps),
+    spendUsdMicros,
   };
   if (finishIso) summary.finishedAt = finishIso;
 
@@ -672,6 +678,7 @@ function build(
     triggeredBy: run.triggeredBy,
     status: run.status,
     startedAt: startIso,
+    spendUsdMicros,
   };
   if (finishIso) detailRun.finishedAt = finishIso;
 
