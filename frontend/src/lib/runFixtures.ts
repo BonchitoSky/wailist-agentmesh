@@ -706,12 +706,23 @@ function buildStarted(runId: string, now: number): Built | null {
   );
 }
 
+// When the sample history was first asked for. Fixed runs are timed back from
+// here rather than from each call's `now`: measured per call, a "still
+// running" sample's start moved forward on every poll, so its ticking
+// duration snapped back every few seconds.
+let fixedAnchor: number | null = null;
+
+function fixedStart(run: FixtureRun, now: number): number {
+  fixedAnchor ??= now;
+  return fixedAnchor - run.hoursAgo * HOUR_MS;
+}
+
 function fixtureRuns(now: number): RunSummary[] {
   const started = [...startedRuns.keys()]
     .flatMap((id) => buildStarted(id, now)?.summary ?? [])
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   const fixed = FIXTURE_RUNS.map(
-    (r) => build(r, now - r.hoursAgo * HOUR_MS, now).summary,
+    (r) => build(r, fixedStart(r, now), now).summary,
   );
   return [...started, ...fixed];
 }
@@ -744,6 +755,6 @@ export function fixtureRunDetail(
   now: number = Date.now(),
 ): FixtureRunDetail | null {
   const row = FIXTURE_RUNS.find((r) => r.id === runId);
-  if (row) return build(row, now - row.hoursAgo * HOUR_MS, now).detail;
+  if (row) return build(row, fixedStart(row, now), now).detail;
   return buildStarted(runId, now)?.detail ?? null;
 }
