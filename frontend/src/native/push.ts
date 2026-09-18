@@ -311,7 +311,7 @@ let tapListener: PluginListenerHandle | null = null;
  * Routes a tapped notification to whatever it is about.
  *
  * `type` discriminates the five server-side scenarios
- * (backend/internal/push.go): "run_finished" (the default when absent, for
+ * (backend/internal/push/push.go): "run_finished" (the default when absent, for
  * a payload from before this field existed), "geofence" and
  * "schedule_upcoming" open the workflow they name, "low_balance" and
  * "topup_completed" open billing.

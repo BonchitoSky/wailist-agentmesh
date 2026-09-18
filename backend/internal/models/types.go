@@ -532,10 +532,10 @@ const (
 	// adversarial or compromised target quoting near int64's range to
 	// force the running sum to overflow negative.
 	MaxSingleX402QuoteUSDMicros int64 = 1_000_000_000 // $1,000/call
-	// LowBalanceThresholdUSDMicros gates both the frontend's LowBalanceBanner
-	// (frontend/src/lib/credits/fx.ts) and the backend's low-balance push --
-	// one number, so the banner shown in the app and the notification sent
-	// when it's not open never disagree about what "low" means.
+	// LowBalanceThresholdUSDMicros is where the low-balance push fires. Keep
+	// it equal to LOW_BALANCE_THRESHOLD_USD in frontend/src/lib/credits/fx.ts,
+	// or the in-app banner and the notification disagree about what "low"
+	// means; nothing enforces that, so change both together.
 	LowBalanceThresholdUSDMicros int64 = 5_000_000 // $5
 )
 
