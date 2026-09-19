@@ -641,12 +641,11 @@ const fullWidth: React.CSSProperties = {
   justifyContent: "center",
 };
 
+// Sentence case, like the Upcoming heading beside it on this screen.
 const sectionLabel: React.CSSProperties = {
-  margin: "0 0 12px",
-  font: "500 11px/1 var(--font-mono)",
-  letterSpacing: "0.08em",
-  textTransform: "uppercase",
-  color: "var(--fg-dim)",
+  margin: "0 0 8px",
+  font: "600 13px/1.3 var(--font-sans)",
+  color: "var(--fg)",
 };
 
 const dayLabel: React.CSSProperties = {
