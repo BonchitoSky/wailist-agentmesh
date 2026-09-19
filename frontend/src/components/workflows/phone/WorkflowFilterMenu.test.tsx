@@ -70,6 +70,21 @@ describe("WorkflowFilterMenu", () => {
     expect(menu()).toBeNull();
   });
 
+  // A list that fits the screen never scrolls, so the drag itself has to
+  // close the menu.
+  it("closes the moment a drag or wheel starts outside it", () => {
+    render(<Harness />);
+    fireEvent.click(trigger());
+    fireEvent.touchMove(item(/^Paused/));
+    expect(menu()).toBeTruthy();
+    fireEvent.touchMove(screen.getByText("Outside"));
+    expect(menu()).toBeNull();
+
+    fireEvent.click(trigger());
+    fireEvent.wheel(screen.getByText("Outside"));
+    expect(menu()).toBeNull();
+  });
+
   it("closes on a tap outside, but not on a tap inside", () => {
     render(<Harness />);
     fireEvent.click(trigger());

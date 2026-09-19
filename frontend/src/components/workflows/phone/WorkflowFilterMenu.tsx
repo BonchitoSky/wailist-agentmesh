@@ -72,18 +72,25 @@ export function WorkflowFilterMenu({
       setOpen(false);
       triggerRef.current?.focus();
     };
-    // Capture phase, because the list scrolls inside PullToRefresh's own
-    // container and a scroll event does not bubble up to window.
-    const onScroll = (e: Event) => {
+    // Closes on the gesture as well as on the scroll it causes: a list short
+    // enough to fit the screen never scrolls, so waiting for a scroll event
+    // would leave the menu up while the finger drags. Scroll is caught in the
+    // capture phase because the list scrolls inside PullToRefresh's own
+    // container, and a scroll event does not bubble up to window.
+    const onScrollOrDrag = (e: Event) => {
       if (!inside(e.target)) setOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
-    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("scroll", onScrollOrDrag, true);
+    document.addEventListener("touchmove", onScrollOrDrag, { passive: true });
+    document.addEventListener("wheel", onScrollOrDrag, { passive: true });
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("scroll", onScrollOrDrag, true);
+      document.removeEventListener("touchmove", onScrollOrDrag);
+      document.removeEventListener("wheel", onScrollOrDrag);
     };
   }, [open]);
 
@@ -118,6 +125,19 @@ export function WorkflowFilterMenu({
               onClick={() => onStatusChange(o.value)}
             >
               {o.label}
+              {status === o.value && (
+                <span className="wfp-menu__check" aria-hidden>
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                    <path
+                      d="M3.5 8.5 L6.5 11.5 L12.5 4.5"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+              )}
             </button>
           ))}
           <div className="wfp-menu__divider" role="separator" />
