@@ -2270,3 +2270,79 @@ a.upc__row:focus-visible {
   font-size: 13px;
   color: var(--fg-muted);
 }
+
+/* ── A workflow's own screen on the phone ─────────────────────────────── */
+.wfd-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.wfd-status__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.wfd-desc {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--fg);
+  text-wrap: pretty;
+}
+.wfd-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.wfd-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  margin: 16px 0 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+}
+.wfd-stats dt {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--fg-dim);
+}
+.wfd-stats dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  color: var(--fg);
+}
+.wfd-agents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.wfd-agent {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.wfd-agent__name {
+  min-width: 0;
+  font-size: 14px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wfd-agent__meta {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
