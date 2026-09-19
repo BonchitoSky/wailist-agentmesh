@@ -23,6 +23,7 @@ import { workflowHref } from "@/lib/routes";
 import { filterWorkflows, type StatusFilter } from "@/lib/workflowList";
 import { ImportModal } from "./ImportModal";
 import { ShareModal } from "./ShareModal";
+import { WorkflowsPhoneList } from "./phone/WorkflowsPhoneList";
 import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import {
@@ -213,6 +214,36 @@ export function WorkflowsPage() {
       throw e;
     }
   }, []);
+
+  // A phone gets its own thin list: no create, import, schedule or share
+  // actions (those are desktop-only), no view toggle, and the status tabs
+  // folded into the filter menu. It shares the fetch and the pull above.
+  if (readOnly) {
+    return (
+      <div
+        className="am-viewport"
+        style={{
+          height: "100dvh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          background: "var(--bg)",
+        }}
+      >
+        <Topbar />
+        <PullToRefresh
+          onRefresh={refreshAll}
+          style={{ flex: 1, minHeight: 0, background: "var(--bg)" }}
+        >
+          <WorkflowsPhoneList
+            workflows={wfList}
+            loading={loading}
+            error={pageError?.message ?? null}
+          />
+        </PullToRefresh>
+      </div>
+    );
+  }
 
   return (
     <div

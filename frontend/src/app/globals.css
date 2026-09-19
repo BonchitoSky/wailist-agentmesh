@@ -2145,3 +2145,51 @@ body[data-typing] .bottomnav {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* The phone Workflows screen around those pieces. */
+.wfp-page {
+  --wfp-gutter: 16px;
+  padding: 12px var(--wfp-gutter) 48px;
+}
+.wfp-title {
+  margin: 0 0 2px;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.wfp-error {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+.wfp-empty {
+  padding: 32px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.wfp-empty__clear {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-top: 4px;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.wfp-empty__clear:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+.wfp-skeleton {
+  display: grid;
+  gap: 6px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
