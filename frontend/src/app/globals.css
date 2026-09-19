@@ -1849,3 +1849,56 @@ body[data-typing] .bottomnav {
     transition: none;
   }
 }
+
+/* ── Phone workflows list ─────────────────────────────────────────────────
+   The Workflows screen on a phone: flat, one line per fact, separated by
+   hairlines rather than boxed. Every control keeps the 44px touch floor;
+   "thin" comes from dropping chrome, not from shrinking targets. */
+.wfp-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.wfp-strip__label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.wfp-strip__amount {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.wfp-strip__add {
+  margin-left: auto;
+  width: 32px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition:
+    transform 0.12s var(--ease),
+    border-color 0.15s var(--ease);
+}
+.wfp-strip__add:active {
+  transform: scale(0.96);
+  background: var(--bg-elev-1);
+}
+.wfp-strip__add:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+@media (hover: hover) {
+  .wfp-strip__add:hover {
+    border-color: var(--accent-line);
+  }
+}
