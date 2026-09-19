@@ -20,6 +20,7 @@ import { DEMO_WORKFLOW } from "@/lib/data";
 import { loadTemplateWorkflow } from "@/lib/templateWorkflow";
 import { can } from "@/lib/readonly";
 import { workflowHref } from "@/lib/routes";
+import { filterWorkflows, type StatusFilter } from "@/lib/workflowList";
 import { ImportModal } from "./ImportModal";
 import { ShareModal } from "./ShareModal";
 import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
@@ -35,7 +36,7 @@ export function WorkflowsPage() {
   const router = useRouter();
   const readOnly = useReadOnly();
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState<StatusFilter>("all");
   const [view, setView] = useState<"rows" | "grid">("rows");
   const [wfList, setWfList] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -110,16 +111,10 @@ export function WorkflowsPage() {
     void refreshBalance();
   }, [refreshBalance]);
 
-  const filtered = useMemo(() => {
-    return wfList.filter((wf) => {
-      const matchesQ =
-        !q ||
-        wf.name?.toLowerCase().includes(q.toLowerCase()) ||
-        wf.tags?.join(" ").includes(q.toLowerCase());
-      const matchesS = status === "all" || wf.status === status;
-      return matchesQ && matchesS;
-    });
-  }, [wfList, q, status]);
+  const filtered = useMemo(
+    () => filterWorkflows(wfList, { query: q, status }),
+    [wfList, q, status],
+  );
 
   const handleNewWorkflow = useCallback(async () => {
     if (creating) return;
@@ -414,7 +409,7 @@ export function WorkflowsPage() {
                 border: "1px solid var(--border)",
               }}
             >
-              {["all", "active", "paused", "draft"].map((s) => (
+              {(["all", "active", "paused", "draft"] as const).map((s) => (
                 <button
                   key={s}
                   className="wf-filter"
