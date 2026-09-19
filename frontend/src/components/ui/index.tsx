@@ -389,7 +389,15 @@ export const IconMic = ({ size = 12 }: { size?: number }) => (
     aria-hidden="true"
     style={{ display: "block" }}
   >
-    <rect x="5.5" y="1.5" width="5" height="8" rx="2.5" stroke="currentColor" strokeWidth="1.3" />
+    <rect
+      x="5.5"
+      y="1.5"
+      width="5"
+      height="8"
+      rx="2.5"
+      stroke="currentColor"
+      strokeWidth="1.3"
+    />
     <path
       d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5M5.5 14.5h5"
       stroke="currentColor"
