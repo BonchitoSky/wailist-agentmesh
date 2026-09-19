@@ -281,6 +281,18 @@ export const IconPlus = ({ size = 14 }: { size?: number }) => (
   </svg>
 );
 
+// Three narrowing lines: filter and sort.
+export const IconFilter = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden>
+    <path
+      d="M2.5 4.5 L13.5 4.5 M4.5 8 L11.5 8 M6.5 11.5 L9.5 11.5"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
 export const IconBackspace = ({ size = 12 }: { size?: number }) => (
   <svg
     width={size}
