@@ -2246,85 +2246,54 @@ body[data-typing] .bottomnav {
 }
 
 /* ── Credits on a phone ───────────────────────────────────────────────────
-   The same shape as the Workflows list: the number that matters leads, small
-   labels are sentence case, figures are mono and tabular, and sections are
-   separated by a hairline rather than boxed inside panels. Colour appears on
-   the balance only, and only when it is low. */
+   No boxes. The balance is the page's headline rather than a card, amounts
+   are text in a row rather than tiles, fields are underlined rather than
+   bordered, and exactly one control is filled: the one you came to press.
+   Sections are told apart by a hairline, which is how the Workflows list
+   reads. */
 .bilp-page {
-  padding: 12px 16px 48px;
-}
-.bilp-title {
-  margin: 0 0 10px;
-  font-size: 22px;
-  line-height: 28px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  padding: 14px 16px 48px;
 }
 
-.bilp-balance {
+.bilp-head {
   display: grid;
   gap: 2px;
-  padding: 14px 16px;
-  border-radius: var(--r-2);
-  background: var(--bg-elev-1);
+  padding-bottom: 4px;
 }
-.bilp-balance__label {
+.bilp-head__label {
   font-size: 12px;
   color: var(--fg-muted);
 }
-.bilp-balance__row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-.bilp-balance__amount {
+.bilp-head__amount {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 28px;
-  line-height: 34px;
-  letter-spacing: -0.02em;
+  font-size: 34px;
+  line-height: 40px;
+  letter-spacing: -0.03em;
   color: var(--fg);
 }
-.bilp-balance__state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
+.bilp-head__state {
   font-size: 12px;
   color: var(--fg-muted);
 }
-.bilp-balance__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--fg-dim);
-}
-.bilp-balance[data-state="ok"] .bilp-balance__dot {
-  background: var(--accent);
-}
-/* The one place on this screen worth a warm colour. */
-.bilp-balance[data-state="low"] .bilp-balance__dot {
-  background: var(--warm);
-}
-.bilp-balance[data-state="low"] .bilp-balance__state {
+/* The only place on this screen a warm colour is earned. */
+.bilp-head[data-state="low"] .bilp-head__state {
   color: var(--warm);
 }
 
 .bilp-section {
-  margin-top: 18px;
+  margin-top: 20px;
   padding-top: 18px;
   border-top: 1px solid var(--border-soft);
 }
 .bilp-heading {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   font-size: 13px;
   font-weight: 600;
   color: var(--fg);
 }
-.bilp-hint,
 .bilp-note {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   font-size: 12px;
   line-height: 18px;
   color: var(--fg-muted);
@@ -2339,107 +2308,107 @@ body[data-typing] .bottomnav {
   color: var(--warm);
 }
 
-/* Two across: ₹20000 does not fit four to a phone row. */
-.bilp-presets {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+/* Amounts as text. The chosen one is accent with a rule under it -- enough to
+   read as chosen without drawing a box around every option. */
+.bilp-amounts {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
 }
-.bilp-preset {
-  display: grid;
-  gap: 2px;
-  min-height: 56px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--r-2);
-  background: var(--bg-elev-1);
-  color: var(--fg);
-  text-align: left;
-  font-family: var(--font-sans);
-  cursor: pointer;
-  touch-action: manipulation;
-}
-.bilp-preset[aria-pressed="true"] {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
-}
-.bilp-preset:focus-visible,
-.bilp-input:focus-visible,
-.bilp-btn:focus-visible,
-.bilp-cta:focus-visible {
-  outline: 2px solid var(--accent-line);
-  outline-offset: -2px;
-}
-.bilp-preset__amount {
+.bilp-amount {
+  padding: 0 0 6px;
+  min-height: 44px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--fg-muted);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 15px;
+  cursor: pointer;
+  touch-action: manipulation;
 }
-.bilp-preset__usd {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  color: var(--fg-muted);
+.bilp-amount[aria-pressed="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+.bilp-amount:focus-visible,
+.bilp-field__input:focus-visible,
+.bilp-text-btn:focus-visible,
+.bilp-pay:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
 }
 
-.bilp-input {
-  width: 100%;
+/* Underlined, not boxed. */
+.bilp-field {
+  display: grid;
+  gap: 2px;
+  margin-top: 16px;
+}
+.bilp-field__label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.bilp-field__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.bilp-field__row:focus-within {
+  border-bottom-color: var(--accent);
+}
+.bilp-field__prefix {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--fg-muted);
+}
+.bilp-field__input {
+  flex: 1;
   min-width: 0;
   height: 44px;
-  margin-top: 8px;
-  padding: 0 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--r-2);
-  background: var(--bg-elev-1);
+  border: none;
+  background: none;
   color: var(--fg);
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   /* 16px keeps mobile browsers from zooming on focus. */
   font-size: 16px;
 }
-.bilp-input::placeholder {
+.bilp-field__input::placeholder {
   color: var(--fg-dim);
 }
-
-.bilp-coupon {
-  display: flex;
-  gap: 8px;
-}
-.bilp-coupon .bilp-input {
+.bilp-field--inline {
   margin-top: 0;
-  flex: 1;
 }
-.bilp-btn {
+
+.bilp-text-btn {
   flex-shrink: 0;
-  height: 44px;
-  padding: 0 16px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--r-2);
-  background: var(--bg-elev-1);
-  color: var(--fg);
+  min-height: 44px;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: var(--accent);
   font-family: var(--font-sans);
   font-size: 14px;
   cursor: pointer;
   touch-action: manipulation;
 }
-.bilp-btn:disabled {
+.bilp-text-btn:disabled {
   color: var(--fg-dim);
   cursor: default;
 }
 
-/* The one filled control on the screen: the thing you came here to do.
-   44px, not more: the app-wide touch floor under @media (pointer: coarse) is
-   written with !important, so on a touch screen it overrides any taller value
-   here rather than acting as a floor. Asking for 48 and measuring 44 would
-   only mislead the next reader. */
-.bilp-cta {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+/* The one filled control on the screen. 44px, not more: the app-wide touch
+   floor under @media (pointer: coarse) is written with !important, so on a
+   touch screen it overrides any taller value here rather than acting as a
+   floor. Asking for 48 and measuring 44 would only mislead the next reader. */
+.bilp-pay {
+  display: block;
   width: 100%;
   min-height: 44px;
-  margin-top: 10px;
-  padding: 0 16px;
+  margin-top: 20px;
   border: none;
   border-radius: var(--r-2);
   background: var(--accent);
@@ -2451,26 +2420,26 @@ body[data-typing] .bottomnav {
   touch-action: manipulation;
   transition: transform 0.12s var(--ease);
 }
-.bilp-cta:active {
+.bilp-pay:active {
   transform: scale(0.99);
 }
-.bilp-cta:disabled {
+.bilp-pay:disabled {
   background: var(--bg-elev-2);
   color: var(--fg-dim);
   cursor: default;
   transform: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .bilp-cta {
+  .bilp-pay {
     transition: none;
   }
 }
 
 .bilp-facts {
   margin: 0;
-  padding-left: 18px;
+  padding-left: 16px;
   display: grid;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
   line-height: 18px;
   color: var(--fg-muted);
