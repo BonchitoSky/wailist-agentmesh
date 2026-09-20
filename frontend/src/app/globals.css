@@ -2445,7 +2445,12 @@ body[data-typing] .bottomnav {
 /* The one filled control on the screen. 44px, not more: the app-wide touch
    floor under @media (pointer: coarse) is written with !important, so on a
    touch screen it overrides any taller value here rather than acting as a
-   floor. Asking for 48 and measuring 44 would only mislead the next reader. */
+   floor. Asking for 48 and measuring 44 would only mislead the next reader.
+
+   The gradient, hairline and halo are the website checkout CTA's, copied
+   rather than reinvented so the two payment buttons read as one control --
+   see `.bill-cta` in app/billing/page.tsx. box-sizing is border-box globally,
+   so the 1px border costs no height. */
 .bilp-pay {
   display: flex;
   align-items: center;
@@ -2454,22 +2459,34 @@ body[data-typing] .bottomnav {
   width: 100%;
   min-height: 44px;
   margin-top: 18px;
-  border: none;
+  border: 1px solid var(--accent-line);
   border-radius: var(--r-2);
-  background: var(--accent);
+  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  box-shadow: 0 8px 24px var(--accent-glow);
   color: var(--accent-fg);
   font-family: var(--font-sans);
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
   touch-action: manipulation;
-  transition: transform 0.12s var(--ease);
+  transition:
+    transform 0.12s var(--ease),
+    box-shadow 0.2s var(--ease);
+}
+/* Gated on a real pointer: a tap leaves :hover set on a touch screen, so the
+   button would stay lifted after it was pressed. */
+@media (hover: hover) {
+  .bilp-pay:not(:disabled):hover {
+    box-shadow: 0 12px 34px var(--accent-glow);
+  }
 }
 .bilp-pay:active {
   transform: scale(0.99);
 }
 .bilp-pay:disabled {
   background: var(--bg-elev-2);
+  border-color: var(--border);
+  box-shadow: none;
   color: var(--fg-dim);
   cursor: default;
   transform: none;
