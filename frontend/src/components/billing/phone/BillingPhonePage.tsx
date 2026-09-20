@@ -1,28 +1,36 @@
 "use client";
+import { useState } from "react";
+import { IconArrow, IconWallet } from "@/components/ui";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { creditsForTopup } from "@/lib/credits/fx";
+import type { Purchase } from "@/lib/credits/types";
 
 // The Credits screen on a phone.
 //
-// It exists because a run that stops for want of credit is the one thing this
-// app has to be able to fix from outside, and the desktop page answers that in
-// a two-column layout of panels inside panels.
+// A run that stops for want of credit is the one thing this app has to be able
+// to fix from outside, so the balance leads and paying is directly under it.
 //
-// Boxes are the thing this screen deliberately does not have. The balance is a
-// bare figure on the page rather than a card; the amounts are text in a row
-// rather than four bordered tiles; the two fields are underlined rather than
-// boxed. One filled control, the Pay button, because that is the single thing
-// you came here to do. Sections are told apart by a hairline and a small
-// heading, which is how the Workflows list reads.
+// The dollar figure beside the amount is quoted at the rate the SERVER will
+// charge at, never at a local constant. It used to come from a hardcoded 1/83
+// plus a 5% bonus the backend never granted, which promised roughly 21% more
+// credit than the ledger recorded -- on the screen where someone decides
+// whether to pay.
 
 const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
 const fmtINR = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+// Four amounts have to fit one phone row, and ₹10,000 does not. ₹10k does.
+const shortINR = (n: number) =>
+  n >= 1000 && n % 1000 === 0 ? `₹${n / 1000}k` : fmtINR(n);
 
 export interface BillingPhoneProps {
   balanceUSD: number;
   balanceKnown: boolean;
   isLow: boolean;
+  /** Spent across every workflow over the same 30 days the list counts. */
+  spent30dUSD: number;
   returnState: { tone: "pending" | "error"; message: string } | null;
+  /** The server's live rate. 0 until it arrives, and then nothing is quoted. */
+  usdPerINR: number;
   presets: readonly number[];
   amountINR: number;
   onPreset: (inr: number) => void;
@@ -39,28 +47,50 @@ export interface BillingPhoneProps {
   couponMessage: string;
   onApplyCoupon: () => void;
   onBuyAgain: (amountINR: number) => void;
+  /** Newest first. Only the first shows until "See all" is pressed. */
+  purchases: readonly Purchase[];
+  purchasesKnown: boolean;
   howItWorks: readonly string[];
 }
 
 export function BillingPhonePage(p: BillingPhoneProps) {
+  const [couponOpen, setCouponOpen] = useState(false);
+  const [allPayments, setAllPayments] = useState(false);
+  const [howOpen, setHowOpen] = useState(false);
+
   const state = !p.balanceKnown ? "unknown" : p.isLow ? "low" : "ok";
-  const credits = creditsForTopup(p.canCheckout ? p.effectiveINR : 0);
+  const credits =
+    p.usdPerINR > 0 && p.canCheckout
+      ? creditsForTopup(p.effectiveINR, p.usdPerINR)
+      : null;
+
   return (
     <main className="bilp-page">
-      {/* The balance is the page's headline, not a card on it. */}
-      <header className="bilp-head" data-state={state}>
-        <span className="bilp-head__label">Credit balance</span>
-        <span className="bilp-head__amount">
-          {p.balanceKnown ? fmtUSD(p.balanceUSD) : "—"}
-        </span>
-        <span className="bilp-head__state">
-          {state === "unknown"
-            ? "Checking…"
-            : state === "low"
-              ? "Low — a run may stop"
-              : "Active"}
-        </span>
-      </header>
+      <h1 className="bilp-title">Credits</h1>
+      <p className="bilp-sub">What you hold, and what your agents spent.</p>
+
+      <section className="bilp-stats" data-state={state}>
+        <div className="bilp-stat">
+          <span className="bilp-stat__label">Balance</span>
+          <span className="bilp-stat__row">
+            <span className="bilp-stat__value">
+              {p.balanceKnown ? fmtUSD(p.balanceUSD) : "—"}
+            </span>
+            <span className="bilp-pill">
+              <span className="bilp-pill__dot" aria-hidden />
+              {state === "unknown"
+                ? "Checking"
+                : state === "low"
+                  ? "Low"
+                  : "Active"}
+            </span>
+          </span>
+        </div>
+        <div className="bilp-stat">
+          <span className="bilp-stat__label">Spent · 30d</span>
+          <span className="bilp-stat__value">{fmtUSD(p.spent30dUSD)}</span>
+        </div>
+      </section>
 
       {p.returnState && (
         <p className="bilp-note" data-tone={p.returnState.tone} role="status">
@@ -69,50 +99,47 @@ export function BillingPhonePage(p: BillingPhoneProps) {
       )}
 
       <section className="bilp-section">
-        <h2 className="bilp-heading">Add credit</h2>
+        <h2 className="bilp-eyebrow">Amount</h2>
 
-        {/* Amounts as text in a row. A chosen one is marked by its colour and
-            a rule under it, which needs no box to read as chosen. */}
-        <div className="bilp-amounts" role="group" aria-label="Amount">
-          {p.presets.map((inr) => (
-            <button
-              key={inr}
-              type="button"
-              className="bilp-amount"
-              aria-pressed={!p.customINR && p.amountINR === inr}
-              onClick={() => p.onPreset(inr)}
-            >
-              {fmtINR(inr)}
-            </button>
-          ))}
+        <div className="bilp-seg" role="radiogroup" aria-label="Amount">
+          {p.presets.map((inr) => {
+            const on = !p.customINR && p.amountINR === inr;
+            return (
+              <button
+                key={inr}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                aria-label={fmtINR(inr)}
+                className="bilp-seg__item"
+                onClick={() => p.onPreset(inr)}
+              >
+                {shortINR(inr)}
+              </button>
+            );
+          })}
         </div>
 
-        <label className="bilp-field">
-          <span className="bilp-field__label">Or another amount</span>
-          <span className="bilp-field__row">
-            <span className="bilp-field__prefix" aria-hidden>
-              ₹
-            </span>
-            <input
-              className="bilp-field__input"
-              inputMode="decimal"
-              aria-label="Amount in rupees"
-              placeholder={String(p.amountINR)}
-              value={p.customINR}
-              onChange={(e) => p.onCustomChange(e.target.value)}
-            />
+        <div className="bilp-amount">
+          <span className="bilp-amount__prefix" aria-hidden>
+            ₹
           </span>
-        </label>
+          <input
+            className="bilp-amount__input"
+            inputMode="decimal"
+            aria-label="Amount in rupees"
+            placeholder={String(p.amountINR)}
+            value={p.customINR}
+            onChange={(e) => p.onCustomChange(e.target.value)}
+          />
+          <span className="bilp-amount__usd">
+            {credits === null ? "≈ —" : `≈ ${fmtUSD(credits)}`}
+          </span>
+        </div>
 
-        {p.overMax ? (
+        {p.overMax && (
           <p className="bilp-note" data-tone="error" role="alert">
             The most you can add at once is {fmtINR(p.maxINR)}.
-          </p>
-        ) : (
-          <p className="bilp-note">
-            {p.canCheckout
-              ? `Adds ${fmtUSD(credits)} of credit.`
-              : `Top-ups of ${fmtINR(1000)} or more earn 5% bonus credits.`}
           </p>
         )}
 
@@ -122,37 +149,48 @@ export function BillingPhonePage(p: BillingPhoneProps) {
           onClick={p.onCheckout}
           disabled={!p.canCheckout}
         >
+          <IconWallet size={15} />
           {p.canCheckout ? `Pay ${fmtINR(p.effectiveINR)}` : "Pay"}
         </button>
-        <p className="bilp-note">
-          Card, UPI or netbanking, without leaving the app.
-        </p>
       </section>
 
+      {/* Above the payment history, so the discount is offered before the
+          receipt rather than after it. */}
       <section className="bilp-section">
-        <h2 className="bilp-heading">Coupon</h2>
-        <div className="bilp-field bilp-field--inline">
-          <span className="bilp-field__row">
-            <input
-              className="bilp-field__input"
-              placeholder="Code"
-              aria-label="Coupon code"
-              autoCapitalize="characters"
-              autoCorrect="off"
-              value={p.couponCode}
-              onChange={(e) => p.onCouponChange(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && p.onApplyCoupon()}
-            />
-            <button
-              type="button"
-              className="bilp-text-btn"
-              onClick={p.onApplyCoupon}
-              disabled={!p.couponCode.trim() || p.couponState === "loading"}
-            >
-              {p.couponState === "loading" ? "Applying…" : "Apply"}
-            </button>
-          </span>
-        </div>
+        {couponOpen ? (
+          <>
+            <h2 className="bilp-eyebrow">Coupon</h2>
+            <div className="bilp-amount">
+              <input
+                className="bilp-amount__input"
+                placeholder="Code"
+                aria-label="Coupon code"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                value={p.couponCode}
+                onChange={(e) => p.onCouponChange(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && p.onApplyCoupon()}
+              />
+              <button
+                type="button"
+                className="bilp-link"
+                onClick={p.onApplyCoupon}
+                disabled={!p.couponCode.trim() || p.couponState === "loading"}
+              >
+                {p.couponState === "loading" ? "Applying…" : "Apply"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="bilp-row"
+            onClick={() => setCouponOpen(true)}
+          >
+            <span>Have a coupon?</span>
+            <span className="bilp-row__action">Add</span>
+          </button>
+        )}
         {p.couponMessage && (
           <p
             className="bilp-note"
@@ -164,19 +202,49 @@ export function BillingPhonePage(p: BillingPhoneProps) {
         )}
       </section>
 
-      {/* PurchaseHistory brings its own "Billing history" heading, so this
-          section does not add a second one above it. */}
-      <section className="bilp-section">
-        <PurchaseHistory onBuyAgain={p.onBuyAgain} />
-      </section>
+      {/* One payment by default. The whole list runs off a phone screen, and
+          what someone checks after paying is whether THIS one landed. */}
+      {p.purchasesKnown && p.purchases.length > 0 && (
+        <section className="bilp-section">
+          <h2 className="bilp-heading">
+            {allPayments ? "Payments" : "Last payment"}
+          </h2>
+          <PurchaseHistory
+            onBuyAgain={p.onBuyAgain}
+            limit={allPayments ? undefined : 1}
+            heading={null}
+          />
+          {!allPayments && p.purchases.length > 1 && (
+            <button
+              type="button"
+              className="bilp-link bilp-link--block"
+              onClick={() => setAllPayments(true)}
+            >
+              See all payments ({p.purchases.length})
+            </button>
+          )}
+        </section>
+      )}
 
       <section className="bilp-section">
-        <h2 className="bilp-heading">How credits work</h2>
-        <ul className="bilp-facts">
-          {p.howItWorks.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
+        <button
+          type="button"
+          className="bilp-row"
+          aria-expanded={howOpen}
+          onClick={() => setHowOpen((v) => !v)}
+        >
+          <span>How credits work</span>
+          <span className="bilp-row__chevron" data-open={howOpen} aria-hidden>
+            <IconArrow size={13} />
+          </span>
+        </button>
+        {howOpen && (
+          <ul className="bilp-facts">
+            {p.howItWorks.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        )}
       </section>
     </main>
   );

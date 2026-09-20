@@ -1,28 +1,48 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { Purchase } from "@/lib/credits/types";
+
+const historyProps = vi.hoisted(() => ({ last: null as unknown }));
 
 vi.mock("@/components/billing/PurchaseHistory", () => ({
-  PurchaseHistory: () => <div data-testid="history" />,
+  PurchaseHistory: (props: { limit?: number; heading?: string | null }) => {
+    historyProps.last = props;
+    return <div data-testid="history" />;
+  },
 }));
 
 import { BillingPhonePage, type BillingPhoneProps } from "./BillingPhonePage";
 
 const noop = () => {};
 
+// The rate the backend reported live on 2026-09-20.
+const LIVE = 0.010423;
+
+const purchase = (id: string): Purchase => ({
+  id,
+  createdAt: "2026-08-03T10:00:00.000Z",
+  amountINR: 500,
+  creditsUSD: 5.24,
+  method: "cashfree",
+  status: "completed",
+});
+
 function renderPage(over: Partial<BillingPhoneProps> = {}) {
   const props: BillingPhoneProps = {
-    balanceUSD: 12.5,
+    balanceUSD: 5.24,
     balanceKnown: true,
     isLow: false,
+    spent30dUSD: 8.71,
     returnState: null,
-    presets: [1000, 5000],
+    usdPerINR: LIVE,
+    presets: [1000, 5000, 10000, 20000],
     amountINR: 5000,
     onPreset: vi.fn(),
     customINR: "",
     onCustomChange: noop,
     effectiveINR: 5000,
     overMax: false,
-    maxINR: 100000,
+    maxINR: 95942,
     canCheckout: true,
     onCheckout: vi.fn(),
     couponCode: "",
@@ -31,6 +51,8 @@ function renderPage(over: Partial<BillingPhoneProps> = {}) {
     couponMessage: "",
     onApplyCoupon: vi.fn(),
     onBuyAgain: noop,
+    purchases: [purchase("p1")],
+    purchasesKnown: true,
     howItWorks: ["Credits are spent as your agents call paid tools."],
     ...over,
   };
@@ -38,81 +60,104 @@ function renderPage(over: Partial<BillingPhoneProps> = {}) {
   return { ...utils, props };
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  historyProps.last = null;
+});
 
 describe("BillingPhonePage", () => {
-  it("leads with the balance and says the account is active", () => {
+  it("leads with the balance beside what the agents spent", () => {
     const { container } = renderPage();
-    expect(screen.getByText("$12.50")).toBeTruthy();
-    expect(screen.getByText("Credit balance")).toBeTruthy();
-    expect(screen.getByText("Active")).toBeTruthy();
+    expect(screen.getByText("$5.24")).toBeTruthy();
+    expect(screen.getByText("Balance")).toBeTruthy();
+    expect(screen.getByText("Spent · 30d")).toBeTruthy();
+    expect(screen.getByText("$8.71")).toBeTruthy();
     expect(
-      container.querySelector(".bilp-head")?.getAttribute("data-state"),
+      container.querySelector(".bilp-stats")?.getAttribute("data-state"),
     ).toBe("ok");
   });
 
-  it("warns when the balance is low, which is why colour is here at all", () => {
+  it("warns when the balance is low", () => {
     const { container } = renderPage({ isLow: true, balanceUSD: 1.2 });
-    expect(screen.getByText(/Low — a run may stop/)).toBeTruthy();
+    expect(screen.getByText("Low")).toBeTruthy();
     expect(
-      container.querySelector(".bilp-head")?.getAttribute("data-state"),
+      container.querySelector(".bilp-stats")?.getAttribute("data-state"),
     ).toBe("low");
   });
 
   it("shows a dash, not $0.00, until the balance is known", () => {
     const { container } = renderPage({ balanceKnown: false, balanceUSD: 0 });
     expect(screen.getByText("—")).toBeTruthy();
-    expect(screen.getByText("Checking…")).toBeTruthy();
     expect(container.textContent).not.toContain("$0.00");
   });
+});
 
-  // The whole point of this screen: the payment happens here. There is no
-  // longer a branch that sends the app to the website.
-  it("pays in place, and never offers to leave for the website", () => {
-    const onCheckout = vi.fn();
-    const { container } = renderPage({ onCheckout });
-    fireEvent.click(screen.getByRole("button", { name: /^Pay / }));
-    expect(onCheckout).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toMatch(/website|browser tab/i);
-  });
-
-  it("says what the Pay button will charge", () => {
-    renderPage({ effectiveINR: 5000 });
-    expect(screen.getByRole("button", { name: "Pay ₹5,000" })).toBeTruthy();
-  });
-
-  it("marks the chosen amount and reports the choice", () => {
-    const onPreset = vi.fn();
-    renderPage({ onPreset });
-    expect(
-      screen
-        .getByRole("button", { name: "₹5,000" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "₹1,000" }));
-    expect(onPreset).toHaveBeenCalledWith(1000);
-  });
-
-  // Boxes are what made this screen look heavy. None of the amounts,
-  // fields or section wrappers may carry a border of its own.
-  it("draws no boxes around the amounts or the fields", () => {
+// The regression this screen was rebuilt for. The estimate used to be
+// amountINR / 83 * 1.05, quoting $63.25 for ₹5,000 while the ledger credited
+// about $52.12 -- directly above the Pay button.
+describe("the quote", () => {
+  it("converts at the rate the server will charge, with no bonus", () => {
     const { container } = renderPage();
-    expect(container.querySelector(".bilp-balance")).toBeNull();
-    expect(container.querySelector(".bilp-preset")).toBeNull();
-    // Exactly one filled control: the Pay button.
-    expect(container.querySelectorAll(".bilp-pay")).toHaveLength(1);
+    expect(container.textContent).toContain("≈ $52.12");
+    expect(container.textContent).not.toContain("63.25");
+  });
+
+  it("never mentions a bonus anywhere on the screen", () => {
+    const { container } = renderPage();
+    expect(container.textContent).not.toMatch(/bonus|5%/i);
+  });
+
+  it("quotes nothing at all until the rate arrives", () => {
+    const { container } = renderPage({ usdPerINR: 0 });
+    expect(container.textContent).toContain("≈ —");
+    expect(container.textContent).not.toMatch(/≈ \$/);
+  });
+
+  it("names the amount on the Pay button", () => {
+    const onCheckout = vi.fn();
+    renderPage({ onCheckout });
+    fireEvent.click(screen.getByRole("button", { name: /^Pay ₹5,000$/ }));
+    expect(onCheckout).toHaveBeenCalledTimes(1);
   });
 
   it("refuses an amount over the maximum, and says the maximum", () => {
-    renderPage({ overMax: true, canCheckout: false, maxINR: 100000 });
-    expect(screen.getByRole("alert").textContent).toContain("₹1,00,000");
+    renderPage({ overMax: true, canCheckout: false, maxINR: 95942 });
+    expect(screen.getByRole("alert").textContent).toContain("₹95,942");
     expect(screen.getByRole("button", { name: "Pay" })).toHaveProperty(
       "disabled",
       true,
     );
   });
+});
 
-  it("applies a coupon and reports what came back", () => {
+describe("the amount control", () => {
+  it("is a radio group that marks and reports the chosen amount", () => {
+    const onPreset = vi.fn();
+    renderPage({ onPreset });
+    const chosen = screen.getByRole("radio", { name: "₹5,000" });
+    expect(chosen.getAttribute("aria-checked")).toBe("true");
+    // Shown short so four fit a phone row, but announced in full.
+    expect(chosen.textContent).toBe("₹5k");
+    fireEvent.click(screen.getByRole("radio", { name: "₹1,000" }));
+    expect(onPreset).toHaveBeenCalledWith(1000);
+  });
+});
+
+describe("the coupon", () => {
+  it("sits above the payment history, and opens from a row", () => {
+    const { container } = renderPage({ purchases: [purchase("p1")] });
+    const text = container.textContent ?? "";
+    expect(text.indexOf("Have a coupon?")).toBeGreaterThan(-1);
+    expect(text.indexOf("Have a coupon?")).toBeLessThan(
+      text.indexOf("Last payment"),
+    );
+    // Collapsed until asked for, so it costs one line rather than a field.
+    expect(screen.queryByLabelText("Coupon code")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Have a coupon/ }));
+    expect(screen.getByLabelText("Coupon code")).toBeTruthy();
+  });
+
+  it("applies a code and reports what came back", () => {
     const onApplyCoupon = vi.fn();
     renderPage({
       couponCode: "WELCOME",
@@ -120,33 +165,49 @@ describe("BillingPhonePage", () => {
       couponState: "success",
       couponMessage: "Coupon applied — $5.00 added to your balance.",
     });
+    fireEvent.click(screen.getByRole("button", { name: /Have a coupon/ }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     expect(onApplyCoupon).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/\$5\.00 added/)).toBeTruthy();
   });
+});
 
-  it("cannot apply an empty coupon", () => {
-    renderPage({ couponCode: "   " });
-    expect(screen.getByRole("button", { name: "Apply" })).toHaveProperty(
-      "disabled",
-      true,
-    );
+describe("payments", () => {
+  it("shows only the latest, so the list cannot run off the screen", () => {
+    renderPage({ purchases: [purchase("a"), purchase("b"), purchase("c")] });
+    expect(screen.getByText("Last payment")).toBeTruthy();
+    expect(historyProps.last).toMatchObject({ limit: 1, heading: null });
   });
 
-  it("reports the outcome of a redirect checkout", () => {
-    renderPage({
-      returnState: { tone: "pending", message: "Payment submitted." },
-    });
-    expect(screen.getByRole("status").textContent).toContain(
-      "Payment submitted.",
+  it("offers See all only when there is more than one, and expands it", () => {
+    renderPage({ purchases: [purchase("a"), purchase("b"), purchase("c")] });
+    fireEvent.click(
+      screen.getByRole("button", { name: "See all payments (3)" }),
     );
+    expect(historyProps.last).toMatchObject({ limit: undefined });
+    expect(screen.getByText("Payments")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /See all/ })).toBeNull();
   });
 
-  it("shows purchase history and how credits work", () => {
+  it("does not offer See all for a single payment", () => {
+    renderPage({ purchases: [purchase("only")] });
+    expect(screen.queryByRole("button", { name: /See all/ })).toBeNull();
+  });
+
+  it("says nothing at all before the payments have loaded", () => {
+    renderPage({ purchasesKnown: false, purchases: [] });
+    expect(screen.queryByText("Last payment")).toBeNull();
+    expect(screen.queryByTestId("history")).toBeNull();
+  });
+});
+
+describe("how credits work", () => {
+  it("is collapsed until asked for", () => {
     renderPage();
-    expect(screen.getByTestId("history")).toBeTruthy();
-    // PurchaseHistory has its own heading; this screen must not add a second.
-    expect(screen.queryByText("Recent purchases")).toBeNull();
+    const row = screen.getByRole("button", { name: /How credits work/ });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText(/agents call paid tools/)).toBeNull();
+    fireEvent.click(row);
     expect(screen.getByText(/agents call paid tools/)).toBeTruthy();
   });
 });
