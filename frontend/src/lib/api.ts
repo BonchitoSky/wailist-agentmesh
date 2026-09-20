@@ -1136,7 +1136,18 @@ export const payments = {
     usd_per_inr: number;
     providers: { id: PaymentMethod; enabled: boolean; currency: string }[];
   }> => {
-    if (!BASE) throw new Error("payments require a configured backend");
+    // Mock mode has no server to ask, and a screen that quotes nothing
+    // cannot demonstrate the top-up flow. A plausible fixture rate keeps
+    // the mock build usable; nothing is ever charged against it.
+    if (!BASE) {
+      return {
+        usd_per_inr: 0.010423,
+        providers: [
+          { id: "cashfree", enabled: true, currency: "INR" },
+          { id: "nowpayments", enabled: true, currency: "USD" },
+        ],
+      };
+    }
     const res = await apiFetch(`${BASE}/payments/providers`, {
       credentials: "include",
     });
