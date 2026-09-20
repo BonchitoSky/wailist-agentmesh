@@ -115,7 +115,9 @@ export interface Workflow {
   edges: WorkflowEdge[];
   // "deployed" is what the backend actually stores (models.WorkflowStatusDeployed);
   // it was missing here, so deployment state had to be inferred indirectly.
-  status?: "active" | "paused" | "draft" | "deployed";
+  // "error" is stored too (models.WorkflowStatusError) and was missing as well.
+  // "paused" and the legacy "active" only ever come from mock data.
+  status?: "active" | "paused" | "draft" | "deployed" | "error";
   updated?: string;
   updatedAt?: string;
   createdAt?: string;
