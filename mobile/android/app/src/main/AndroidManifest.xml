@@ -116,4 +116,18 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <!-- So registered fences survive a reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Paying by UPI means handing the payment off to Google Pay, PhonePe
+         or whichever app the payer chose. On Android 11+ an app cannot see
+         another app it has not declared here: without this block
+         startActivity throws ActivityNotFoundException even when the UPI
+         app IS installed, and the payment dies with nothing on screen to
+         say why. Declared as the intent rather than by package name, so
+         every UPI app qualifies and no list has to be kept up to date. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="upi" />
+        </intent>
+    </queries>
 </manifest>
