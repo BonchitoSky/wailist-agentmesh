@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 const state = vi.hoisted(() => ({
   native: false,
+  readOnly: false,
   openExternal: vi.fn<
     (url: string, options?: { onClose?: () => void }) => Promise<void>
   >(async () => {}),
@@ -15,9 +16,13 @@ vi.mock("@/lib/nativeAuth", () => ({
     return state.native;
   },
 }));
+// Still mocked, so a test can prove nothing reaches for it any more.
 vi.mock("@/lib/openExternal", () => ({
   WEB_BILLING_URL: "https://www.agent-mesh.app/billing",
   openExternal: state.openExternal,
+}));
+vi.mock("@/hooks/useReadOnly", () => ({
+  useReadOnly: () => state.readOnly,
 }));
 vi.mock("@/lib/credits/store", () => ({
   useCredits: () => ({
@@ -50,39 +55,51 @@ import BillingPage from "./page";
 afterEach(() => {
   cleanup();
   state.native = false;
+  state.readOnly = false;
   state.openExternal.mockClear();
   state.refreshBalance.mockClear();
   state.refreshPurchases.mockClear();
 });
 
+// Paying used to leave the app for the website, because the native CSP blocked
+// the payment SDK in the WebView. The policy now admits it (lib/csp.ts), so
+// every client checks out in place and there is no second path to keep working.
 describe("BillingPage in the Android app", () => {
-  it("tops up on the website and re-reads credits when the tab closes", () => {
+  it("checks out in the app, and never opens the website", () => {
     state.native = true;
+    state.readOnly = true;
     render(<BillingPage />);
 
-    expect(screen.queryByText("Choose an amount")).toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: /Add credits on the website/ }),
-    );
+    expect(
+      screen.queryByRole("button", { name: /Add credits on the website/ }),
+    ).toBeNull();
 
-    expect(state.openExternal).toHaveBeenCalledTimes(1);
-    const [url, options] = state.openExternal.mock.calls[0];
-    expect(url).toBe("https://www.agent-mesh.app/billing");
+    fireEvent.click(screen.getByRole("button", { name: /^Pay / }));
 
-    state.refreshBalance.mockClear();
-    options?.onClose?.();
-    expect(state.refreshBalance).toHaveBeenCalledTimes(1);
-    expect(state.refreshPurchases).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("checkout dialog")).toBeTruthy();
+    expect(state.openExternal).not.toHaveBeenCalled();
   });
 
-  it("sends Buy again to the website instead of the checkout dialog", () => {
+  it("sends Buy again to the checkout dialog, not the website", () => {
     state.native = true;
+    state.readOnly = true;
     render(<BillingPage />);
 
     fireEvent.click(screen.getByRole("button", { name: "Buy again" }));
 
-    expect(state.openExternal).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("checkout dialog")).toBeNull();
+    expect(screen.getByText("checkout dialog")).toBeTruthy();
+    expect(state.openExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe("BillingPage on a phone browser", () => {
+  it("gets the same screen and the same checkout as the app", () => {
+    state.readOnly = true;
+    render(<BillingPage />);
+
+    expect(screen.getByRole("button", { name: /^Pay / })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Buy again" }));
+    expect(screen.getByText("checkout dialog")).toBeTruthy();
   });
 });
 

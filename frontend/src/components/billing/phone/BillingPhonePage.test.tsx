@@ -15,8 +15,6 @@ function renderPage(over: Partial<BillingPhoneProps> = {}) {
     balanceKnown: true,
     isLow: false,
     returnState: null,
-    native: false,
-    onTopUpOnWeb: vi.fn(),
     presets: [1000, 5000],
     amountINR: 5000,
     onPreset: vi.fn(),
@@ -49,15 +47,15 @@ describe("BillingPhonePage", () => {
     expect(screen.getByText("Credit balance")).toBeTruthy();
     expect(screen.getByText("Active")).toBeTruthy();
     expect(
-      container.querySelector(".bilp-balance")?.getAttribute("data-state"),
+      container.querySelector(".bilp-head")?.getAttribute("data-state"),
     ).toBe("ok");
   });
 
   it("warns when the balance is low, which is why colour is here at all", () => {
     const { container } = renderPage({ isLow: true, balanceUSD: 1.2 });
-    expect(screen.getByText("Low balance")).toBeTruthy();
+    expect(screen.getByText(/Low — a run may stop/)).toBeTruthy();
     expect(
-      container.querySelector(".bilp-balance")?.getAttribute("data-state"),
+      container.querySelector(".bilp-head")?.getAttribute("data-state"),
     ).toBe("low");
   });
 
@@ -68,50 +66,50 @@ describe("BillingPhonePage", () => {
     expect(container.textContent).not.toContain("$0.00");
   });
 
-  // The Android app cannot run the payment provider's script, so it pays on
-  // the website. This is the feature that must not disappear from a phone.
-  it("offers the website top-up in the Android app", () => {
-    const onTopUpOnWeb = vi.fn();
-    renderPage({ native: true, onTopUpOnWeb });
-    const button = screen.getByRole("button", {
-      name: /Add credits on the website/,
-    });
-    fireEvent.click(button);
-    expect(onTopUpOnWeb).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/Your balance here updates/)).toBeTruthy();
-    // No in-app checkout is offered there.
-    expect(
-      screen.queryByRole("button", { name: /Continue to checkout/ }),
-    ).toBeNull();
-  });
-
-  it("offers the real checkout in a phone browser", () => {
+  // The whole point of this screen: the payment happens here. There is no
+  // longer a branch that sends the app to the website.
+  it("pays in place, and never offers to leave for the website", () => {
     const onCheckout = vi.fn();
-    renderPage({ onCheckout });
-    fireEvent.click(
-      screen.getByRole("button", { name: /Continue to checkout/ }),
-    );
+    const { container } = renderPage({ onCheckout });
+    fireEvent.click(screen.getByRole("button", { name: /^Pay / }));
     expect(onCheckout).toHaveBeenCalledTimes(1);
-    expect(
-      screen.queryByRole("button", { name: /Add credits on the website/ }),
-    ).toBeNull();
+    expect(container.textContent).not.toMatch(/website|browser tab/i);
   });
 
-  it("marks the chosen preset and reports the choice", () => {
+  it("says what the Pay button will charge", () => {
+    renderPage({ effectiveINR: 5000 });
+    expect(screen.getByRole("button", { name: "Pay ₹5,000" })).toBeTruthy();
+  });
+
+  it("marks the chosen amount and reports the choice", () => {
     const onPreset = vi.fn();
     renderPage({ onPreset });
-    const chosen = screen.getByRole("button", { name: /₹5,000/ });
-    expect(chosen.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: /₹1,000/ }));
+    expect(
+      screen
+        .getByRole("button", { name: "₹5,000" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "₹1,000" }));
     expect(onPreset).toHaveBeenCalledWith(1000);
+  });
+
+  // Boxes are what made this screen look heavy. None of the amounts,
+  // fields or section wrappers may carry a border of its own.
+  it("draws no boxes around the amounts or the fields", () => {
+    const { container } = renderPage();
+    expect(container.querySelector(".bilp-balance")).toBeNull();
+    expect(container.querySelector(".bilp-preset")).toBeNull();
+    // Exactly one filled control: the Pay button.
+    expect(container.querySelectorAll(".bilp-pay")).toHaveLength(1);
   });
 
   it("refuses an amount over the maximum, and says the maximum", () => {
     renderPage({ overMax: true, canCheckout: false, maxINR: 100000 });
     expect(screen.getByRole("alert").textContent).toContain("₹1,00,000");
-    expect(
-      screen.getByRole("button", { name: /Continue to checkout/ }),
-    ).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Pay" })).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   it("applies a coupon and reports what came back", () => {
