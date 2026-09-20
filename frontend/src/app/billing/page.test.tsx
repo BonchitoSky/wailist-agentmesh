@@ -31,9 +31,33 @@ vi.mock("@/lib/credits/store", () => ({
     lastPurchase: undefined,
     refreshBalance: state.refreshBalance,
     refreshPurchases: state.refreshPurchases,
+    // The phone screen only renders payment history once it has loaded,
+    // so the mock has to supply one for Buy again to exist there.
+    purchases: [
+      {
+        id: "p1",
+        createdAt: "2026-08-03T10:00:00.000Z",
+        amountINR: 500,
+        creditsUSD: 5.24,
+        method: "cashfree",
+        status: "completed",
+      },
+    ],
+    purchasesKnown: true,
   }),
 }));
-vi.mock("@/lib/api", () => ({ credits: {} }));
+// The page now also reads the workflow list (for 30-day spend) and the
+// live FX rate (so the quote matches what the ledger will credit).
+vi.mock("@/lib/api", () => ({
+  credits: {},
+  workflows: { list: vi.fn(async () => []) },
+  payments: {
+    listProviders: vi.fn(async () => ({
+      usd_per_inr: 0.010423,
+      providers: [{ id: "cashfree", enabled: true, currency: "INR" }],
+    })),
+  },
+}));
 vi.mock("@/components/Topbar", () => ({ Topbar: () => null }));
 vi.mock("@/components/checkout/CheckoutModal", () => ({
   CheckoutModal: () => <div>checkout dialog</div>,

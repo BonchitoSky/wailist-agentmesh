@@ -5,24 +5,19 @@ import { Topbar } from "@/components/Topbar";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { CheckoutModal } from "@/components/checkout/CheckoutModal";
 import { useCredits } from "@/lib/credits/store";
-import {
-  bonusRate,
-  creditsForTopup,
-  maxTopupINR,
-  MAX_TOPUP_USD,
-} from "@/lib/credits/fx";
-import { credits as creditsApi } from "@/lib/api";
+import { creditsForTopup, maxTopupINR, MAX_TOPUP_USD } from "@/lib/credits/fx";
+import { credits as creditsApi, workflows as workflowsApi } from "@/lib/api";
+import { totalSpend } from "@/lib/workflowMeta";
 import { useReadOnly } from "@/hooks/useReadOnly";
+import { usePaymentProviders } from "@/components/checkout/usePaymentProviders";
 import { BillingPhonePage } from "@/components/billing/phone/BillingPhonePage";
 
 const PRESETS_INR = [1000, 5000, 10000, 20000];
-const MAX_INR = maxTopupINR();
 const LOW_BALANCE_USD = 5;
 
 const HOW_IT_WORKS = [
   "Credits are spent as your agents call paid tools, x402 endpoints, and LLM providers.",
   "Testnet usage is always free. You only pay for mainnet calls.",
-  "Top-ups of ₹1000 or more earn 5% bonus credits.",
   "Every purchase generates a printable receipt for your records.",
 ];
 
@@ -43,14 +38,6 @@ const BILLING_CSS = `
 @media (max-width: 520px) { .bill-page { padding: 24px 16px 64px; } }
 /* The amount field, Repeat and the coupon row are 36–42px for a mouse. */
 @media (pointer: coarse) { .bill-touch { min-height: 44px; } }
-/* The "+5%" badge sits in the card's corner. A card under about 130px wide
-   has no room for it beside "₹20000" (phones narrower than about 345px, and
-   four cards in the 901–1000px two-column layout), so the badge moves under
-   the price there. The query measures the content box, inside the card's
-   12px padding. */
-.bill-preset { container-type: inline-size; }
-.bill-preset-badge { position: absolute; top: 8px; right: 8px; }
-@container (max-width: 104px) { .bill-preset-badge { position: static; margin-top: 2px; } }
 @media (prefers-reduced-motion: reduce) {
   .bill-reveal, .bill-preset, .bill-cta { animation: none; transition: none; }
 }
@@ -75,9 +62,36 @@ const viewportStyle: React.CSSProperties = {
 };
 
 export default function BillingPage() {
-  const { balanceUSD, balanceKnown, lastPurchase, refreshBalance } =
-    useCredits();
+  const {
+    balanceUSD,
+    balanceKnown,
+    lastPurchase,
+    refreshBalance,
+    purchases,
+    purchasesKnown,
+  } = useCredits();
+  // The same 30-day figure the Workflows header shows, from the same
+  // helper, so the two screens cannot quote different numbers.
+  const [spent30dUSD, setSpent30dUSD] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void workflowsApi
+      .list()
+      .then((wfs) => {
+        if (live) setSpent30dUSD(totalSpend(wfs));
+      })
+      // A missing spend figure is cosmetic; the balance above it is not.
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   const readOnly = useReadOnly();
+  // The rate the server will actually charge at. Quoting from
+  // lib/credits/fx.ts's old constant promised about 21% more credit than
+  // the ledger granted, because it also added a bonus nothing paid.
+  const { usdPerINR } = usePaymentProviders();
+  const MAX_INR = maxTopupINR(usdPerINR);
   const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -172,7 +186,8 @@ export default function BillingPage() {
   const overMax = effectiveINR > MAX_INR;
   const checkoutAmountINR = effectiveINR >= 1 && !overMax ? effectiveINR : 0;
   const canCheckout = checkoutAmountINR > 0;
-  const credits = creditsForTopup(checkoutAmountINR);
+  const credits =
+    usdPerINR > 0 ? creditsForTopup(checkoutAmountINR, usdPerINR) : null;
   // Only call a balance "low" once we've actually read it — before the first
   // fetch lands, balanceUSD is 0 because nothing is known, not because the
   // account is empty.
@@ -190,6 +205,10 @@ export default function BillingPage() {
         <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>
           <BillingPhonePage
             balanceUSD={balanceUSD}
+            spent30dUSD={spent30dUSD}
+            usdPerINR={usdPerINR}
+            purchases={purchases}
+            purchasesKnown={purchasesKnown}
             balanceKnown={balanceKnown}
             isLow={isLow}
             returnState={returnState}
@@ -420,7 +439,6 @@ export default function BillingPage() {
                 >
                   {PRESETS_INR.map((inr) => {
                     const selected = !customINR && amountINR === inr;
-                    const hasBonus = bonusRate(inr) > 0;
                     return (
                       <button
                         key={inr}
@@ -467,24 +485,10 @@ export default function BillingPage() {
                             fontVariantNumeric: "tabular-nums",
                           }}
                         >
-                          ≈ {fmtUSD(creditsForTopup(inr))}
+                          {usdPerINR > 0
+                            ? `≈ ${fmtUSD(creditsForTopup(inr, usdPerINR))}`
+                            : "≈ —"}
                         </span>
-                        {hasBonus && (
-                          <span
-                            className="bill-preset-badge"
-                            style={{
-                              fontSize: 11,
-                              fontWeight: 700,
-                              color: "var(--accent)",
-                              background: "var(--accent-soft)",
-                              border: "1px solid var(--accent-line)",
-                              borderRadius: 999,
-                              padding: "1px 5px",
-                            }}
-                          >
-                            +5%
-                          </span>
-                        )}
                       </button>
                     );
                   })}
@@ -556,7 +560,7 @@ export default function BillingPage() {
                           whiteSpace: "nowrap",
                         }}
                       >
-                        ≈ {fmtUSD(credits)}
+                        {credits === null ? "≈ —" : `≈ ${fmtUSD(credits)}`}
                         <span className="bill-custom-unit"> credits</span>
                       </span>
                     )}
@@ -570,7 +574,7 @@ export default function BillingPage() {
                   >
                     {overMax
                       ? `Maximum top-up is $${MAX_TOPUP_USD} (about ₹${MAX_INR.toLocaleString("en-IN")}).`
-                      : "Get 5% bonus credits on top-ups of ₹1000 or more."}
+                      : "Credits are added as soon as the payment clears."}
                   </p>
                 </div>
 
