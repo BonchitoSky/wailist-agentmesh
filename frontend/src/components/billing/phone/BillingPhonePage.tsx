@@ -103,7 +103,11 @@ export function BillingPhonePage(p: BillingPhoneProps) {
 
         <div className="bilp-seg" role="radiogroup" aria-label="Amount">
           {p.presets.map((inr) => {
-            const on = !p.customINR && p.amountINR === inr;
+            // Against the effective amount, not against emptiness: choosing a
+            // preset now fills the field, so a "no custom value" test would
+            // light nothing. Typing 5000 by hand lights ₹5k too, which is
+            // what someone who typed it would expect.
+            const on = p.effectiveINR === inr;
             return (
               <button
                 key={inr}
@@ -120,12 +124,12 @@ export function BillingPhonePage(p: BillingPhoneProps) {
           })}
         </div>
 
-        <div className="bilp-amount">
+        <div className="bilp-amount bilp-amount--figure">
           <span className="bilp-amount__prefix" aria-hidden>
             ₹
           </span>
           <input
-            className="bilp-amount__input"
+            className="bilp-amount__input bilp-amount__input--figure"
             inputMode="decimal"
             aria-label="Amount in rupees"
             placeholder={String(p.amountINR)}

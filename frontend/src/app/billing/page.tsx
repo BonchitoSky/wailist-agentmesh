@@ -94,6 +94,16 @@ export default function BillingPage() {
   const MAX_INR = maxTopupINR(usdPerINR);
   const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
+  // The phone shows this field as the amount itself rather than as a "custom"
+  // override, so while it is untouched it displays the chosen preset. Empty
+  // would render as the placeholder, in --fg-dim, making the figure about to
+  // be charged read as a suggestion.
+  //
+  // Tracked with a flag instead of seeding customINR, because seeding it would
+  // also pre-fill the desktop's Custom amount box and unselect its presets,
+  // and instead of `customINR || amountINR`, which repopulates itself on the
+  // keystroke that empties it and cannot be cleared.
+  const [amountTouched, setAmountTouched] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   // Read the authoritative balance (users.credit_balance_usd_micros) every time
@@ -217,9 +227,18 @@ export default function BillingPage() {
             onPreset={(inr) => {
               setAmountINR(inr);
               setCustomINR("");
+              setAmountTouched(false);
             }}
-            customINR={customINR}
-            onCustomChange={setCustomINR}
+            // Untouched, the field shows the preset as a real value.
+            customINR={amountTouched ? customINR : String(amountINR)}
+            // The same guard the desktop field uses. It matters more here now
+            // that this field is always populated: pasting "5,000" would
+            // otherwise parse to 5 and offer to charge ₹5.
+            onCustomChange={(next) => {
+              if (next !== "" && !/^\d*\.?\d*$/.test(next)) return;
+              setAmountTouched(true);
+              setCustomINR(next);
+            }}
             effectiveINR={effectiveINR}
             overMax={overMax}
             maxINR={MAX_INR}

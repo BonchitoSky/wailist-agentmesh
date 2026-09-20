@@ -141,6 +141,26 @@ describe("the amount control", () => {
     fireEvent.click(screen.getByRole("radio", { name: "₹1,000" }));
     expect(onPreset).toHaveBeenCalledWith(1000);
   });
+
+  // The amount used to live only in the input's placeholder, which is painted
+  // in --fg-dim: the figure about to be charged looked like a suggestion.
+  it("shows the chosen amount as a value, not as a placeholder", () => {
+    renderPage({ customINR: "5000" });
+    expect(screen.getByLabelText("Amount in rupees")).toHaveProperty(
+      "value",
+      "5000",
+    );
+  });
+
+  // The segment tracks the effective amount, so a filled field still marks
+  // its preset -- and a hand-typed 5000 marks ₹5k too.
+  it("marks the preset matching the effective amount", () => {
+    renderPage({ customINR: "5000" });
+    const checked = (name: string) =>
+      screen.getByRole("radio", { name }).getAttribute("aria-checked");
+    expect(checked("₹5,000")).toBe("true");
+    expect(checked("₹1,000")).toBe("false");
+  });
 });
 
 describe("the coupon", () => {

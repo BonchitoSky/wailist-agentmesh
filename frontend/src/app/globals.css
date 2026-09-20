@@ -2407,7 +2407,7 @@ body[data-typing] .bottomnav {
 .bilp-amount {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-top: 14px;
   border-bottom: 1px solid var(--border);
 }
@@ -2433,6 +2433,20 @@ body[data-typing] .bottomnav {
 }
 .bilp-amount__input::placeholder {
   color: var(--fg-dim);
+}
+/* The rupee figure only. This class is shared with the coupon field, which
+   must stay a 16px text input -- scope anything typographic to the modifier
+   or the coupon's "Code" placeholder grows with it.
+
+   `height`, not `min-height`: the app-wide touch floor is !important on
+   inputs too, so a min-height here would be overridden back to 44. */
+.bilp-amount__input--figure {
+  height: 52px;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+.bilp-amount--figure .bilp-amount__prefix {
+  font-size: 18px;
 }
 .bilp-amount__usd {
   flex-shrink: 0;
