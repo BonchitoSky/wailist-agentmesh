@@ -2266,24 +2266,21 @@ body[data-typing] .bottomnav {
   color: var(--fg-muted);
 }
 
+/* Two equal columns with the rule as a border on the second.
+   A `1fr auto 1fr` grid with a ::before for the rule looked tidier and was
+   wrong: the pseudo-element is the first grid item, so auto-placement pushed
+   BOTH stats into the third column and stacked them. Nothing overflowed, so
+   only measuring the boxes caught it. */
 .bilp-stats {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr 1fr;
   align-items: start;
   gap: 16px;
   margin-top: 18px;
 }
-/* The rule between the two figures, drawn rather than bordered so it can be
-   shorter than the row. */
-.bilp-stats::before {
-  content: "";
-  grid-column: 2;
-  width: 1px;
-  align-self: stretch;
-  background: var(--border-soft);
-}
-.bilp-stat:last-child {
-  grid-column: 3;
+.bilp-stat + .bilp-stat {
+  padding-left: 16px;
+  border-left: 1px solid var(--border-soft);
 }
 .bilp-stat {
   display: grid;
@@ -2504,14 +2501,15 @@ body[data-typing] .bottomnav {
 .bilp-row__action {
   color: var(--accent);
 }
+/* Points right while closed, down while open -- IconArrow already points
+   right, so the closed state needs no rotation at all. */
 .bilp-row__chevron {
   display: inline-flex;
   color: var(--fg-muted);
-  transform: rotate(90deg);
   transition: transform 0.15s var(--ease);
 }
 .bilp-row__chevron[data-open="true"] {
-  transform: rotate(-90deg);
+  transform: rotate(90deg);
 }
 @media (prefers-reduced-motion: reduce) {
   .bilp-row__chevron {
