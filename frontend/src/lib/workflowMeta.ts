@@ -25,13 +25,10 @@ export function formatDollars(dollars: number): string {
   return formatSpend(Math.round(dollars * 1e6));
 }
 
-const count = new Intl.NumberFormat();
-
 export interface WorkflowMeta {
   // A workflow that has never run says so instead of printing $0 and 0.
   draft: boolean;
   spent: string;
-  runs: string;
   state: { text: string; tone: Tone };
   statusWord: string;
 }
@@ -66,11 +63,13 @@ function state(wf: Workflow, now: number): { text: string; tone: Tone } {
 }
 
 export function workflowMeta(wf: Workflow, now: number): WorkflowMeta {
+  // The count is no longer shown -- it named no period, so it read as neither
+  // a rate nor a total. It is still read here because `draft` is "never ran",
+  // not "status is draft": a draft with runs behind it says "not deployed".
   const runs = wf.runs ?? 0;
   return {
     draft: wf.status === "draft" && runs === 0,
     spent: formatDollars(spendDollars(wf.spend)),
-    runs: runs === 1 ? "1 run" : `${count.format(runs)} runs`,
     state: state(wf, now),
     statusWord: statusWord(wf.status),
   };
@@ -80,7 +79,7 @@ export function workflowMeta(wf: Workflow, now: number): WorkflowMeta {
 // This says the same thing in words, for anyone who cannot see the rail.
 export function workflowAriaLabel(wf: Workflow, meta: WorkflowMeta): string {
   if (meta.draft) return `${wf.name}, draft. Never run.`;
-  const parts = [`${meta.spent} spent`, meta.runs];
+  const parts = [`${meta.spent} spent`];
   // "paused ... paused" adds nothing; the status is already named.
   if (meta.state.text !== meta.statusWord) parts.push(meta.state.text);
   return `${wf.name}, ${meta.statusWord}. ${parts.join(", ")}.`;

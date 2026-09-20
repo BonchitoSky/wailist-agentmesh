@@ -24,13 +24,12 @@ function wf(over: Partial<Workflow> = {}): Workflow {
   };
 }
 
-// The line reads "$1.48 · 38 runs · next in 2 h", and its last part is the
-// only one that changes colour.
+// The line reads "$1.48 · next in 2 h", and its last part is the only one
+// that changes colour.
 describe("workflowMeta", () => {
   it("ends a scheduled workflow with the time until its next run", () => {
     const m = workflowMeta(wf({ scheduleNextRunAt: at(2 * 3_600_000) }), NOW);
     expect(m.spent).toBe("$1.48");
-    expect(m.runs).toBe("38 runs");
     expect(m.state).toEqual({ text: "next in 2 h", tone: "accent" });
     expect(m.draft).toBe(false);
   });
@@ -43,7 +42,6 @@ describe("workflowMeta", () => {
   it("says nothing is queued when a deployed workflow has no schedule", () => {
     const m = workflowMeta(wf({ runs: 1842, spend: "4.218" }), NOW);
     expect(m.spent).toBe("$4.22");
-    expect(m.runs).toBe("1,842 runs");
     expect(m.state).toEqual({ text: "no run queued", tone: "dim" });
   });
 
@@ -76,10 +74,25 @@ describe("workflowMeta", () => {
     expect(m.state).toEqual({ text: "not deployed", tone: "dim" });
   });
 
-  it("counts a single run in the singular", () => {
-    expect(workflowMeta(wf({ runs: 1 }), NOW).runs).toBe("1 run");
-    expect(workflowMeta(wf({ runs: 0 }), NOW).runs).toBe("0 runs");
-    expect(workflowMeta(wf({ runs: undefined }), NOW).runs).toBe("0 runs");
+  // The count named no period, so it read as neither a rate nor a total, and
+  // the website's Usage page answers that question properly.
+  it("carries no run count", () => {
+    expect(workflowMeta(wf({ runs: 1842 }), NOW)).not.toHaveProperty("runs");
+  });
+
+  // `draft` means "never ran", not "status is draft", so it still reads the
+  // count even though nothing prints it. Removing the read would relabel a
+  // draft that has runs behind it.
+  it("still reads the count to tell a never-run draft from a stopped one", () => {
+    expect(workflowMeta(wf({ status: "draft", runs: 0 }), NOW).draft).toBe(
+      true,
+    );
+    expect(
+      workflowMeta(wf({ status: "draft", runs: undefined }), NOW).draft,
+    ).toBe(true);
+    expect(workflowMeta(wf({ status: "draft", runs: 1 }), NOW).draft).toBe(
+      false,
+    );
   });
 
   it("treats a missing or unreadable spend as zero", () => {
@@ -123,7 +136,7 @@ describe("workflowAriaLabel", () => {
       spend: "4.218",
     });
     expect(workflowAriaLabel(w, workflowMeta(w, NOW))).toBe(
-      "Customer Support Triage, deployed. $4.22 spent, 1,842 runs, no run queued.",
+      "Customer Support Triage, deployed. $4.22 spent, no run queued.",
     );
   });
 
@@ -135,7 +148,7 @@ describe("workflowAriaLabel", () => {
       spend: "0.89",
     });
     expect(workflowAriaLabel(w, workflowMeta(w, NOW))).toBe(
-      "Invoice Reconciliation, paused. $0.890 spent, 217 runs.",
+      "Invoice Reconciliation, paused. $0.890 spent.",
     );
   });
 
