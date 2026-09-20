@@ -868,7 +868,10 @@ export default function BillingPage() {
               </div>
 
               {/* Billing history */}
-              <div className="bill-reveal" style={{ animationDelay: "0.2s" }}>
+              <div
+                className="bill-reveal"
+                style={{ animationDelay: "0.2s", marginTop: 32 }}
+              >
                 <PurchaseHistory
                   onBuyAgain={IS_NATIVE ? topUpOnWeb : openCheckoutFor}
                 />

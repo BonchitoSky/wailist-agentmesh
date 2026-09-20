@@ -62,7 +62,11 @@ export function PurchaseHistory({
 
   return (
     <>
-      <div style={{ marginTop: 32 }}>
+      {/* No outer spacing of its own: an inline margin here cannot be
+          overridden by the page that places it, and the phone screen wants
+          this section to start where every other one does. The desktop page
+          supplies its own gap at the call site. */}
+      <div>
         <h2
           style={{
             fontSize: 15,
