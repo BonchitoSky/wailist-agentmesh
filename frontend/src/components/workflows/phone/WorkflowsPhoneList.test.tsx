@@ -29,16 +29,19 @@ const LIST = [
 const rowNames = () =>
   screen
     .getAllByRole("link")
-    .map((a) => a.querySelector(".wfp-row__name")?.textContent);
+    .map((a) => a.querySelector(".wfp-card__name")?.textContent);
 
 afterEach(cleanup);
 
 describe("WorkflowsPhoneList", () => {
-  it("shows the strip, search, filter and one row per workflow", () => {
+  it("shows the header, search, filter and one card per workflow", () => {
     render(
       <WorkflowsPhoneList workflows={LIST} loading={false} error={null} />,
     );
     expect(screen.getByText("$3.40")).toBeTruthy();
+    // The header counts the whole workspace and totals its spend.
+    expect(screen.getByText(/3 total/)).toBeTruthy();
+    expect(screen.getByText(/\$5\.70 spent/)).toBeTruthy();
     expect(
       screen.getByRole("searchbox", { name: "Search workflows" }),
     ).toBeTruthy();

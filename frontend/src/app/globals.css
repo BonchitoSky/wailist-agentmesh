@@ -1854,52 +1854,80 @@ body[data-typing] .bottomnav {
    The Workflows screen on a phone: flat, one line per fact, separated by
    hairlines rather than boxed. Every control keeps the 44px touch floor;
    "thin" comes from dropping chrome, not from shrinking targets. */
-.wfp-strip {
+.wfp-head {
+  padding-bottom: 2px;
+}
+.wfp-head__top {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+.wfp-head__top .wfp-title {
+  flex: 1;
+  min-width: 0;
+}
+/* A plain accent glyph rather than a boxed button: the cards below carry the
+   screen's structure, and a second outlined box competes with them. */
+.wfp-head__add {
+  flex-shrink: 0;
+  width: 44px;
   height: 44px;
-}
-.wfp-strip__label {
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-.wfp-strip__amount {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--fg);
-}
-.wfp-strip__add {
-  margin-left: auto;
-  width: 32px;
-  height: 44px;
+  margin-right: -10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-1);
+  border: none;
+  border-radius: var(--r-2);
   background: transparent;
-  color: var(--fg);
+  color: var(--accent);
   cursor: pointer;
   touch-action: manipulation;
   transition:
     transform 0.12s var(--ease),
-    border-color 0.15s var(--ease);
+    background 0.15s var(--ease);
 }
-.wfp-strip__add:active {
-  transform: scale(0.96);
-  background: var(--bg-elev-1);
+.wfp-head__add:active {
+  transform: scale(0.92);
+  background: var(--accent-soft);
 }
-.wfp-strip__add:focus-visible {
+.wfp-head__add:focus-visible {
   outline: 2px solid var(--accent-line);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 @media (hover: hover) {
-  .wfp-strip__add:hover {
-    border-color: var(--accent-line);
+  .wfp-head__add:hover {
+    background: var(--accent-soft);
   }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wfp-head__add {
+    transition: none;
+  }
+}
+.wfp-head__facts {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  line-height: 18px;
+}
+.wfp-head__summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wfp-head__balance {
+  flex-shrink: 0;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.wfp-head__balance-label {
+  color: var(--fg-muted);
 }
 
 /* Search at four fifths, the filter at the last fifth. */
@@ -1926,8 +1954,8 @@ body[data-typing] .bottomnav {
   width: 100%;
   height: 44px;
   padding: 0 12px 0 34px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-2);
   background: var(--bg-elev-1);
   color: var(--fg);
   font-family: var(--font-sans);
@@ -1952,8 +1980,8 @@ body[data-typing] .bottomnav {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: var(--r-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-2);
   background: var(--bg-elev-1);
   color: var(--fg-muted);
   cursor: pointer;
@@ -2058,48 +2086,71 @@ body[data-typing] .bottomnav {
   .wfp-menu {
     animation: none;
   }
-  .wfp-filter__trigger,
-  .wfp-strip__add {
+  .wfp-filter__trigger {
     transition: none;
   }
 }
 
-/* One workflow per row: name and status, then Spent, Runs and Upcoming run.
-   The row bleeds to the page edge so its pressed state spans the screen. */
+/* One workflow per card: its name, then a line of figures ending in the one
+   thing worth knowing about its state. A rail down the left edge carries that
+   state as colour -- which is why the card also names it in its aria-label. */
 .wfp-list {
   list-style: none;
-  margin: 0 calc(-1 * var(--wfp-gutter, 16px));
+  display: grid;
+  gap: 8px;
+  margin: 0;
   padding: 0;
 }
-.wfp-row {
+.wfp-card {
+  position: relative;
   display: block;
-  padding: 9px var(--wfp-gutter, 16px);
-  border-bottom: 1px solid var(--border-soft);
+  padding: 12px 14px 12px 16px;
+  border-radius: var(--r-2);
+  background: var(--bg-elev-1);
+  overflow: hidden;
   color: inherit;
   text-decoration: none;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s var(--ease);
 }
-.wfp-row:active {
-  background: var(--bg-elev-1);
+.wfp-card:active {
+  background: var(--bg-elev-2);
 }
-.wfp-row:focus-visible {
+.wfp-card:focus-visible {
   outline: 2px solid var(--accent-line);
   outline-offset: -2px;
 }
 @media (hover: hover) {
-  .wfp-row:hover {
-    background: var(--bg-elev-1);
+  .wfp-card:hover {
+    background: var(--bg-elev-2);
   }
 }
-.wfp-row__top {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+@media (prefers-reduced-motion: reduce) {
+  .wfp-card {
+    transition: none;
+  }
 }
-.wfp-row__name {
-  flex: 1;
-  min-width: 0;
+
+/* Full height, flush to the left edge: the screen's largest piece of colour. */
+.wfp-card__rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--border-strong);
+}
+.wfp-card[data-status="deployed"] .wfp-card__rail {
+  background: var(--accent);
+}
+.wfp-card[data-status="paused"] .wfp-card__rail {
+  background: var(--warm);
+}
+.wfp-card[data-status="error"] .wfp-card__rail {
+  background: var(--danger);
+}
+
+.wfp-card__name {
+  display: block;
   font-size: 15px;
   line-height: 20px;
   font-weight: 500;
@@ -2109,40 +2160,34 @@ body[data-typing] .bottomnav {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.wfp-row__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  font-size: 12px;
+/* Nothing has run, so the whole card recedes behind the ones that have. */
+.wfp-card[data-status="draft"] .wfp-card__name {
   color: var(--fg-muted);
 }
-.wfp-row__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-.wfp-row__facts {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin: 4px 0 0;
-}
-.wfp-row__facts dt {
-  font-size: 11px;
-  line-height: 14px;
-  color: var(--fg-dim);
-}
-.wfp-row__facts dd {
-  margin: 0;
+.wfp-card__meta {
+  margin: 3px 0 0;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 17px;
-  color: var(--fg);
+  color: var(--fg-muted);
+}
+/* The last part of the line is the only one that carries colour, and it is
+   keyed to the state rather than the status: a deployed workflow with nothing
+   queued has nothing to shout about.
+   These lines are --fg-muted rather than --fg-dim: on --bg-elev-1 the dim grey
+   measures 2.84:1, under the 4.5 a 12px line needs. */
+.wfp-card__state {
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+.wfp-card__state[data-tone="accent"] {
+  color: var(--accent);
+}
+.wfp-card__state[data-tone="warm"] {
+  color: var(--warm);
+}
+.wfp-card__state[data-tone="danger"] {
+  color: var(--danger);
 }
 
 /* The phone Workflows screen around those pieces. */
@@ -2188,9 +2233,12 @@ body[data-typing] .bottomnav {
 }
 .wfp-skeleton {
   display: grid;
+  align-content: center;
   gap: 6px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--border-soft);
+  height: 66px;
+  padding: 0 16px;
+  border-radius: var(--r-2);
+  background: var(--bg-elev-1);
 }
 .wfp-menu__check {
   display: inline-flex;
