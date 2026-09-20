@@ -2231,9 +2231,12 @@ body[data-typing] .bottomnav {
 }
 .wfp-skeleton {
   display: grid;
+  align-content: center;
   gap: 6px;
-  padding: 9px 0;
-  border-bottom: 1px solid var(--border-soft);
+  height: 66px;
+  padding: 0 16px;
+  border-radius: var(--r-2);
+  background: var(--bg-elev-1);
 }
 .wfp-menu__check {
   display: inline-flex;

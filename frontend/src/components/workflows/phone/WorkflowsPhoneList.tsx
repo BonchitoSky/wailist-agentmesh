@@ -87,11 +87,15 @@ export function WorkflowsPhoneList({
       </div>
 
       {loading ? (
-        <div aria-busy="true" aria-label="Loading workflows">
+        <div
+          className="wfp-list"
+          aria-busy="true"
+          aria-label="Loading workflows"
+        >
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="wfp-skeleton">
-              <Skeleton width="55%" height={16} />
-              <Skeleton width="85%" height={28} />
+              <Skeleton width="55%" height={15} />
+              <Skeleton width="70%" height={12} />
             </div>
           ))}
         </div>
