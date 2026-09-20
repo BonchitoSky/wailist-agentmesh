@@ -2245,6 +2245,237 @@ body[data-typing] .bottomnav {
   color: var(--accent);
 }
 
+/* ── Credits on a phone ───────────────────────────────────────────────────
+   The same shape as the Workflows list: the number that matters leads, small
+   labels are sentence case, figures are mono and tabular, and sections are
+   separated by a hairline rather than boxed inside panels. Colour appears on
+   the balance only, and only when it is low. */
+.bilp-page {
+  padding: 12px 16px 48px;
+}
+.bilp-title {
+  margin: 0 0 10px;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.bilp-balance {
+  display: grid;
+  gap: 2px;
+  padding: 14px 16px;
+  border-radius: var(--r-2);
+  background: var(--bg-elev-1);
+}
+.bilp-balance__label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.bilp-balance__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.bilp-balance__amount {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 28px;
+  line-height: 34px;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+.bilp-balance__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.bilp-balance__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+}
+.bilp-balance[data-state="ok"] .bilp-balance__dot {
+  background: var(--accent);
+}
+/* The one place on this screen worth a warm colour. */
+.bilp-balance[data-state="low"] .bilp-balance__dot {
+  background: var(--warm);
+}
+.bilp-balance[data-state="low"] .bilp-balance__state {
+  color: var(--warm);
+}
+
+.bilp-section {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-soft);
+}
+.bilp-heading {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.bilp-hint,
+.bilp-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--fg-muted);
+}
+.bilp-note[data-tone="error"] {
+  color: var(--danger);
+}
+.bilp-note[data-tone="ok"] {
+  color: var(--accent);
+}
+.bilp-note[data-tone="pending"] {
+  color: var(--warm);
+}
+
+/* Two across: ₹20000 does not fit four to a phone row. */
+.bilp-presets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.bilp-preset {
+  display: grid;
+  gap: 2px;
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-2);
+  background: var(--bg-elev-1);
+  color: var(--fg);
+  text-align: left;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.bilp-preset[aria-pressed="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.bilp-preset:focus-visible,
+.bilp-input:focus-visible,
+.bilp-btn:focus-visible,
+.bilp-cta:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: -2px;
+}
+.bilp-preset__amount {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+}
+.bilp-preset__usd {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.bilp-input {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin-top: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-2);
+  background: var(--bg-elev-1);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  /* 16px keeps mobile browsers from zooming on focus. */
+  font-size: 16px;
+}
+.bilp-input::placeholder {
+  color: var(--fg-dim);
+}
+
+.bilp-coupon {
+  display: flex;
+  gap: 8px;
+}
+.bilp-coupon .bilp-input {
+  margin-top: 0;
+  flex: 1;
+}
+.bilp-btn {
+  flex-shrink: 0;
+  height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-2);
+  background: var(--bg-elev-1);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.bilp-btn:disabled {
+  color: var(--fg-dim);
+  cursor: default;
+}
+
+/* The one filled control on the screen: the thing you came here to do.
+   44px, not more: the app-wide touch floor under @media (pointer: coarse) is
+   written with !important, so on a touch screen it overrides any taller value
+   here rather than acting as a floor. Asking for 48 and measuring 44 would
+   only mislead the next reader. */
+.bilp-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 0 16px;
+  border: none;
+  border-radius: var(--r-2);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform 0.12s var(--ease);
+}
+.bilp-cta:active {
+  transform: scale(0.99);
+}
+.bilp-cta:disabled {
+  background: var(--bg-elev-2);
+  color: var(--fg-dim);
+  cursor: default;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bilp-cta {
+    transition: none;
+  }
+}
+
+.bilp-facts {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--fg-muted);
+}
+
 /* ── Upcoming runs ───────────────────────────────────────────────────────
    What the scheduler will start next. Shared by Activity, a workflow's own
    screen and the desktop Workflows page, so it keeps to the phone list's

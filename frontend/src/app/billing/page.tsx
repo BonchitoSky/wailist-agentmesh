@@ -14,6 +14,8 @@ import {
 import { credits as creditsApi } from "@/lib/api";
 import { IS_NATIVE } from "@/lib/nativeAuth";
 import { openExternal, WEB_BILLING_URL } from "@/lib/openExternal";
+import { useReadOnly } from "@/hooks/useReadOnly";
+import { BillingPhonePage } from "@/components/billing/phone/BillingPhonePage";
 
 const PRESETS_INR = [1000, 5000, 10000, 20000];
 const MAX_INR = maxTopupINR();
@@ -64,6 +66,15 @@ const panelStyle: React.CSSProperties = {
 };
 
 const fmtUSD = (n: number) => `$${n.toFixed(2)}`;
+
+// The phone screen and the desktop page share the same full-height shell.
+const viewportStyle: React.CSSProperties = {
+  height: "100dvh",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+  background: "var(--bg)",
+};
 
 // The top-up panel in the Android app. Card and UPI checkout cannot load
 // there, because the app's content security policy blocks the payment
@@ -135,6 +146,7 @@ export default function BillingPage() {
     refreshBalance,
     refreshPurchases,
   } = useCredits();
+  const readOnly = useReadOnly();
   const [amountINR, setAmountINR] = useState<number>(PRESETS_INR[1]);
   const [customINR, setCustomINR] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -246,17 +258,61 @@ export default function BillingPage() {
   // account is empty.
   const isLow = balanceKnown && balanceUSD < LOW_BALANCE_USD;
 
+  // A phone gets its own screen rather than the two-column page squeezed:
+  // the balance leads, topping up is directly under it, and the rest is flat
+  // sections. Every hook above has already run, so this return is safe; the
+  // desktop JSX below is untouched.
+  if (readOnly) {
+    return (
+      <div className="am-viewport" style={viewportStyle}>
+        <style>{BILLING_CSS}</style>
+        <Topbar />
+        <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>
+          <BillingPhonePage
+            balanceUSD={balanceUSD}
+            balanceKnown={balanceKnown}
+            isLow={isLow}
+            returnState={returnState}
+            native={IS_NATIVE}
+            onTopUpOnWeb={topUpOnWeb}
+            presets={PRESETS_INR}
+            amountINR={amountINR}
+            onPreset={(inr) => {
+              setAmountINR(inr);
+              setCustomINR("");
+            }}
+            customINR={customINR}
+            onCustomChange={setCustomINR}
+            effectiveINR={effectiveINR}
+            overMax={overMax}
+            maxINR={MAX_INR}
+            canCheckout={canCheckout}
+            onCheckout={() => setCheckoutOpen(true)}
+            couponCode={couponCode}
+            onCouponChange={(v) => {
+              setCouponCode(v);
+              if (couponState !== "idle") setCouponState("idle");
+            }}
+            couponState={couponState}
+            couponMessage={couponMessage}
+            onApplyCoupon={applyCoupon}
+            onBuyAgain={IS_NATIVE ? topUpOnWeb : openCheckoutFor}
+            howItWorks={HOW_IT_WORKS}
+          />
+        </div>
+        {checkoutOpen && (
+          <CheckoutModal
+            open
+            amountINR={checkoutAmountINR}
+            onClose={() => setCheckoutOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div
-      className="am-viewport"
-      style={{
-        height: "100dvh",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        background: "var(--bg)",
-      }}
-    >
+    <div className="am-viewport" style={viewportStyle}>
       <style>{BILLING_CSS}</style>
 
       <Topbar />
