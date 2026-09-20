@@ -1916,7 +1916,7 @@ body[data-typing] .bottomnav {
 .wfp-head__summary {
   flex: 1;
   min-width: 0;
-  color: var(--fg-dim);
+  color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1927,7 +1927,7 @@ body[data-typing] .bottomnav {
   white-space: nowrap;
 }
 .wfp-head__balance-label {
-  color: var(--fg-dim);
+  color: var(--fg-muted);
 }
 
 /* Search at four fifths, the filter at the last fifth. */
@@ -2162,7 +2162,7 @@ body[data-typing] .bottomnav {
 }
 /* Nothing has run, so the whole card recedes behind the ones that have. */
 .wfp-card[data-status="draft"] .wfp-card__name {
-  color: var(--fg-dim);
+  color: var(--fg-muted);
 }
 .wfp-card__meta {
   margin: 3px 0 0;
@@ -2170,11 +2170,13 @@ body[data-typing] .bottomnav {
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   line-height: 17px;
-  color: var(--fg-dim);
+  color: var(--fg-muted);
 }
 /* The last part of the line is the only one that carries colour, and it is
    keyed to the state rather than the status: a deployed workflow with nothing
-   queued has nothing to shout about. */
+   queued has nothing to shout about.
+   These lines are --fg-muted rather than --fg-dim: on --bg-elev-1 the dim grey
+   measures 2.84:1, under the 4.5 a 12px line needs. */
 .wfp-card__state {
   white-space: nowrap;
 }
