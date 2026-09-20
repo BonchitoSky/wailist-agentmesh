@@ -1854,52 +1854,80 @@ body[data-typing] .bottomnav {
    The Workflows screen on a phone: flat, one line per fact, separated by
    hairlines rather than boxed. Every control keeps the 44px touch floor;
    "thin" comes from dropping chrome, not from shrinking targets. */
-.wfp-strip {
+.wfp-head {
+  padding-bottom: 2px;
+}
+.wfp-head__top {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+.wfp-head__top .wfp-title {
+  flex: 1;
+  min-width: 0;
+}
+/* A plain accent glyph rather than a boxed button: the cards below carry the
+   screen's structure, and a second outlined box competes with them. */
+.wfp-head__add {
+  flex-shrink: 0;
+  width: 44px;
   height: 44px;
-}
-.wfp-strip__label {
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-.wfp-strip__amount {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--fg);
-}
-.wfp-strip__add {
-  margin-left: auto;
-  width: 32px;
-  height: 44px;
+  margin-right: -10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-1);
+  border: none;
+  border-radius: var(--r-2);
   background: transparent;
-  color: var(--fg);
+  color: var(--accent);
   cursor: pointer;
   touch-action: manipulation;
   transition:
     transform 0.12s var(--ease),
-    border-color 0.15s var(--ease);
+    background 0.15s var(--ease);
 }
-.wfp-strip__add:active {
-  transform: scale(0.96);
-  background: var(--bg-elev-1);
+.wfp-head__add:active {
+  transform: scale(0.92);
+  background: var(--accent-soft);
 }
-.wfp-strip__add:focus-visible {
+.wfp-head__add:focus-visible {
   outline: 2px solid var(--accent-line);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 @media (hover: hover) {
-  .wfp-strip__add:hover {
-    border-color: var(--accent-line);
+  .wfp-head__add:hover {
+    background: var(--accent-soft);
   }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wfp-head__add {
+    transition: none;
+  }
+}
+.wfp-head__facts {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  line-height: 18px;
+}
+.wfp-head__summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wfp-head__balance {
+  flex-shrink: 0;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.wfp-head__balance-label {
+  color: var(--fg-dim);
 }
 
 /* Search at four fifths, the filter at the last fifth. */
@@ -2058,8 +2086,7 @@ body[data-typing] .bottomnav {
   .wfp-menu {
     animation: none;
   }
-  .wfp-filter__trigger,
-  .wfp-strip__add {
+  .wfp-filter__trigger {
     transition: none;
   }
 }

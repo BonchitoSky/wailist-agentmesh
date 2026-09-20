@@ -10,7 +10,8 @@ import {
   type Sort,
   type StatusFilter,
 } from "@/lib/workflowList";
-import { CreditStrip } from "./CreditStrip";
+import { totalSpend } from "@/lib/workflowMeta";
+import { WorkflowsPhoneHeader } from "./WorkflowsPhoneHeader";
 import { WorkflowFilterMenu } from "./WorkflowFilterMenu";
 import { WorkflowPhoneRow } from "./WorkflowPhoneRow";
 
@@ -51,8 +52,11 @@ export function WorkflowsPhoneList({
 
   return (
     <main className="wfp-page">
-      <h1 className="wfp-title">Workflows</h1>
-      <CreditStrip />
+      <WorkflowsPhoneHeader
+        total={workflows.length}
+        shown={visible.length}
+        spend={totalSpend(workflows)}
+      />
       {error && (
         <p className="wfp-error" role="alert">
           {error}
