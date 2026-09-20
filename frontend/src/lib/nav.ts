@@ -21,25 +21,37 @@ export type NavItem = {
    * wrong for any route that is a prefix of another — pass this when it is.
    */
   match?: (pathname: string) => boolean;
+
+  /**
+   * Hidden from the top bar's menu on a handheld. The Bazaar is a browsing
+   * and shopping surface for building workflows, which happens on a
+   * computer. Desktop navigation is unaffected.
+   */
+  desktopOnly?: boolean;
 };
 
 /** Primary routes for the authed application shell. */
 export const APP_NAV_ITEMS: readonly NavItem[] = [
   { label: "Workflows", href: "/workflows" },
-  { label: "Bazaar", href: "/bazaar" },
+  { label: "Bazaar", href: "/bazaar", desktopOnly: true },
   { label: "Usage", href: "/usage" },
   { label: "Credits", href: "/billing" },
 ];
 
 /**
  * Tabs for the bottom bar on a phone or tablet. A handheld is mostly used to
- * check on workflows, so Activity takes a tab and Usage and Credits sit under
- * Account instead. APP_NAV_ITEMS stays the desktop and top bar navigation.
+ * check on workflows, so Activity takes a tab. Credits takes one too: a run
+ * that stops for want of credit is the thing a phone has to fix on the spot,
+ * and a tab root is also the only place the bottom bar shows, so reaching
+ * /billing any other way left that screen with no visible way back. Usage
+ * still sits under Account, and the Bazaar is deliberately absent: it is for
+ * building, which happens on a computer.
+ * APP_NAV_ITEMS stays the desktop and top bar navigation.
  */
 export const HANDHELD_TAB_ITEMS: readonly NavItem[] = [
   { label: "Workflows", href: "/workflows" },
   { label: "Activity", href: "/activity" },
-  { label: "Bazaar", href: "/bazaar" },
+  { label: "Credits", href: "/billing" },
   { label: "Account", href: "/account" },
 ];
 

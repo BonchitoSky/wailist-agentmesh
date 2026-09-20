@@ -9,7 +9,7 @@ import {
   isTabRoot,
   type NavItem,
 } from "@/lib/nav";
-import { IconGrid } from "@/components/ui";
+import { IconWallet } from "@/components/ui";
 
 // The app's navigation on a phone.
 //
@@ -22,8 +22,10 @@ import { IconGrid } from "@/components/ui";
 // hamburger sits.
 //
 // Four destinations, taken from HANDHELD_TAB_ITEMS in lib/nav.ts. They differ
-// from the desktop's APP_NAV_ITEMS on purpose: a handheld checks on workflows,
-// so Activity has a tab and Usage and Credits are reached through Account.
+// from the desktop's APP_NAV_ITEMS on purpose: a handheld checks on workflows
+// and tops up when a run is about to stop, so Activity and Credits have tabs
+// while the Bazaar, which is for building on a computer, has none. Usage is
+// still reached through Account.
 // Material 3 puts a navigation bar at three to five destinations, so four needs
 // no compromise.
 
@@ -121,13 +123,13 @@ export function BottomNav() {
 }
 
 // Icons live here rather than in lib/nav.ts, which is a plain manifest and has
-// no business importing JSX. IconGrid already exists and already means the
+// no business importing JSX. IconWallet already exists and already means the
 // right thing; the others are drawn here because nothing in the set did.
 function TabIcon({ item }: { item: NavItem }) {
   const size = 20;
   switch (item.href) {
-    case "/bazaar":
-      return <IconGrid size={size} />;
+    case "/billing":
+      return <IconWallet size={size} />;
     case "/activity":
       return <IconPulse size={size} />;
     case "/account":

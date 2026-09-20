@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("BottomNav", () => {
-  it("offers Workflows, Activity, Bazaar and Account on a handheld", () => {
+  it("offers Workflows, Activity, Credits and Account on a handheld", () => {
     state.pathname = "/activity";
     render(<BottomNav />);
 
@@ -26,13 +26,13 @@ describe("BottomNav", () => {
     expect(links.map((l) => l.textContent)).toEqual([
       "Workflows",
       "Activity",
-      "Bazaar",
+      "Credits",
       "Account",
     ]);
     expect(links.map((l) => l.getAttribute("href"))).toEqual([
       "/workflows",
       "/activity",
-      "/bazaar",
+      "/billing",
       "/account",
     ]);
     expect(
@@ -41,6 +41,24 @@ describe("BottomNav", () => {
         .getAttribute("aria-current"),
     ).toBe("page");
     expect(document.body.hasAttribute("data-bottomnav")).toBe(true);
+  });
+
+  // Reaching /billing from the Workflows "+" used to land on a screen with no
+  // bottom bar and no back button. It is a tab root now, so the bar is there.
+  it("shows on the Credits tab, so billing is never a dead end", () => {
+    state.pathname = "/billing";
+    render(<BottomNav />);
+    expect(
+      screen
+        .getByRole("link", { name: "Credits" })
+        .getAttribute("aria-current"),
+    ).toBe("page");
+    expect(document.body.hasAttribute("data-bottomnav")).toBe(true);
+  });
+
+  it("no longer offers the Bazaar", () => {
+    render(<BottomNav />);
+    expect(screen.queryByRole("link", { name: "Bazaar" })).toBeNull();
   });
 
   it("shows on the Account tab too", () => {
