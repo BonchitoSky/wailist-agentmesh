@@ -130,4 +130,25 @@ describe("WorkflowsPhoneList", () => {
       "could not load your workflows",
     );
   });
+
+  // A failed first load says nothing about the account, so it must not be
+  // presented as an empty one.
+  it("shows a failure with a retry, not the empty state, when loading failed", () => {
+    const onRetry = vi.fn();
+    render(
+      <WorkflowsPhoneList
+        workflows={[]}
+        loading={false}
+        error="could not load your workflows"
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.getByRole("alert").textContent).toBe(
+      "could not load your workflows",
+    );
+    expect(screen.queryByText(/No workflows yet/)).toBeNull();
+    expect(screen.getByText(/Couldn.t load your workflows/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
 });
