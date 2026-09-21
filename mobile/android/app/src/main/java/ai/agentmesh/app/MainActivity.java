@@ -2,13 +2,10 @@ package ai.agentmesh.app;
 
 import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
-import android.net.Uri;
 import android.os.Bundle;
-import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 
 import com.getcapacitor.BridgeActivity;
-import com.getcapacitor.BridgeWebViewClient;
 
 public class MainActivity extends BridgeActivity {
     // Bounds for the system font scale the WebView follows; see applyTextZoom.
@@ -48,27 +45,6 @@ public class MainActivity extends BridgeActivity {
         }
 
         applyTextZoom(getResources().getConfiguration());
-        allowPaymentAppsToOpen();
-    }
-
-    // Lets a UPI app take over when the checkout asks for one.
-    //
-    // Capacitor installs its own WebViewClient, so this wraps rather than
-    // replaces it: anything PaymentAppLauncher does not claim falls through
-    // to super, which is what keeps normal navigation, the local scheme and
-    // the bridge working exactly as before.
-    private void allowPaymentAppsToOpen() {
-        if (getBridge() == null) return;
-        getBridge().getWebView().setWebViewClient(new BridgeWebViewClient(getBridge()) {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                Uri url = request.getUrl();
-                if (url != null && PaymentAppLauncher.open(MainActivity.this, url.toString())) {
-                    return true;
-                }
-                return super.shouldOverrideUrlLoading(view, request);
-            }
-        });
     }
 
     // fontScale is in configChanges in AndroidManifest.xml, so changing the
