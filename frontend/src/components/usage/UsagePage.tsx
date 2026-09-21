@@ -21,18 +21,18 @@ import { useIsHandheld } from "@/hooks/useIsHandheld";
 const RANGES: UsageRange[] = ["24h", "7d", "30d"];
 
 // x402 = accent, LLM = info, action = the orange already used in LogDrawer.
-const CAT_COLOR: Record<UsageCategory, string> = {
+export const CAT_COLOR: Record<UsageCategory, string> = {
   x402: "var(--accent)",
   llm: "var(--info)",
   action: "#FB923C",
 };
 // Endpoint type pill keeps the x402 magenta used elsewhere (tx links / tool402).
-const TYPE_PILL: Record<UsageCategory, string> = {
+export const TYPE_PILL: Record<UsageCategory, string> = {
   x402: "#E879F9",
   llm: "#6EA8FF", // hex (matches --info) so the `${c}55`/`${c}1A` alpha suffixes stay valid
   action: "#FB923C",
 };
-const CAT_LABEL: Record<UsageCategory, string> = {
+export const CAT_LABEL: Record<UsageCategory, string> = {
   x402: "x402",
   llm: "LLM",
   action: "Actions",
@@ -1445,8 +1445,8 @@ function Empty({ text }: { text: string }) {
 // billed in. The multiplier is retained (as 1) rather than deleted so the call
 // sites stay honest about doing no conversion; applying the old 0.17 ALGO rate
 // to USD figures would under-report every number on this page by ~6x.
-const ALGO_USD = 1;
-function usd(algoAmount: number, dp = 2) {
+export const ALGO_USD = 1;
+export function usd(algoAmount: number, dp = 2) {
   return (algoAmount * ALGO_USD).toLocaleString("en", {
     minimumFractionDigits: dp,
     maximumFractionDigits: dp,
@@ -1472,7 +1472,7 @@ function trim(n: number) {
     maximumFractionDigits: 4,
   });
 }
-function relTime(iso: string) {
+export function relTime(iso: string) {
   const diff = Date.now() - new Date(iso).getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return "just now";
