@@ -2047,7 +2047,7 @@ body[data-typing] .bottomnav {
   cursor: pointer;
   touch-action: manipulation;
 }
-.wfp-menu__item[aria-checked="true"] {
+.wfp-menu__item[aria-pressed="true"] {
   color: var(--fg);
 }
 .wfp-menu__item:active {

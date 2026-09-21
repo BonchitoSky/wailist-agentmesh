@@ -70,17 +70,13 @@ describe("WorkflowsPhoneList", () => {
       <WorkflowsPhoneList workflows={LIST} loading={false} error={null} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Filter and sort" }));
-    fireEvent.click(
-      screen.getByRole("menuitemradio", { name: /^Lowest cost/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /^Lowest cost/ }));
     expect(rowNames()).toEqual([
       "Invoice check",
       "Daily Market Brief",
       "Customer Support Triage",
     ]);
-    fireEvent.click(
-      screen.getByRole("menuitemradio", { name: /^Lowest cost/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /^Lowest cost/ }));
     expect(rowNames()[0]).toBe("Customer Support Triage");
   });
 
@@ -94,7 +90,7 @@ describe("WorkflowsPhoneList", () => {
     expect(rowNames()).toEqual(["Daily Market Brief"]);
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Filter and sort" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Paused" }));
+    fireEvent.click(screen.getByRole("button", { name: "Paused" }));
     expect(rowNames()).toEqual(["Invoice check"]);
   });
 
