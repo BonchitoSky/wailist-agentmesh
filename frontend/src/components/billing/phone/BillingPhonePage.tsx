@@ -47,6 +47,9 @@ export interface BillingPhoneProps {
   couponMessage: string;
   onApplyCoupon: () => void;
   onBuyAgain: (amountINR: number) => void;
+  /** The Android app, which pays on the website rather than on this screen. */
+  native: boolean;
+  onTopUpOnWeb: () => void;
   /** Newest first. Only the first shows until "See all" is pressed. */
   purchases: readonly Purchase[];
   purchasesKnown: boolean;
@@ -98,65 +101,84 @@ export function BillingPhonePage(p: BillingPhoneProps) {
         </p>
       )}
 
-      <section className="bilp-section">
-        <h2 className="bilp-eyebrow">Amount</h2>
-
-        <div className="bilp-seg" role="radiogroup" aria-label="Amount">
-          {p.presets.map((inr) => {
-            // Against the effective amount, not against emptiness: choosing a
-            // preset now fills the field, so a "no custom value" test would
-            // light nothing. Typing 5000 by hand lights ₹5k too, which is
-            // what someone who typed it would expect.
-            const on = p.effectiveINR === inr;
-            return (
-              <button
-                key={inr}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                aria-label={fmtINR(inr)}
-                className="bilp-seg__item"
-                onClick={() => p.onPreset(inr)}
-              >
-                {shortINR(inr)}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="bilp-amount bilp-amount--figure">
-          <span className="bilp-amount__prefix" aria-hidden>
-            ₹
-          </span>
-          <input
-            className="bilp-amount__input bilp-amount__input--figure"
-            inputMode="decimal"
-            aria-label="Amount in rupees"
-            placeholder={String(p.amountINR)}
-            value={p.customINR}
-            onChange={(e) => p.onCustomChange(e.target.value)}
-          />
-          <span className="bilp-amount__usd">
-            {credits === null ? "≈ —" : `≈ ${fmtUSD(credits)}`}
-          </span>
-        </div>
-
-        {p.overMax && (
-          <p className="bilp-note" data-tone="error" role="alert">
-            The most you can add at once is {fmtINR(p.maxINR)}.
+      {/* The app pays on the website: in-app checkout needs its own payment
+          provider project. So the whole amount picker gives way to one
+          button, and the amount is chosen on the site. */}
+      {p.native ? (
+        <section className="bilp-section">
+          <h2 className="bilp-eyebrow">Top up</h2>
+          <button type="button" className="bilp-pay" onClick={p.onTopUpOnWeb}>
+            <IconWallet size={15} />
+            Add credits on the website
+            <span aria-hidden>↗</span>
+          </button>
+          <p className="bilp-note">
+            Opens agent-mesh.app in a browser tab. Pay by card, UPI or crypto,
+            signing in with this account if asked. Your balance here updates
+            when you close the tab.
           </p>
-        )}
+        </section>
+      ) : (
+        <section className="bilp-section">
+          <h2 className="bilp-eyebrow">Amount</h2>
 
-        <button
-          type="button"
-          className="bilp-pay"
-          onClick={p.onCheckout}
-          disabled={!p.canCheckout}
-        >
-          <IconWallet size={15} />
-          {p.canCheckout ? `Pay ${fmtINR(p.effectiveINR)}` : "Pay"}
-        </button>
-      </section>
+          <div className="bilp-seg" role="radiogroup" aria-label="Amount">
+            {p.presets.map((inr) => {
+              // Against the effective amount, not against emptiness: choosing a
+              // preset now fills the field, so a "no custom value" test would
+              // light nothing. Typing 5000 by hand lights ₹5k too, which is
+              // what someone who typed it would expect.
+              const on = p.effectiveINR === inr;
+              return (
+                <button
+                  key={inr}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  aria-label={fmtINR(inr)}
+                  className="bilp-seg__item"
+                  onClick={() => p.onPreset(inr)}
+                >
+                  {shortINR(inr)}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="bilp-amount bilp-amount--figure">
+            <span className="bilp-amount__prefix" aria-hidden>
+              ₹
+            </span>
+            <input
+              className="bilp-amount__input bilp-amount__input--figure"
+              inputMode="decimal"
+              aria-label="Amount in rupees"
+              placeholder={String(p.amountINR)}
+              value={p.customINR}
+              onChange={(e) => p.onCustomChange(e.target.value)}
+            />
+            <span className="bilp-amount__usd">
+              {credits === null ? "≈ —" : `≈ ${fmtUSD(credits)}`}
+            </span>
+          </div>
+
+          {p.overMax && (
+            <p className="bilp-note" data-tone="error" role="alert">
+              The most you can add at once is {fmtINR(p.maxINR)}.
+            </p>
+          )}
+
+          <button
+            type="button"
+            className="bilp-pay"
+            onClick={p.onCheckout}
+            disabled={!p.canCheckout}
+          >
+            <IconWallet size={15} />
+            {p.canCheckout ? `Pay ${fmtINR(p.effectiveINR)}` : "Pay"}
+          </button>
+        </section>
+      )}
 
       {/* Above the payment history, so the discount is offered before the
           receipt rather than after it. */}

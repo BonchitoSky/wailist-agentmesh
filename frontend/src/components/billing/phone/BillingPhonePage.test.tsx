@@ -51,6 +51,8 @@ function renderPage(over: Partial<BillingPhoneProps> = {}) {
     couponMessage: "",
     onApplyCoupon: vi.fn(),
     onBuyAgain: noop,
+    native: false,
+    onTopUpOnWeb: vi.fn(),
     purchases: [purchase("p1")],
     purchasesKnown: true,
     howItWorks: ["Credits are spent as your agents call paid tools."],
@@ -229,5 +231,30 @@ describe("how credits work", () => {
     expect(screen.queryByText(/agents call paid tools/)).toBeNull();
     fireEvent.click(row);
     expect(screen.getByText(/agents call paid tools/)).toBeTruthy();
+  });
+});
+
+// The Android app pays on the website, so the amount picker gives way to one
+// button that opens it.
+describe("in the Android app", () => {
+  it("offers the website instead of an amount and a Pay button", () => {
+    const onTopUpOnWeb = vi.fn();
+    renderPage({ native: true, onTopUpOnWeb });
+
+    expect(screen.queryByRole("radiogroup", { name: "Amount" })).toBeNull();
+    expect(screen.queryByLabelText("Amount in rupees")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Pay/ })).toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Add credits on the website/ }),
+    );
+    expect(onTopUpOnWeb).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the balance, the coupon and the payment history", () => {
+    const { container } = renderPage({ native: true });
+    expect(container.querySelector(".bilp-stats")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Have a coupon/ })).toBeTruthy();
+    expect(screen.getByText("Last payment")).toBeTruthy();
   });
 });

@@ -16,7 +16,6 @@ vi.mock("@/lib/nativeAuth", () => ({
     return state.native;
   },
 }));
-// Still mocked, so a test can prove nothing reaches for it any more.
 vi.mock("@/lib/openExternal", () => ({
   WEB_BILLING_URL: "https://www.agent-mesh.app/billing",
   openExternal: state.openExternal,
@@ -85,32 +84,64 @@ afterEach(() => {
   state.refreshPurchases.mockClear();
 });
 
-// Paying used to leave the app for the website, because the native CSP blocked
-// the payment SDK in the WebView. The policy now admits it (lib/csp.ts), so
-// every client checks out in place and there is no second path to keep working.
+// The app does not take payment itself: in-app checkout needs its own
+// payment-provider project. So it pays on the website, in an in-app browser
+// tab, and re-reads the balance and history when that tab closes.
 describe("BillingPage in the Android app", () => {
-  it("checks out in the app, and never opens the website", () => {
+  it("tops up on the website and re-reads credits when the tab closes", () => {
     state.native = true;
     state.readOnly = true;
     render(<BillingPage />);
 
-    expect(
-      screen.queryByRole("button", { name: /Add credits on the website/ }),
-    ).toBeNull();
+    // No amount picker and no Pay: the amount is chosen on the site.
+    expect(screen.queryByRole("button", { name: /^Pay / })).toBeNull();
+    expect(screen.queryByLabelText("Amount in rupees")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /^Pay / }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Add credits on the website/ }),
+    );
 
-    expect(screen.getByText("checkout dialog")).toBeTruthy();
-    expect(state.openExternal).not.toHaveBeenCalled();
+    expect(state.openExternal).toHaveBeenCalledTimes(1);
+    const [url, options] = state.openExternal.mock.calls[0];
+    expect(url).toBe("https://www.agent-mesh.app/billing");
+    expect(screen.queryByText("checkout dialog")).toBeNull();
+
+    options?.onClose?.();
+    expect(state.refreshBalance).toHaveBeenCalled();
+    expect(state.refreshPurchases).toHaveBeenCalled();
   });
 
-  it("sends Buy again to the checkout dialog, not the website", () => {
+  it("sends Buy again to the website instead of the checkout dialog", () => {
     state.native = true;
     state.readOnly = true;
     render(<BillingPage />);
 
     fireEvent.click(screen.getByRole("button", { name: "Buy again" }));
 
+    expect(state.openExternal).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("checkout dialog")).toBeNull();
+  });
+});
+
+// A phone browser can take payment, so it keeps the checkout on the page.
+describe("BillingPage on a phone browser", () => {
+  it("checks out on the page, and never opens the website", () => {
+    state.readOnly = true;
+    render(<BillingPage />);
+
+    expect(
+      screen.queryByRole("button", { name: /Add credits on the website/ }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^Pay / }));
+    expect(screen.getByText("checkout dialog")).toBeTruthy();
+    expect(state.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("sends Buy again to the checkout dialog", () => {
+    state.readOnly = true;
+    render(<BillingPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Buy again" }));
     expect(screen.getByText("checkout dialog")).toBeTruthy();
     expect(state.openExternal).not.toHaveBeenCalled();
   });
@@ -119,7 +150,6 @@ describe("BillingPage in the Android app", () => {
   // showed only as the input's placeholder -- painted in --fg-dim, so the
   // figure about to be charged read as a suggestion rather than a value.
   it("fills the amount field from the chosen preset", () => {
-    state.native = true;
     state.readOnly = true;
     render(<BillingPage />);
 
@@ -135,7 +165,6 @@ describe("BillingPage in the Android app", () => {
   // Without the guard "5,000" parses to 5 and the button offers to charge ₹5.
   // The keystroke is refused outright, so the field keeps what it had.
   it("refuses an amount that is not digits", () => {
-    state.native = true;
     state.readOnly = true;
     render(<BillingPage />);
 
@@ -149,7 +178,6 @@ describe("BillingPage in the Android app", () => {
 
   // Nothing is tapped: the field still has to open showing the amount.
   it("opens with the default amount already in the field", () => {
-    state.native = true;
     state.readOnly = true;
     render(<BillingPage />);
 
@@ -157,17 +185,6 @@ describe("BillingPage in the Android app", () => {
       "value",
       "5000",
     );
-  });
-});
-
-describe("BillingPage on a phone browser", () => {
-  it("gets the same screen and the same checkout as the app", () => {
-    state.readOnly = true;
-    render(<BillingPage />);
-
-    expect(screen.getByRole("button", { name: /^Pay / })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Buy again" }));
-    expect(screen.getByText("checkout dialog")).toBeTruthy();
   });
 });
 

@@ -11,6 +11,8 @@ import { totalSpend } from "@/lib/workflowMeta";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import { usePaymentProviders } from "@/components/checkout/usePaymentProviders";
 import { BillingPhonePage } from "@/components/billing/phone/BillingPhonePage";
+import { IS_NATIVE } from "@/lib/nativeAuth";
+import { openExternal, WEB_BILLING_URL } from "@/lib/openExternal";
 
 const PRESETS_INR = [1000, 5000, 10000, 20000];
 const LOW_BALANCE_USD = 5;
@@ -67,6 +69,7 @@ export default function BillingPage() {
     balanceKnown,
     lastPurchase,
     refreshBalance,
+    refreshPurchases,
     purchases,
     purchasesKnown,
   } = useCredits();
@@ -165,6 +168,20 @@ export default function BillingPage() {
     setCheckoutOpen(true);
   };
 
+  // The Android app does not take payment itself: in-app checkout needs its
+  // own payment-provider project, so the app pays on the website instead, in
+  // an in-app browser tab. The balance and history are re-read when the tab
+  // closes, whether or not a payment went through. Phone browsers and desktop
+  // keep the checkout on this page.
+  const topUpOnWeb = () => {
+    void openExternal(WEB_BILLING_URL, {
+      onClose: () => {
+        void refreshBalance();
+        void refreshPurchases();
+      },
+    });
+  };
+
   const applyCoupon = async () => {
     const code = couponCode.trim();
     if (!code || couponState === "loading") return;
@@ -252,7 +269,9 @@ export default function BillingPage() {
             couponState={couponState}
             couponMessage={couponMessage}
             onApplyCoupon={applyCoupon}
-            onBuyAgain={openCheckoutFor}
+            native={IS_NATIVE}
+            onTopUpOnWeb={topUpOnWeb}
+            onBuyAgain={IS_NATIVE ? topUpOnWeb : openCheckoutFor}
             howItWorks={HOW_IT_WORKS}
           />
         </div>
