@@ -13,24 +13,44 @@ import type { RunPage, RunSummary } from "@/lib/types";
 // hands them.
 const api = vi.hoisted(() => {
   class RunsUnavailableError extends Error {}
-  return { RunsUnavailableError, recent: vi.fn() };
+  return { RunsUnavailableError, recent: vi.fn(), get: vi.fn() };
 });
 
 vi.mock("@/lib/api", () => ({
   RunsUnavailableError: api.RunsUnavailableError,
-  runs: { recent: api.recent },
+  runs: { recent: api.recent, get: api.get },
 }));
 vi.mock("@/components/Topbar", () => ({ Topbar: () => null }));
 vi.mock("@/components/PullToRefresh", () => ({
-  PullToRefresh: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
+  PullToRefresh: ({
+    children,
+    onRefresh,
+  }: {
+    children: React.ReactNode;
+    onRefresh: () => Promise<unknown>;
+  }) => (
+    <div>
+      <button type="button" onClick={() => void onRefresh()}>
+        Pull to refresh
+      </button>
+      {children}
+    </div>
   ),
 }));
 vi.mock("@/components/runs/RunSheet", () => ({
   RunSheet: ({ run }: { run: RunSummary }) => (
-    <div role="dialog">sheet for {run.id}</div>
+    <div role="dialog" data-spend={run.spendUsdMicros}>
+      sheet for {run.id}
+    </div>
   ),
 }));
+
+// A promise the test settles when it chooses, to put responses out of order.
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
 
 import { ActivityPage } from "./ActivityPage";
 
@@ -162,6 +182,29 @@ describe("ActivityPage", () => {
     }
   });
 
+  // The first load is slow, a poll lands first, and the first load's older
+  // answer must not replace it.
+  it("drops a slow first load that a poll has overtaken", async () => {
+    const first = deferred<RunPage>();
+    api.recent
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(
+        page([run({ id: "r-1", workflowName: "Newer answer" })]),
+      );
+    render(<ActivityPage />);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(await screen.findByText("Newer answer")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve(page([run({ id: "r-1", workflowName: "Older answer" })]));
+    });
+    expect(screen.getByText("Newer answer")).toBeTruthy();
+    expect(screen.queryByText("Older answer")).toBeNull();
+  });
+
   it("refreshes on coming back to the foreground", async () => {
     api.recent
       .mockResolvedValueOnce(page([run({ id: "r-1" })]))
@@ -189,5 +232,131 @@ describe("ActivityPage", () => {
     document.dispatchEvent(new Event("visibilitychange"));
 
     expect(await screen.findByText("Morning digest")).toBeTruthy();
+  });
+
+  // The sheet shows the row as it is now, not as it was when tapped.
+  it("updates an open sheet when a refresh brings new figures", async () => {
+    api.recent
+      .mockResolvedValueOnce(page([run({ id: "r-1", status: "running" })]))
+      .mockResolvedValueOnce(
+        page([run({ id: "r-1", status: "running", spendUsdMicros: 90_000 })]),
+      );
+    render(<ActivityPage />);
+    fireEvent.click(
+      (await screen.findByText("Morning digest")).closest("button")!,
+    );
+    expect(screen.getByRole("dialog").dataset.spend).toBe("21000");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    });
+    expect(screen.getByRole("dialog").dataset.spend).toBe("90000");
+  });
+
+  it("drops an older page that lands after a refresh", async () => {
+    const older = deferred<RunPage>();
+    api.recent
+      .mockResolvedValueOnce(page([run({ id: "r-3" })], "c1"))
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(
+        page([run({ id: "r-4", workflowName: "Fresh run" })], "c9"),
+      );
+    render(<ActivityPage />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show older runs" }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    });
+    expect(screen.getByText("Fresh run")).toBeTruthy();
+
+    await act(async () => {
+      older.resolve(page([run({ id: "r-1", workflowName: "Stale page" })]));
+    });
+    expect(screen.queryByText("Stale page")).toBeNull();
+    // The cursor is still the refreshed list's.
+    fireEvent.click(screen.getByRole("button", { name: "Show older runs" }));
+    expect(api.recent).toHaveBeenLastCalledWith({ cursor: "c9", limit: 20 });
+  });
+
+  it("drops a slow first load that lands after a refresh", async () => {
+    const first = deferred<RunPage>();
+    api.recent
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(
+        page([run({ id: "r-4", workflowName: "Fresh run" })]),
+      );
+    render(<ActivityPage />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    });
+    await act(async () => {
+      first.resolve(page([run({ id: "r-1", workflowName: "Stale load" })]));
+    });
+    expect(screen.getByText("Fresh run")).toBeTruthy();
+    expect(screen.queryByText("Stale load")).toBeNull();
+  });
+
+  describe("while a run is going", () => {
+    afterEach(() => vi.useRealTimers());
+
+    // A slow poll overtaken by a newer one could land last and put a finished
+    // run back to running.
+    it("polls one request at a time", async () => {
+      vi.useFakeTimers();
+      const slow = deferred<RunPage>();
+      api.recent
+        .mockResolvedValueOnce(page([run({ id: "r-1", status: "running" })]))
+        .mockReturnValueOnce(slow.promise);
+      render(<ActivityPage />);
+      await act(async () => {});
+
+      await act(async () => vi.advanceTimersByTimeAsync(3_000));
+      await act(async () => vi.advanceTimersByTimeAsync(9_000));
+      expect(api.recent).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        slow.resolve(page([run({ id: "r-1", status: "success" })]));
+      });
+      expect(screen.queryByText("Running")).toBeNull();
+    });
+
+    it("updates a running run that newer runs pushed off the first page", async () => {
+      vi.useFakeTimers();
+      const newer = Array.from({ length: 20 }, (_, i) =>
+        run({ id: `n-${i}`, workflowName: `Newer ${i}` }),
+      );
+      api.recent
+        .mockResolvedValueOnce(
+          page([
+            run({ id: "r-1", status: "running", workflowName: "Long job" }),
+          ]),
+        )
+        .mockResolvedValueOnce(page(newer));
+      api.get.mockResolvedValue({
+        run: {
+          id: "r-1",
+          workflowId: "wf-1",
+          triggeredBy: "schedule",
+          status: "success",
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          spendUsdMicros: 80_000,
+        },
+        logs: [],
+        deadLetters: [],
+      });
+      render(<ActivityPage />);
+      await act(async () => {});
+      expect(screen.getByText("Running")).toBeTruthy();
+
+      await act(async () => vi.advanceTimersByTimeAsync(3_000));
+      expect(api.get).toHaveBeenCalledWith("r-1");
+      const row = screen.getByText("Long job").closest("button")!;
+      expect(row.textContent).not.toContain("Running");
+      expect(row.textContent).toContain("$0.08");
+    });
   });
 });
