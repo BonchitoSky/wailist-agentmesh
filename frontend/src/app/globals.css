@@ -2084,6 +2084,11 @@ body[data-typing] .bottomnav {
 .wfp-list {
   list-style: none;
   display: grid;
+  /* minmax(0, …) so the column can be narrower than a card's content. An
+     auto column grows to the longest unbroken name, which at large system
+     text pushed every card past the screen edge instead of letting the name
+     end in an ellipsis. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin: 0;
   padding: 0;
