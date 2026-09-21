@@ -56,6 +56,9 @@ export interface BillingPhoneProps {
   /** Newest first. Only the first shows until "See all" is pressed. */
   purchases: readonly Purchase[];
   purchasesKnown: boolean;
+  // The history could not be loaded. PurchaseHistory then says so and offers
+  // a retry, so the section has to be there to hold it.
+  purchasesFailed?: boolean;
   howItWorks: readonly string[];
 }
 
@@ -251,10 +254,13 @@ export function BillingPhonePage(p: BillingPhoneProps) {
 
       {/* One payment by default. The whole list runs off a phone screen, and
           what someone checks after paying is whether THIS one landed. */}
-      {p.purchasesKnown && p.purchases.length > 0 && (
+      {((p.purchasesKnown && p.purchases.length > 0) ||
+        (p.purchasesFailed && p.purchases.length === 0)) && (
         <section className="bilp-section">
           <h2 className="bilp-heading">
-            {allPayments ? "Payments" : "Last payment"}
+            {allPayments || p.purchases.length === 0
+              ? "Payments"
+              : "Last payment"}
           </h2>
           <PurchaseHistory
             onBuyAgain={p.onBuyAgain}

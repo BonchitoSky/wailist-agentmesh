@@ -72,6 +72,7 @@ export default function BillingPage() {
     refreshPurchases,
     purchases,
     purchasesKnown,
+    purchasesFailed,
   } = useCredits();
   // The same 30-day figure the Workflows header shows, from the same
   // helper, so the two screens cannot quote different numbers.
@@ -118,6 +119,13 @@ export default function BillingPage() {
   useEffect(() => {
     void refreshBalance();
   }, [refreshBalance]);
+
+  // History too, from here rather than from PurchaseHistory alone: the phone
+  // screen only mounts that component once the history is known, so on a
+  // fresh session nothing would ever have asked for it.
+  useEffect(() => {
+    void refreshPurchases();
+  }, [refreshPurchases]);
 
   // A crypto top-up sends the browser to NOWPayments and back. This closes out
   // that round trip. Nothing is credited here -- the IPN webhook is the only
@@ -242,6 +250,7 @@ export default function BillingPage() {
             usdPerINR={usdPerINR}
             purchases={purchases}
             purchasesKnown={purchasesKnown}
+            purchasesFailed={purchasesFailed}
             balanceKnown={balanceKnown}
             isLow={isLow}
             returnState={returnState}

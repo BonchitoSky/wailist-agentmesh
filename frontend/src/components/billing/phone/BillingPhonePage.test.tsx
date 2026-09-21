@@ -224,6 +224,12 @@ describe("payments", () => {
     expect(screen.queryByRole("button", { name: /See all/ })).toBeNull();
   });
 
+  // PurchaseHistory holds the failure message and its retry.
+  it("keeps the section when the history failed to load", () => {
+    renderPage({ purchasesKnown: false, purchasesFailed: true, purchases: [] });
+    expect(screen.getByTestId("history")).toBeTruthy();
+  });
+
   it("says nothing at all before the payments have loaded", () => {
     renderPage({ purchasesKnown: false, purchases: [] });
     expect(screen.queryByText("Last payment")).toBeNull();

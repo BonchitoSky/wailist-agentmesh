@@ -209,6 +209,16 @@ describe("BillingPage on a phone browser", () => {
   });
 });
 
+// The phone screen mounts PurchaseHistory only once the history is known, so
+// the page has to ask for it; otherwise a fresh session never loads it.
+describe("BillingPage history", () => {
+  it("asks for the payment history on arrival", () => {
+    state.readOnly = true;
+    render(<BillingPage />);
+    expect(state.refreshPurchases).toHaveBeenCalled();
+  });
+});
+
 describe("BillingPage on the web", () => {
   it("keeps the amount picker, and Buy again opens checkout", () => {
     render(<BillingPage />);
