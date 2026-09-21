@@ -146,6 +146,27 @@ describe("BillingPage on a phone browser", () => {
     expect(state.openExternal).not.toHaveBeenCalled();
   });
 
+  // Buy again sets the amount. The field, the chosen segment and the Pay
+  // button must all say the same figure afterwards; the field used to keep
+  // showing the old preset.
+  it("shows Buy again's amount in the field and on Pay", () => {
+    state.readOnly = true;
+    render(<BillingPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Buy again" }));
+
+    expect(screen.getByLabelText("Amount in rupees")).toHaveProperty(
+      "value",
+      "1000",
+    );
+    expect(screen.getByRole("button", { name: /^Pay ₹1,000$/ })).toBeTruthy();
+    expect(
+      screen
+        .getByRole("radio", { name: "₹1,000" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
   // Choosing a preset has to fill the field, not clear it. Cleared, the amount
   // showed only as the input's placeholder -- painted in --fg-dim, so the
   // figure about to be charged read as a suggestion rather than a value.

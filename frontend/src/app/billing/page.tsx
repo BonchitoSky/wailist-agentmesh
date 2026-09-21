@@ -165,6 +165,10 @@ export default function BillingPage() {
 
   const openCheckoutFor = (inr: number) => {
     setCustomINR(String(inr));
+    // The phone field shows customINR only once it counts as touched. Without
+    // this, after Buy again the field kept showing the old preset while the
+    // selected segment and the Pay button used the purchase's amount.
+    setAmountTouched(true);
     setCheckoutOpen(true);
   };
 
