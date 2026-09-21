@@ -1,10 +1,12 @@
 "use client";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ExternalLink } from "@/components/ExternalLink";
 import { workflowHref } from "@/lib/routes";
+import { useCredits } from "@/lib/credits/store";
+import { LOW_BALANCE_THRESHOLD_USD } from "@/lib/credits/fx";
 import type { UsageCategory, UsagePayload, UsageRange } from "@/lib/types";
 import { AreaChart } from "../AreaChart";
 import { Donut } from "../Donut";
@@ -45,6 +47,17 @@ export interface UsagePhoneProps {
 
 export function UsagePhonePage(p: UsagePhoneProps) {
   const [allEndpoints, setAllEndpoints] = useState(false);
+  // What is left sits beside what was spent. The store keeps a copy across
+  // routes that goes stale as runs spend, so it is re-read on arrival.
+  const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
+  useEffect(() => {
+    void refreshBalance();
+  }, [refreshBalance]);
+  const creditState = !balanceKnown
+    ? "unknown"
+    : balanceUSD < LOW_BALANCE_THRESHOLD_USD
+      ? "low"
+      : "ok";
 
   const body = !p.data ? (
     p.loading ? (
@@ -74,6 +87,27 @@ export function UsagePhonePage(p: UsagePhoneProps) {
       <main className="bilp-page usgp-page" data-loading={p.loading}>
         <h1 className="bilp-title">Usage</h1>
         <p className="bilp-sub">What your agents spent, and on what.</p>
+
+        {/* Also the way to top up from here, now that Credits is not a tab. */}
+        <Link
+          href="/billing"
+          className="usgp-row usgp-credit"
+          data-state={creditState}
+        >
+          <span className="usgp-credit__label">Credits left</span>
+          <span className="usgp-credit__value">
+            {balanceKnown ? `$${usd(balanceUSD)}` : "—"}
+            {creditState === "low" && (
+              <span className="bilp-pill">
+                <span className="bilp-pill__dot" aria-hidden />
+                Low
+              </span>
+            )}
+            <span className="usgp-credit__chevron" aria-hidden>
+              ›
+            </span>
+          </span>
+        </Link>
 
         <div className="bilp-seg usgp-seg" role="radiogroup" aria-label="Range">
           {RANGES.map((r) => (

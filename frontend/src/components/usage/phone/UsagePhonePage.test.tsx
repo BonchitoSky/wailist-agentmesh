@@ -9,6 +9,12 @@ vi.mock("../AreaChart", () => ({
   AreaChart: () => <div data-testid="chart" />,
 }));
 vi.mock("../Donut", () => ({ Donut: () => <div data-testid="donut" /> }));
+const credits = vi.hoisted(() => ({
+  balanceUSD: 12.5,
+  balanceKnown: true,
+  refreshBalance: vi.fn(async () => {}),
+}));
+vi.mock("@/lib/credits/store", () => ({ useCredits: () => credits }));
 vi.mock("@/components/PullToRefresh", () => ({
   PullToRefresh: ({ children }: { children: React.ReactNode }) => (
     <>{children}</>
@@ -30,13 +36,41 @@ function renderPage(over: Partial<UsagePhoneProps> = {}) {
   return { ...render(<UsagePhonePage {...props} />), props };
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  credits.balanceUSD = 12.5;
+  credits.balanceKnown = true;
+});
 
 describe("UsagePhonePage", () => {
   // Usage is a tab, so the bottom bar is the way around; no back link.
   it("has no back link of its own", () => {
     renderPage();
     expect(screen.queryByRole("link", { name: /Account|Back/ })).toBeNull();
+  });
+
+  // What is left, beside what was spent -- and the way to top up.
+  it("shows the credits left, linked to Credits", () => {
+    renderPage();
+    const row = screen.getByRole("link", { name: /Credits left/ });
+    expect(row.getAttribute("href")).toBe("/billing");
+    expect(row.textContent).toContain("$12.50");
+    expect(row.textContent).not.toContain("Low");
+    expect(credits.refreshBalance).toHaveBeenCalled();
+  });
+
+  it("flags a low balance, and shows a dash until it is known", () => {
+    credits.balanceUSD = 1.2;
+    renderPage();
+    expect(
+      screen.getByRole("link", { name: /Credits left/ }).textContent,
+    ).toContain("Low");
+    cleanup();
+    credits.balanceKnown = false;
+    renderPage();
+    expect(
+      screen.getByRole("link", { name: /Credits left/ }).textContent,
+    ).toContain("—");
   });
 
   it("marks the chosen range and reports a new one", () => {
