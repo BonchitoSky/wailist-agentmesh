@@ -69,6 +69,27 @@ describe("UsagePhonePage", () => {
       }),
     );
     expect(list.children).toHaveLength(data.byEndpoint.length);
+
+    // And it closes again.
+    const fewer = screen.getByRole("button", { name: "Show fewer" });
+    expect(fewer.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(fewer);
+    expect(list.children).toHaveLength(5);
+    expect(
+      screen
+        .getByRole("button", { name: /See all endpoints/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  // Part of the hash, as the website's settlements table shows it.
+  it("shows the start of each settlement's hash, linked to the explorer", () => {
+    const data = buildUsage("30d");
+    renderPage({ data });
+    const s = data.settlements[0];
+    const link = screen.getByRole("link", { name: `Transaction ${s.txId}` });
+    expect(link.textContent).toBe(`${s.txId.slice(0, 10)}…`);
+    expect(link.getAttribute("href")).toBe(s.explorerURL);
   });
 
   it("opens a workflow from its spend row", () => {

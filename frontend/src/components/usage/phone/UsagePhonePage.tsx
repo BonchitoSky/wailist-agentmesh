@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PullToRefresh } from "@/components/PullToRefresh";
@@ -62,7 +62,7 @@ export function UsagePhonePage(p: UsagePhoneProps) {
       data={p.data}
       range={p.range}
       allEndpoints={allEndpoints}
-      onAllEndpoints={() => setAllEndpoints(true)}
+      onToggleEndpoints={() => setAllEndpoints((v) => !v)}
     />
   );
 
@@ -110,13 +110,14 @@ function UsageBody({
   data,
   range,
   allEndpoints,
-  onAllEndpoints,
+  onToggleEndpoints,
 }: {
   data: UsagePayload;
   range: UsageRange;
   allEndpoints: boolean;
-  onAllEndpoints: () => void;
+  onToggleEndpoints: () => void;
 }) {
+  const endpointsHeading = useRef<HTMLHeadingElement>(null);
   const { summary, timeseries, byWorkflow, byEndpoint, settlements } = data;
 
   // The same category split the desktop donut draws, from endpoint totals.
@@ -242,7 +243,9 @@ function UsageBody({
 
       {endpoints.length > 0 && (
         <section className="bilp-section">
-          <h2 className="bilp-heading">Endpoints</h2>
+          <h2 className="bilp-heading" ref={endpointsHeading}>
+            Endpoints
+          </h2>
           <ul className="usgp-list">
             {shownEndpoints.map((e) => (
               <li key={`${e.host}${e.endpoint}`} className="usgp-row">
@@ -262,13 +265,25 @@ function UsageBody({
               </li>
             ))}
           </ul>
-          {!allEndpoints && endpoints.length > TOP && (
+          {endpoints.length > TOP && (
             <button
               type="button"
               className="bilp-link bilp-link--block"
-              onClick={onAllEndpoints}
+              aria-expanded={allEndpoints}
+              onClick={() => {
+                // Shrinking a long list from its bottom would leave the reader
+                // looking at the next section with no idea where they were.
+                if (allEndpoints) {
+                  endpointsHeading.current?.scrollIntoView?.({
+                    block: "start",
+                  });
+                }
+                onToggleEndpoints();
+              }}
             >
-              See all endpoints ({endpoints.length})
+              {allEndpoints
+                ? "Show fewer"
+                : `See all endpoints (${endpoints.length})`}
             </button>
           )}
         </section>
@@ -283,13 +298,18 @@ function UsageBody({
                 <span className="usgp-row__main">
                   <span className="usgp-row__name">{s.endpoint}</span>
                   <span className="usgp-row__sub">
-                    {names.get(s.workflowId) ?? "—"} · {relTime(s.ts)} ·{" "}
+                    {/* Part of the hash, as the website shows it -- first, so
+                        it is never the piece that wraps away. */}
                     <ExternalLink
                       href={s.explorerURL}
-                      style={{ color: "var(--accent)" }}
+                      className="usgp-hash"
+                      style={{ color: TYPE_PILL.x402 }}
+                      aria-label={`Transaction ${s.txId}`}
                     >
-                      tx
+                      {s.txId.slice(0, 10)}…
                     </ExternalLink>
+                    {" · "}
+                    {names.get(s.workflowId) ?? "—"} · {relTime(s.ts)}
                   </span>
                 </span>
                 <span className="usgp-row__fig">${usd(s.amountAlgo, 4)}</span>

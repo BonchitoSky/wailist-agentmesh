@@ -2708,6 +2708,14 @@ body[data-typing] .bottomnav {
   font-size: 11px;
   line-height: 16px;
 }
+/* A transaction hash, cut short and underlined as on the website's
+   settlements table. The colour is the x402 magenta, set inline from
+   TYPE_PILL so the two cannot drift. */
+.usgp-hash {
+  font-family: var(--font-mono);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .usgp-empty {
   margin-top: 24px;
 }
