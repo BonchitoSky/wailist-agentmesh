@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type { UpcomingRun } from "@/lib/types";
 
 const api = vi.hoisted(() => {
@@ -94,5 +100,43 @@ describe("UpcomingRuns", () => {
     render(<UpcomingRuns />);
     await settle();
     expect(screen.queryByText("Upcoming")).toBeNull();
+  });
+
+  // Every production caller hides an empty list, so an error that became []
+  // made the section vanish as if nothing were scheduled.
+  it("says a failed load failed, even where empty is hidden", async () => {
+    api.upcoming
+      .mockRejectedValueOnce(new Error("500"))
+      .mockResolvedValue([run({})]);
+    render(<UpcomingRuns hideWhenEmpty />);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/Couldn.t load upcoming runs/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Daily Market Brief")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("drops an older list that lands after a newer one", async () => {
+    let settleFirst!: (v: UpcomingRun[]) => void;
+    api.upcoming
+      .mockReturnValueOnce(
+        new Promise<UpcomingRun[]>((r) => {
+          settleFirst = r;
+        }),
+      )
+      .mockResolvedValue([run({ workflowName: "Newer schedule" })]);
+    render(<UpcomingRuns />);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(await screen.findByText("Newer schedule")).toBeTruthy();
+
+    await act(async () => {
+      settleFirst([run({ workflowName: "Older schedule" })]);
+    });
+    expect(screen.getByText("Newer schedule")).toBeTruthy();
+    expect(screen.queryByText("Older schedule")).toBeNull();
   });
 });

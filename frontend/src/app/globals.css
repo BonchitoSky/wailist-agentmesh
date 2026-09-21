@@ -2305,6 +2305,17 @@ a.upc__row:focus-visible {
   font-size: 13px;
   color: var(--fg-muted);
 }
+.upc__retry {
+  min-height: 44px;
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
 
 /* ── A workflow's own screen on the phone ─────────────────────────────── */
 .wfd-status {
