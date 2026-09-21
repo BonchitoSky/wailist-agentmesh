@@ -118,3 +118,25 @@ func TestListUpcomingRunsSkipsTicksMissedDuringAnOutage(t *testing.T) {
 		t.Errorf("later runs are %v apart, want 1h", gap)
 	}
 }
+
+// A workflow's own screen asks for its runs alone. Filtering the global top
+// 50 instead lost them once enough other schedules came sooner.
+func TestListUpcomingRunsForOneWorkflow(t *testing.T) {
+	d := testDeps(t)
+	user := newTestUser(t, d)
+	soon := time.Now().UTC().Truncate(time.Hour).Add(time.Hour)
+	for i := 0; i < 20; i++ {
+		scheduledWorkflow(t, d, user, fmt.Sprintf("Busy %d", i), "0 * * * *", soon, false)
+	}
+	later := scheduledWorkflow(t, d, user, "Daily", "0 9 * * *", soon.Add(24*time.Hour), false)
+
+	_, page := getUpcoming(t, d, user, "?limit=50&per=3&workflowId="+later)
+	if len(page.Upcoming) != 3 {
+		t.Fatalf("got %d upcoming for the workflow, want 3", len(page.Upcoming))
+	}
+	for _, u := range page.Upcoming {
+		if u.WorkflowID != later {
+			t.Fatalf("listed %q, want only %q", u.WorkflowID, later)
+		}
+	}
+}

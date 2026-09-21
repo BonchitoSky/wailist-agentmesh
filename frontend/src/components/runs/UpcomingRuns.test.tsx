@@ -71,7 +71,11 @@ describe("UpcomingRuns", () => {
     expect(screen.queryByText("Compliance Watch")).toBeNull();
     expect(screen.queryByText("Daily Market Brief")).toBeNull();
     expect(screen.queryAllByRole("link")).toHaveLength(0);
-    expect(api.upcoming).toHaveBeenCalledWith({ limit: 50, per: 3 });
+    expect(api.upcoming).toHaveBeenCalledWith({
+      limit: 3,
+      per: 3,
+      workflowId: "wf-brief",
+    });
   });
 
   it("says when nothing is scheduled, unless told to hide", async () => {

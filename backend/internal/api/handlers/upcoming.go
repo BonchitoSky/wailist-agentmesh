@@ -27,7 +27,9 @@ type upcomingRun struct {
 
 // ListUpcomingRuns returns the next scheduled runs across the user's
 // workflows, soonest first: up to ?per occurrences of each schedule, cut to
-// ?limit overall.
+// ?limit overall. ?workflowId narrows it to one of the user's workflows, so a
+// workflow's own screen is not at the mercy of every other schedule filling
+// the limit first.
 //
 // The first occurrence of each is the stored schedule_next_run_at, the exact
 // time the scheduler will claim, rather than one recomputed here. The rest
@@ -49,6 +51,8 @@ func (d *Deps) ListUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	onlyWorkflow := r.URL.Query().Get("workflowId")
+
 	wfs, err := d.Store.ListScheduledWorkflows(r.Context(), userID)
 	if err != nil {
 		respond.Error(w, http.StatusInternalServerError, err.Error())
@@ -58,6 +62,9 @@ func (d *Deps) ListUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	upcoming := []upcomingRun{}
 	for _, wf := range wfs {
+		if onlyWorkflow != "" && wf.ID != onlyWorkflow {
+			continue
+		}
 		if wf.ScheduleCron == nil || wf.ScheduleNextRunAt == nil {
 			continue
 		}

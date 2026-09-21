@@ -51,11 +51,17 @@ export function UpcomingRuns({
   const headingId = useId();
 
   const load = useCallback(() => {
-    // For one workflow, ask for enough of its occurrences to fill `limit`.
-    const request = workflowId ? { limit: 50, per: limit } : { limit, per: 3 };
+    // For one workflow, ask for that schedule alone, enough occurrences to
+    // fill `limit`. Filtering everyone's soonest 50 instead lost it whenever
+    // enough other schedules came first.
+    const request = workflowId
+      ? { limit, per: limit, workflowId }
+      : { limit, per: 3 };
     schedules
       .upcoming(request)
       .then((list) => {
+        // Still filtered here: a server older than the workflowId parameter
+        // ignores it and answers for every schedule.
         const mine = workflowId
           ? list.filter((u) => u.workflowId === workflowId)
           : list;
