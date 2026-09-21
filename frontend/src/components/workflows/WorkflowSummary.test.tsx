@@ -78,6 +78,19 @@ beforeEach(() => {
   api.run.mockResolvedValue({ runId: "r-2" });
   api.stop.mockResolvedValue(undefined);
   api.runGet.mockReset();
+  // A poll asks runs.get about a run the list has not picked up yet, so it
+  // needs a promise back. Still running: the pending row stays as it is.
+  api.runGet.mockResolvedValue({
+    run: {
+      id: "r-2",
+      workflowId: "wf-1",
+      triggeredBy: "manual",
+      status: "running",
+      startedAt: new Date().toISOString(),
+    },
+    logs: [],
+    deadLetters: [],
+  });
 });
 
 afterEach(() => {
