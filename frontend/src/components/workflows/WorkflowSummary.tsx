@@ -277,6 +277,27 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   }, [pendingId, refreshRuns]);
   usePolling(poll, anyRunning ? POLL_MS : IDLE_POLL_MS);
 
+  // Total runs, the 30-day figures and the next scheduled run come with the
+  // workflow, which is otherwise read once. So it is read again whenever the
+  // runs move: a new run appears (started here, elsewhere or by the
+  // schedule, which also advances the next run) or a running one finishes.
+  // Quietly -- a failed refresh keeps the figures already shown.
+  const runActivity = [
+    shown[0]?.id ?? "",
+    ...shown.filter((r) => r.status === "running").map((r) => r.id),
+  ].join("|");
+  const seenActivity = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runsLoaded) return;
+    const previous = seenActivity.current;
+    seenActivity.current = runActivity;
+    if (previous === null || previous === runActivity) return;
+    workflowsApi
+      .get(workflowId)
+      .then(applyWorkflow)
+      .catch(() => {});
+  }, [runActivity, runsLoaded, workflowId, applyWorkflow]);
+
   const now = useNow(anyRunning);
 
   const loadMore = async () => {
