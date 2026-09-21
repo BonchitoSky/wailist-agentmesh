@@ -300,16 +300,23 @@ function UsageBody({
                   <span className="usgp-row__sub">
                     {/* Part of the hash, as the website shows it -- first, so
                         it is never the piece that wraps away. */}
-                    <ExternalLink
-                      href={s.explorerURL}
-                      className="usgp-hash"
-                      style={{ color: TYPE_PILL.x402 }}
-                      aria-label={`Transaction ${s.txId}`}
-                    >
-                      {s.txId.slice(0, 10)}…
-                    </ExternalLink>
-                    {" · "}
-                    {names.get(s.workflowId) ?? "—"} · {relTime(s.ts)}
+                    {/* The separator rides with the hash, so a long workflow
+                        name wraps onto a line that starts with the name
+                        rather than with a stray dot. */}
+                    <span>
+                      <ExternalLink
+                        href={s.explorerURL}
+                        className="usgp-hash"
+                        style={{ color: TYPE_PILL.x402 }}
+                        aria-label={`Transaction ${s.txId}`}
+                      >
+                        {s.txId.slice(0, 10)}…
+                      </ExternalLink>{" "}
+                      ·
+                    </span>
+                    <span>
+                      {names.get(s.workflowId) ?? "—"} · {relTime(s.ts)}
+                    </span>
                   </span>
                 </span>
                 <span className="usgp-row__fig">${usd(s.amountAlgo, 4)}</span>
