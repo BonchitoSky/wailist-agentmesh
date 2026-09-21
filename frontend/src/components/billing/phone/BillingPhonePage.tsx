@@ -29,7 +29,8 @@ export interface BillingPhoneProps {
   balanceKnown: boolean;
   isLow: boolean;
   /** Spent across every workflow over the same 30 days the list counts. */
-  spent30dUSD: number;
+  // null while unknown: still loading, or the load failed.
+  spent30dUSD: number | null;
   returnState: { tone: "pending" | "error"; message: string } | null;
   /** The server's live rate. 0 until it arrives, and then nothing is quoted. */
   usdPerINR: number;
@@ -109,7 +110,9 @@ export function BillingPhonePage(p: BillingPhoneProps) {
         </div>
         <div className="bilp-stat">
           <span className="bilp-stat__label">Spent · 30d</span>
-          <span className="bilp-stat__value">{fmtUSD(p.spent30dUSD)}</span>
+          <span className="bilp-stat__value">
+            {p.spent30dUSD === null ? "—" : fmtUSD(p.spent30dUSD)}
+          </span>
         </div>
       </section>
 

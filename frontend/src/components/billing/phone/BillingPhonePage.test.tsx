@@ -79,6 +79,14 @@ describe("BillingPhonePage", () => {
     ).toBe("ok");
   });
 
+  // Zero is a real figure; not knowing is not zero.
+  it("shows a dash for spend until it is known", () => {
+    const { container } = renderPage({ spent30dUSD: null });
+    const stat = screen.getByText("Spent · 30d").parentElement!;
+    expect(stat.textContent).toContain("—");
+    expect(container.textContent).not.toContain("$0.00");
+  });
+
   it("warns when the balance is low", () => {
     const { container } = renderPage({ isLow: true, balanceUSD: 1.2 });
     expect(screen.getByText("Low")).toBeTruthy();

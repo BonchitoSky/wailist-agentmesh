@@ -75,7 +75,9 @@ export default function BillingPage() {
   } = useCredits();
   // The same 30-day figure the Workflows header shows, from the same
   // helper, so the two screens cannot quote different numbers.
-  const [spent30dUSD, setSpent30dUSD] = useState(0);
+  // null until the list answers, and after it fails: zero would read as a
+  // verified account that spent nothing.
+  const [spent30dUSD, setSpent30dUSD] = useState<number | null>(null);
   useEffect(() => {
     let live = true;
     void workflowsApi
