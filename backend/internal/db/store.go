@@ -1201,6 +1201,17 @@ func (s *Store) CreateCryptoCreditTransaction(ctx context.Context, userID, provi
 	return txn, err
 }
 
+// clearLowBalanceMarker goes in an UPDATE that adds $1 to a user's balance.
+// It clears the low-balance marker when the new balance is back at or above
+// the threshold. CheckAndMarkLowBalance also clears it, but it only runs when
+// a run finishes. Without this, a top-up that restored the balance left the
+// marker set, and the next drop below the threshold was never reported.
+// (In an UPDATE the right-hand side sees the row as it was, so the sum is the
+// new balance.)
+var clearLowBalanceMarker = fmt.Sprintf(`low_balance_notified_at = CASE
+		WHEN credit_balance_usd_micros + $1 >= %d THEN NULL
+		ELSE low_balance_notified_at END`, models.LowBalanceThresholdUSDMicros)
+
 // ErrCreditTransactionNotFound is returned when no credit_ledger row exists for the given
 // provider order ID — the caller supplied an order Razorpay never told us about (or that
 // our own CreateCreditTransaction failed to record). Callers should treat this as a
@@ -1255,7 +1266,9 @@ func (s *Store) CompleteCreditTransaction(ctx context.Context, provider, provide
 	}
 
 	if _, err := tx.Exec(ctx, `
-		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1 WHERE id = $2
+		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1,
+		`+clearLowBalanceMarker+`
+		WHERE id = $2
 	`, creditUSDMicros, userID); err != nil {
 		return 0, false, err
 	}
@@ -1574,7 +1587,8 @@ func (s *Store) RedeemCoupon(ctx context.Context, userID, code string) (newBalan
 	}
 
 	if err := tx.QueryRow(ctx, `
-		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1
+		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1,
+		`+clearLowBalanceMarker+`
 		WHERE id = $2
 		RETURNING credit_balance_usd_micros
 	`, amount, userID).Scan(&newBalance); err != nil {
