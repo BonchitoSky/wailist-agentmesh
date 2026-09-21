@@ -1,0 +1,98 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { buildUsage } from "@/lib/data";
+import { workflowHref } from "@/lib/routes";
+
+// The charts draw SVG from measured sizes; what is under test is the screen
+// around them.
+vi.mock("../AreaChart", () => ({
+  AreaChart: () => <div data-testid="chart" />,
+}));
+vi.mock("../Donut", () => ({ Donut: () => <div data-testid="donut" /> }));
+vi.mock("@/components/PullToRefresh", () => ({
+  PullToRefresh: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
+}));
+
+import { UsagePhonePage, type UsagePhoneProps } from "./UsagePhonePage";
+
+function renderPage(over: Partial<UsagePhoneProps> = {}) {
+  const props: UsagePhoneProps = {
+    range: "30d",
+    onRange: vi.fn(),
+    data: buildUsage("30d"),
+    loading: false,
+    error: null,
+    onRetry: vi.fn(),
+    ...over,
+  };
+  return { ...render(<UsagePhonePage {...props} />), props };
+}
+
+afterEach(cleanup);
+
+describe("UsagePhonePage", () => {
+  // Usage is not a tab, so the phone shows no bottom bar here.
+  it("has a way back to Account", () => {
+    renderPage();
+    expect(
+      screen.getByRole("link", { name: /Account/ }).getAttribute("href"),
+    ).toBe("/account");
+  });
+
+  it("marks the chosen range and reports a new one", () => {
+    const { props } = renderPage();
+    expect(
+      screen.getByRole("radio", { name: "30d" }).getAttribute("aria-checked"),
+    ).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "30d" }));
+    expect(props.onRange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("radio", { name: "7d" }));
+    expect(props.onRange).toHaveBeenCalledWith("7d");
+  });
+
+  it("leads with what was spent and how many calls, for the range", () => {
+    renderPage();
+    expect(screen.getByText("Spent · 30d")).toBeTruthy();
+    expect(screen.getByText("Calls · 30d")).toBeTruthy();
+  });
+
+  // The desktop endpoints table is 984px wide; a phone gets five rows.
+  it("lists the top five endpoints, and all of them on request", () => {
+    const data = buildUsage("30d");
+    renderPage({ data });
+    const heading = screen.getByRole("heading", { name: "Endpoints" });
+    const list = heading.parentElement!.querySelector("ul")!;
+    expect(list.children).toHaveLength(5);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `See all endpoints (${data.byEndpoint.length})`,
+      }),
+    );
+    expect(list.children).toHaveLength(data.byEndpoint.length);
+  });
+
+  it("opens a workflow from its spend row", () => {
+    const data = buildUsage("30d");
+    renderPage({ data });
+    const top = [...data.byWorkflow].sort((a, b) => b.algo - a.algo)[0];
+    expect(
+      screen
+        .getByRole("link", { name: new RegExp(top.name) })
+        .getAttribute("href"),
+    ).toBe(workflowHref(top.workflowId));
+  });
+
+  it("offers a retry when nothing could be loaded", () => {
+    const { props } = renderPage({ data: null, error: new Error("down") });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(props.onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a skeleton, not an error, while the first load runs", () => {
+    renderPage({ data: null, loading: true });
+    expect(screen.getByLabelText("Loading usage")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});

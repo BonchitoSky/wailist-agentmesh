@@ -17,6 +17,8 @@ import {
 import { AreaChart } from "./AreaChart";
 import { Donut, DonutSegment } from "./Donut";
 import { useIsHandheld } from "@/hooks/useIsHandheld";
+import { useReadOnly } from "@/hooks/useReadOnly";
+import { UsagePhonePage } from "./phone/UsagePhonePage";
 import {
   ALGO_USD,
   CAT_COLOR,
@@ -30,6 +32,7 @@ const RANGES: UsageRange[] = ["24h", "7d", "30d"];
 
 export function UsagePage() {
   const router = useRouter();
+  const readOnly = useReadOnly();
 
   const [range, setRange] = useState<UsageRange>("30d");
   const [data, setData] = useState<UsagePayload | null>(null);
@@ -102,6 +105,34 @@ export function UsagePage() {
     url.searchParams.delete("workflow");
     window.history.replaceState(null, "", url.pathname + url.search + url.hash);
   };
+
+  // A phone gets its own screen: the desktop page is two wide tables that
+  // only scroll sideways there. Every hook above has already run, so this
+  // return is safe, and the desktop JSX below is untouched.
+  if (readOnly) {
+    return (
+      <div
+        className="am-viewport"
+        style={{
+          height: "100dvh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          background: "var(--bg)",
+        }}
+      >
+        <Topbar />
+        <UsagePhonePage
+          range={range}
+          onRange={changeRange}
+          data={data}
+          loading={loading}
+          error={loadError}
+          onRetry={retry}
+        />
+      </div>
+    );
+  }
 
   return (
     <div

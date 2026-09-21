@@ -2581,6 +2581,143 @@ body[data-typing] .bottomnav {
   color: var(--fg-muted);
 }
 
+/* ── Usage on a phone ─────────────────────────────────────────────────────
+   Built on the Credits blocks above (.bilp-stats, -section, -seg, -heading,
+   -note), so the two money screens read as one family. What is new here is
+   the row: the desktop page's 984px endpoints table and 720px settlements
+   table become lists with the one figure that matters on the right. */
+.usgp-page[data-loading="true"]
+  > :not(.usgp-back):not(.bilp-title):not(.bilp-sub):not(.usgp-seg) {
+  opacity: 0.6;
+  transition: opacity 0.15s var(--ease);
+}
+.usgp-back {
+  margin-bottom: 14px;
+}
+/* Three ranges, not the four amounts .bilp-seg was written for. */
+.usgp-seg {
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 18px;
+}
+.usgp-delta {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+/* More spend is not good news on a spend screen, so it gets the warm colour. */
+.usgp-delta[data-up="true"] {
+  color: var(--warm);
+}
+.usgp-legend {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.usgp-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.usgp-legend i,
+.usgp-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.usgp-chart {
+  --us-chart-h: 150px;
+}
+.usgp-cats {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  align-items: center;
+  gap: 16px;
+}
+.usgp-donut {
+  width: 120px;
+}
+.usgp-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.usgp-list > li + li {
+  border-top: 1px solid var(--border-soft);
+}
+.usgp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 0;
+  color: var(--fg);
+  text-decoration: none;
+}
+.usgp-row__main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.usgp-row__main--inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.usgp-row__name {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usgp-row__sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.usgp-row__fig {
+  flex-shrink: 0;
+  display: grid;
+  justify-items: end;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  color: var(--fg);
+}
+.usgp-row__fig small {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.usgp-pill {
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+.usgp-empty {
+  margin-top: 24px;
+}
+.usgp-foot {
+  margin-top: 20px;
+}
+.usgp-skeleton {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+
 /* ── Upcoming runs ───────────────────────────────────────────────────────
    What the scheduler will start next. Shared by Activity, a workflow's own
    screen and the desktop Workflows page, so it keeps to the phone list's
