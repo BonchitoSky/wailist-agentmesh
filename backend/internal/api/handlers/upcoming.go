@@ -33,6 +33,11 @@ type upcomingRun struct {
 // time the scheduler will claim, rather than one recomputed here. The rest
 // follow it through the same standard cron parser SetSchedule and the
 // scheduler use, all in UTC.
+//
+// An overdue first occurrence fires once, and the scheduler then jumps past
+// every tick it missed (ClaimDueSchedules), so the occurrences after it start
+// from now rather than from the overdue time. Stepping one tick at a time
+// from there would list runs in the past that will never happen.
 func (d *Deps) ListUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 	userID, _ := r.Context().Value(CtxUserID).(string)
 	limit, ok := upcomingQueryInt(w, r, "limit", defaultUpcomingLimit, maxUpcomingLimit)
@@ -50,6 +55,7 @@ func (d *Deps) ListUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now().UTC()
 	upcoming := []upcomingRun{}
 	for _, wf := range wfs {
 		if wf.ScheduleCron == nil || wf.ScheduleNextRunAt == nil {
@@ -69,7 +75,11 @@ func (d *Deps) ListUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 				At:           at,
 				Cron:         *wf.ScheduleCron,
 			})
-			at = sched.Next(at)
+			if at.Before(now) {
+				at = sched.Next(now)
+			} else {
+				at = sched.Next(at)
+			}
 		}
 	}
 	sort.SliceStable(upcoming, func(i, j int) bool {

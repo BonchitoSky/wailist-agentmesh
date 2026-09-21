@@ -91,3 +91,30 @@ func TestListUpcomingRunsRejectsABadLimit(t *testing.T) {
 		}
 	}
 }
+
+// After an outage the stored next run is in the past. The scheduler fires it
+// once and then jumps past every missed tick, so only that one overdue row may
+// be listed before the list moves on to the future.
+func TestListUpcomingRunsSkipsTicksMissedDuringAnOutage(t *testing.T) {
+	d := testDeps(t)
+	user := newTestUser(t, d)
+	overdue := time.Now().UTC().Truncate(time.Hour).Add(-48 * time.Hour)
+	scheduledWorkflow(t, d, user, "Hourly", "0 * * * *", overdue, false)
+
+	_, page := getUpcoming(t, d, user, "?per=3")
+	if len(page.Upcoming) != 3 {
+		t.Fatalf("got %d upcoming, want 3", len(page.Upcoming))
+	}
+	if !page.Upcoming[0].At.Equal(overdue) {
+		t.Errorf("first = %v, want the overdue stored run %v", page.Upcoming[0].At, overdue)
+	}
+	now := time.Now()
+	for _, u := range page.Upcoming[1:] {
+		if !u.At.After(now) {
+			t.Errorf("listed %v, which is in the past and will never fire", u.At)
+		}
+	}
+	if gap := page.Upcoming[2].At.Sub(page.Upcoming[1].At); gap != time.Hour {
+		t.Errorf("later runs are %v apart, want 1h", gap)
+	}
+}
