@@ -182,6 +182,29 @@ describe("ActivityPage", () => {
     }
   });
 
+  // The first load is slow, a poll lands first, and the first load's older
+  // answer must not replace it.
+  it("drops a slow first load that a poll has overtaken", async () => {
+    const first = deferred<RunPage>();
+    api.recent
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(
+        page([run({ id: "r-1", workflowName: "Newer answer" })]),
+      );
+    render(<ActivityPage />);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(await screen.findByText("Newer answer")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve(page([run({ id: "r-1", workflowName: "Older answer" })]));
+    });
+    expect(screen.getByText("Newer answer")).toBeTruthy();
+    expect(screen.queryByText("Older answer")).toBeNull();
+  });
+
   it("refreshes on coming back to the foreground", async () => {
     api.recent
       .mockResolvedValueOnce(page([run({ id: "r-1" })]))
