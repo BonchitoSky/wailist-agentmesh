@@ -160,16 +160,24 @@ export function AreaChart({
         )}
       </svg>
 
-      {/* x-axis labels, positioned at their data points */}
+      {/* x-axis labels, positioned at their data points. Centred, the first
+          and last hung half their width past the chart's edges -- on a phone,
+          past the screen's. So the ends are anchored inward, and a label too
+          close to the last one is dropped rather than drawn over it. */}
       <div style={{ position: "relative", height: 14, marginTop: 4 }}>
         {data.map((d, i) =>
-          i % labelEvery === 0 || i === n - 1 ? (
+          i === n - 1 || (i % labelEvery === 0 && n - 1 - i >= labelEvery) ? (
             <span
               key={i}
               style={{
                 position: "absolute",
                 left: `${(x(i) / W) * 100}%`,
-                transform: "translateX(-50%)",
+                transform:
+                  i === 0
+                    ? "none"
+                    : i === n - 1
+                      ? "translateX(-100%)"
+                      : "translateX(-50%)",
                 fontFamily: "var(--font-mono)",
                 fontSize: 9,
                 color: "var(--fg-dim)",
