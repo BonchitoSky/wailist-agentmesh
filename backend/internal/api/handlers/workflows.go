@@ -86,7 +86,7 @@ func (d *Deps) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 	if n, err := d.Store.CountRuns(r.Context(), wf.ID); err != nil {
 		log.Printf("workflow %s run count: %v", wf.ID, err)
 	} else {
-		wf.TotalRuns = n
+		wf.TotalRuns = &n
 	}
 	decrypted := decryptNodes(wf.Nodes, d.EncryptionKey)
 	wf.Nodes = unmaskWebhookSecrets(maskNodes(wf.Nodes), decrypted)

@@ -72,6 +72,26 @@ func TestGetWorkflowCarriesItsRunFigures(t *testing.T) {
 	}
 }
 
+// A workflow that has never run says so with a zero; leaving the field out
+// made the app show a dash, as if the count had failed.
+func TestGetWorkflowSendsAZeroRunCount(t *testing.T) {
+	d := testDeps(t)
+	user := newTestUser(t, d)
+	id := scheduledWorkflow(t, d, user, "Never run", "", time.Time{}, false)
+	req := httptest.NewRequest(http.MethodGet, "/workflows/"+id, nil)
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, user))
+	req = withURLParam(req, "id", id)
+	w := httptest.NewRecorder()
+	d.GetWorkflow(w, req)
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := body["totalRuns"]; !ok || got != float64(0) {
+		t.Fatalf("totalRuns = %v (present %v), want 0", got, ok)
+	}
+}
+
 func TestUpdateWorkflowDescription(t *testing.T) {
 	d := testDeps(t)
 	user := newTestUser(t, d)
