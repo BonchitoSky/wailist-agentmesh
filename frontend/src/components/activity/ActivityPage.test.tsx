@@ -13,12 +13,12 @@ import type { RunPage, RunSummary } from "@/lib/types";
 // hands them.
 const api = vi.hoisted(() => {
   class RunsUnavailableError extends Error {}
-  return { RunsUnavailableError, recent: vi.fn() };
+  return { RunsUnavailableError, recent: vi.fn(), get: vi.fn() };
 });
 
 vi.mock("@/lib/api", () => ({
   RunsUnavailableError: api.RunsUnavailableError,
-  runs: { recent: api.recent },
+  runs: { recent: api.recent, get: api.get },
 }));
 vi.mock("@/components/Topbar", () => ({ Topbar: () => null }));
 vi.mock("@/components/PullToRefresh", () => ({
@@ -213,5 +213,66 @@ describe("ActivityPage", () => {
     });
     expect(screen.getByText("Fresh run")).toBeTruthy();
     expect(screen.queryByText("Stale load")).toBeNull();
+  });
+
+  describe("while a run is going", () => {
+    afterEach(() => vi.useRealTimers());
+
+    // A slow poll overtaken by a newer one could land last and put a finished
+    // run back to running.
+    it("polls one request at a time", async () => {
+      vi.useFakeTimers();
+      const slow = deferred<RunPage>();
+      api.recent
+        .mockResolvedValueOnce(page([run({ id: "r-1", status: "running" })]))
+        .mockReturnValueOnce(slow.promise);
+      render(<ActivityPage />);
+      await act(async () => {});
+
+      await act(async () => vi.advanceTimersByTimeAsync(3_000));
+      await act(async () => vi.advanceTimersByTimeAsync(9_000));
+      expect(api.recent).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        slow.resolve(page([run({ id: "r-1", status: "success" })]));
+      });
+      expect(screen.queryByText("Running")).toBeNull();
+    });
+
+    it("updates a running run that newer runs pushed off the first page", async () => {
+      vi.useFakeTimers();
+      const newer = Array.from({ length: 20 }, (_, i) =>
+        run({ id: `n-${i}`, workflowName: `Newer ${i}` }),
+      );
+      api.recent
+        .mockResolvedValueOnce(
+          page([
+            run({ id: "r-1", status: "running", workflowName: "Long job" }),
+          ]),
+        )
+        .mockResolvedValueOnce(page(newer));
+      api.get.mockResolvedValue({
+        run: {
+          id: "r-1",
+          workflowId: "wf-1",
+          triggeredBy: "schedule",
+          status: "success",
+          startedAt: new Date().toISOString(),
+          finishedAt: new Date().toISOString(),
+          spendUsdMicros: 80_000,
+        },
+        logs: [],
+        deadLetters: [],
+      });
+      render(<ActivityPage />);
+      await act(async () => {});
+      expect(screen.getByText("Running")).toBeTruthy();
+
+      await act(async () => vi.advanceTimersByTimeAsync(3_000));
+      expect(api.get).toHaveBeenCalledWith("r-1");
+      const row = screen.getByText("Long job").closest("button")!;
+      expect(row.textContent).not.toContain("Running");
+      expect(row.textContent).toContain("$0.08");
+    });
   });
 });

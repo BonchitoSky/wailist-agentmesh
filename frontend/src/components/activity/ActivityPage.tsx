@@ -10,7 +10,7 @@ import { useNow } from "@/hooks/useNow";
 import { runs as runsApi, RunsUnavailableError } from "@/lib/api";
 import type { RunPage, RunSummary } from "@/lib/types";
 import { groupRunsByDay } from "@/lib/runDays";
-import { mergeRuns } from "@/lib/runMerge";
+import { mergeRuns, withDetail } from "@/lib/runMerge";
 import {
   formatDuration,
   formatRunTime,
@@ -91,23 +91,56 @@ export function ActivityPage() {
 
   const anyRunning = runList.some((r) => r.status === "running");
 
+  // The newest list, for the poll below to read without restarting its timer.
+  const runListRef = useRef(runList);
+  useEffect(() => {
+    runListRef.current = runList;
+  });
+
   // Refresh while something is running and the screen is actually visible,
   // the same rule WorkflowSummary uses. Without this a running run in the
   // list stayed frozen until a manual pull-to-refresh.
   //
   // Merged rather than replaced (mergeRuns, not applyFirstPage): a pull is a
   // deliberate "start over from the top" gesture, but a silent background
-  // poll must not truncate pages the user has already loaded with
+  // poll must not drop pages the user has already loaded with
   // "Show older runs".
+  //
+  // One poll at a time. A slow request overtaken by a newer one could land
+  // last and put a finished run back to running. A poll that a pull started
+  // over is dropped for the same reason.
   useEffect(() => {
     if (!anyRunning) return;
-    const timer = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
-      runsApi
-        .recent({ limit: PAGE_SIZE })
-        .then((page) => setRunList((prev) => mergeRuns(page.runs, prev)))
-        .catch(() => {});
-    }, POLL_MS);
+    let polling = false;
+    const poll = async () => {
+      if (polling || document.visibilityState !== "visible") return;
+      polling = true;
+      const gen = generation.current;
+      try {
+        const page = await runsApi.recent({ limit: PAGE_SIZE });
+        // A running row that twenty newer runs have pushed off page one
+        // would otherwise keep its old status and spend for good.
+        const onPage = new Set(page.runs.map((r) => r.id));
+        const stranded = runListRef.current.filter(
+          (r) => r.status === "running" && !onPage.has(r.id),
+        );
+        const updated = await Promise.all(
+          stranded.map((r) =>
+            runsApi.get(r.id).then(
+              (d) => withDetail(r, d.run),
+              () => r,
+            ),
+          ),
+        );
+        if (gen !== generation.current) return;
+        setRunList((prev) => mergeRuns([...page.runs, ...updated], prev));
+      } catch {
+        // The next tick tries again.
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = setInterval(() => void poll(), POLL_MS);
     return () => clearInterval(timer);
   }, [anyRunning]);
 
