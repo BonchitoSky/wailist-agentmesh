@@ -1,8 +1,15 @@
 "use client";
 import { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { IS_NATIVE, setAuthToken, markAuthReady } from "@/lib/nativeAuth";
 import {
+  IS_NATIVE,
+  setAuthToken,
+  markAuthReady,
+  getAuthToken,
+} from "@/lib/nativeAuth";
+import { BASE } from "@/lib/api";
+import {
+  gateRoute,
   setInAppNavigator,
   takePendingRoute,
   type InAppRoute,
@@ -46,6 +53,9 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+// A mock build (no API configured) has no sessions to check.
+const hasSession = () => !BASE || getAuthToken() !== null;
+
 // Renders nothing. Mounted in the root layout because the session has to be
 // restored before any page makes its first authenticated call, not when some
 // particular screen happens to appear.
@@ -65,7 +75,8 @@ export function NativeBoot() {
   // attaches the listeners that navigate.
   useEffect(() => {
     if (!IS_NATIVE) return;
-    const go = ({ href, replace }: InAppRoute) => {
+    const go = (route: InAppRoute) => {
+      const { href, replace } = gateRoute(route, hasSession());
       if (replace) router.replace(href);
       else router.push(href);
     };
@@ -85,8 +96,9 @@ export function NativeBoot() {
     if (!IS_NATIVE || pathname === "/") return;
     const held = takePendingRoute();
     if (!held) return;
-    if (held.replace) router.replace(held.href);
-    else router.push(held.href);
+    const { href, replace } = gateRoute(held, hasSession());
+    if (replace) router.replace(href);
+    else router.push(href);
   }, [pathname, router]);
 
   useEffect(() => {

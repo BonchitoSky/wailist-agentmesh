@@ -68,13 +68,21 @@ export function RouteTransition({ children }: { children: React.ReactNode }) {
     // from anywhere, it is simply the first one.
     if (!el || !handheld || from === null || from === pathname) return;
 
+    el.classList.remove(FORWARD, BACK);
+    // No animation means no animationend to take the class off again, and the
+    // class is what clips the frame (.route-frame in responsive.css). Left on,
+    // it would hide real sideways overflow for the whole life of the screen.
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+
     const direction =
       enterDirection(from, pathname) === "back" ? BACK : FORWARD;
 
-    // Remove, force a reflow, re-add: without the reflow the browser coalesces
+    // Removed above, forced reflow, re-added: without the reflow the browser
+    // coalesces
     // the two class mutations and the animation never restarts, so a second
     // navigation in the same direction would play nothing at all.
-    el.classList.remove(FORWARD, BACK);
     void el.offsetWidth;
     el.classList.add(direction);
   }, [pathname, handheld]);

@@ -184,13 +184,21 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     );
   }, []);
 
-  const refreshRuns = useCallback(
-    () =>
-      runsApi
-        .listForWorkflow(workflowId, { limit: PAGE_SIZE })
-        .then(applyRunPage, applyRunsError),
-    [workflowId, applyRunPage, applyRunsError],
-  );
+  // Numbers each first-page request: the first load, a pull, a poll. Only
+  // the newest one started may land, so a slow first load cannot replace
+  // what a later poll already showed.
+  const runsSeq = useRef(0);
+  const refreshRuns = useCallback(() => {
+    const seq = ++runsSeq.current;
+    return runsApi.listForWorkflow(workflowId, { limit: PAGE_SIZE }).then(
+      (page) => {
+        if (seq === runsSeq.current) applyRunPage(page);
+      },
+      (e: unknown) => {
+        if (seq === runsSeq.current) applyRunsError(e);
+      },
+    );
+  }, [workflowId, applyRunPage, applyRunsError]);
   const loadWorkflow = useCallback(
     () => workflowsApi.get(workflowId).then(applyWorkflow, applyWorkflowError),
     [workflowId, applyWorkflow, applyWorkflowError],
@@ -208,9 +216,18 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     workflowsApi
       .get(workflowId)
       .then(unlessGone(applyWorkflow), unlessGone(applyWorkflowError));
+    const seq = ++runsSeq.current;
+    const unlessSuperseded =
+      <T,>(apply: (value: T) => void) =>
+      (value: T) => {
+        if (seq === runsSeq.current) apply(value);
+      };
     runsApi
       .listForWorkflow(workflowId, { limit: PAGE_SIZE })
-      .then(unlessGone(applyRunPage), unlessGone(applyRunsError));
+      .then(
+        unlessGone(unlessSuperseded(applyRunPage)),
+        unlessGone(unlessSuperseded(applyRunsError)),
+      );
     return () => {
       cancelled = true;
     };
@@ -233,12 +250,13 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   // workflow can be run from the website or by its trigger at any time, so an
   // idle list is polled too, only more slowly than one with a run going.
   const pendingId = pendingShown?.id ?? null;
+  // Returns its requests, so usePolling waits for them before the next poll.
   const poll = useCallback(() => {
-    void refreshRuns();
+    const requests: Promise<unknown>[] = [refreshRuns()];
     // A run the list has not picked up yet is asked about directly, so it
     // still settles when the list is slow to include it.
     if (pendingId) {
-      runsApi
+      const pendingRequest = runsApi
         .get(pendingId)
         .then(({ run }) => {
           if (run.status === "running") return;
@@ -253,7 +271,9 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
           );
         })
         .catch(() => {});
+      requests.push(pendingRequest);
     }
+    return Promise.all(requests);
   }, [pendingId, refreshRuns]);
   usePolling(poll, anyRunning ? POLL_MS : IDLE_POLL_MS);
 
@@ -341,6 +361,12 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   const ready =
     workflow !== null && (runsLoaded || runsUnavailable || runsError !== null);
   const hasZone = workflow?.geofenceLat !== undefined;
+
+  // The sheet follows the row, not the copy taken when it was tapped, so a
+  // refresh that brings new spend or a new status reaches the open sheet.
+  const selectedRun = selected
+    ? (shown.find((r) => r.id === selected.id) ?? selected)
+    : null;
 
   return (
     <div
@@ -566,9 +592,9 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
       </PullToRefresh>
 
       <style>{SUMMARY_CSS}</style>
-      {selected && (
+      {selectedRun && (
         <RunSheet
-          run={selected}
+          run={selectedRun}
           onClose={() => setSelected(null)}
           returnFocusTo={openerRef}
         />

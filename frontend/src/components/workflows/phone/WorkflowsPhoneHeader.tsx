@@ -27,7 +27,12 @@ export function WorkflowsPhoneHeader({
 }) {
   const router = useRouter();
   const { balanceUSD, balanceKnown } = useCredits();
-  const count = shown === total ? `${total} total` : `${shown} of ${total}`;
+  const narrowed = shown !== total;
+  const count = narrowed ? `${shown} of ${total}` : `${total} total`;
+  // Spoken in place of the visible text, so it has to say the same thing.
+  const spokenCount = narrowed
+    ? `${shown} of ${total} workflows shown`
+    : `${total} workflows`;
   const spent = formatDollars(spend);
   return (
     <header className="wfp-head">
@@ -45,7 +50,7 @@ export function WorkflowsPhoneHeader({
       <div className="wfp-head__facts">
         <span
           className="wfp-head__summary"
-          aria-label={`${total} workflows, ${spent} spent in the last 30 days`}
+          aria-label={`${spokenCount}, ${spent} spent in the last 30 days`}
         >
           {count} <span aria-hidden>·</span> {spent} spent
         </span>

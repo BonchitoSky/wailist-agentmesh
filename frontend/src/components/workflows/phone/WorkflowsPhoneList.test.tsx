@@ -70,17 +70,13 @@ describe("WorkflowsPhoneList", () => {
       <WorkflowsPhoneList workflows={LIST} loading={false} error={null} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Filter and sort" }));
-    fireEvent.click(
-      screen.getByRole("menuitemradio", { name: /^Lowest cost/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /^Lowest cost/ }));
     expect(rowNames()).toEqual([
       "Invoice check",
       "Daily Market Brief",
       "Customer Support Triage",
     ]);
-    fireEvent.click(
-      screen.getByRole("menuitemradio", { name: /^Lowest cost/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /^Lowest cost/ }));
     expect(rowNames()[0]).toBe("Customer Support Triage");
   });
 
@@ -94,7 +90,7 @@ describe("WorkflowsPhoneList", () => {
     expect(rowNames()).toEqual(["Daily Market Brief"]);
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Filter and sort" }));
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Paused" }));
+    fireEvent.click(screen.getByRole("button", { name: "Paused" }));
     expect(rowNames()).toEqual(["Invoice check"]);
   });
 
@@ -129,5 +125,26 @@ describe("WorkflowsPhoneList", () => {
     expect(screen.getByRole("alert").textContent).toBe(
       "could not load your workflows",
     );
+  });
+
+  // A failed first load says nothing about the account, so it must not be
+  // presented as an empty one.
+  it("shows a failure with a retry, not the empty state, when loading failed", () => {
+    const onRetry = vi.fn();
+    render(
+      <WorkflowsPhoneList
+        workflows={[]}
+        loading={false}
+        error="could not load your workflows"
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.getByRole("alert").textContent).toBe(
+      "could not load your workflows",
+    );
+    expect(screen.queryByText(/No workflows yet/)).toBeNull();
+    expect(screen.getByText(/Couldn.t load your workflows/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });
