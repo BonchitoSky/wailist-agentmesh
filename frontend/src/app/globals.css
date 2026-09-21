@@ -2386,8 +2386,15 @@ a.upc__row:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The model is stored text and can be one long unbroken id, so it may shrink
+   and wraps anywhere rather than pushing the row past the screen edge. Capped
+   so the agent's name keeps room beside it. */
 .wfd-agent__meta {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 60%;
+  overflow-wrap: anywhere;
+  text-align: right;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-muted);
