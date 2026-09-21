@@ -34,6 +34,12 @@ describe("WorkflowsPhoneHeader", () => {
     const { container } = renderHeader({ shown: 1, spend: 2.12 });
     expect(container.textContent).toContain("1 of 6");
     expect(container.textContent).not.toContain("6 total");
+    // The label replaces the text for a screen reader, so it narrows too.
+    expect(
+      screen.getByLabelText(
+        "1 of 6 workflows shown, $2.12 spent in the last 30 days",
+      ),
+    ).toBeTruthy();
   });
 
   // Carried over from CreditStrip, which this header replaces.

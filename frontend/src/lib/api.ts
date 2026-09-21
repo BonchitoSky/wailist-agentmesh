@@ -763,14 +763,16 @@ export class UpcomingUnavailableError extends Error {
 
 export const schedules = {
   // What the scheduler will run next, soonest first: up to `per` occurrences
-  // of each schedule, `limit` in all (GET /schedules/upcoming).
+  // of each schedule, `limit` in all (GET /schedules/upcoming). `workflowId`
+  // asks for that one workflow's schedule alone.
   upcoming: async (
-    options: { limit?: number; per?: number } = {},
+    options: { limit?: number; per?: number; workflowId?: string } = {},
   ): Promise<UpcomingRun[]> => {
     if (BASE) {
       const q = new URLSearchParams();
       if (options.limit) q.set("limit", String(options.limit));
       if (options.per) q.set("per", String(options.per));
+      if (options.workflowId) q.set("workflowId", options.workflowId);
       const query = q.toString() ? `?${q}` : "";
       const res = await apiFetch(`${BASE}/schedules/upcoming${query}`, {
         credentials: "include",

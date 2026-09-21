@@ -221,8 +221,10 @@ type Workflow struct {
 	// until someone writes one; the app then summarises the graph instead.
 	Description string `json:"description,omitempty"`
 	// TotalRuns counts every run the workflow has ever had. Only the detail
-	// endpoint fills it; the list carries the 30-day Runs instead.
-	TotalRuns int `json:"totalRuns,omitempty"`
+	// endpoint fills it; the list carries the 30-day Runs instead. A pointer
+	// so a real zero is sent: nil means the count could not be taken, and the
+	// app shows a dash for that, not for a workflow that has never run.
+	TotalRuns *int `json:"totalRuns,omitempty"`
 	// ScheduleCron is a standard 5-field cron expression (UTC). Empty/nil
 	// means the workflow has no schedule -- set via SetWorkflowSchedule,
 	// never written directly through UpdateWorkflow's graph save.

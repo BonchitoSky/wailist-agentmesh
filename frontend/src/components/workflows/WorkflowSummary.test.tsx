@@ -229,6 +229,29 @@ describe("WorkflowSummary", () => {
     expect(await screen.findByText("Failed")).toBeTruthy();
   });
 
+  // The figures come with the workflow, which used to be read once, so they
+  // stayed at their pre-run values while the run list moved on.
+  it("re-reads its figures when a run starts and when it finishes", async () => {
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await screen.findByText("Succeeded");
+    expect(api.get).toHaveBeenCalledTimes(1);
+
+    api.get.mockResolvedValue(workflow({ totalRuns: 2 }));
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByText("Running");
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+
+    api.get.mockResolvedValue(workflow({ totalRuns: 2, runs: 2 }));
+    api.listForWorkflow.mockResolvedValue(
+      page([{ ...FINISHED, id: "r-2" }, FINISHED]),
+    );
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(3));
+    const fact = (label: string) =>
+      screen.getByText(label).nextElementSibling?.textContent;
+    await waitFor(() => expect(fact("Total runs")).toBe("2"));
+  });
+
   it("describes itself from its graph until a description is written", async () => {
     render(<WorkflowSummary workflowId="wf-1" />);
     expect(await screen.findByText(/^Runs when started\./)).toBeTruthy();
