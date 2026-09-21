@@ -15,6 +15,7 @@ import {
   CAT_COLOR,
   CAT_LABEL,
   TYPE_PILL,
+  centreFigure,
   relTime,
   usd,
 } from "../format";
@@ -227,7 +228,8 @@ function UsageBody({
                 value: cats[k],
                 color: CAT_COLOR[k],
               }))}
-              centerLabel={`$${usd(spent)}`}
+              centerLabel={centreFigure(spent)}
+              ariaLabel={`$${usd(spent)} spent in the last ${range}`}
               centerSub={range}
             />
           </div>

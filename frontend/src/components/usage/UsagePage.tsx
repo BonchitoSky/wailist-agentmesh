@@ -24,6 +24,7 @@ import {
   CAT_COLOR,
   CAT_LABEL,
   TYPE_PILL,
+  compactUsd,
   relTime,
   usd,
 } from "./format";
@@ -1461,13 +1462,6 @@ function Empty({ text }: { text: string }) {
 }
 
 // ── formatting helpers ──────────────────────────────────────────────────────
-// Compact USD for the credit balance -- keeps large figures small (100K, 50, 2.3M).
-function compactUsd(algoAmount: number) {
-  return Intl.NumberFormat("en", {
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(algoAmount * ALGO_USD);
-}
 // Per-unit prices are often sub-cent ($0.00034/quote), so unlike usd() this
 // keeps up to 5 fraction digits instead of rounding everything to 2.
 function usdPrice(algoAmount: number) {

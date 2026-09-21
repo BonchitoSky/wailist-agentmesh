@@ -42,3 +42,16 @@ export function relTime(iso: string) {
   if (h < 24) return `${h}h ago`;
   return `${Math.floor(h / 24)}d ago`;
 }
+// Compact USD for the credit balance -- keeps large figures small (100K, 50, 2.3M).
+export function compactUsd(algoAmount: number) {
+  return Intl.NumberFormat("en", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(algoAmount * ALGO_USD);
+}
+// The figure in the middle of a ring has a fixed hole to fit in. Exact below a
+// thousand, compact above ($12.3K, $1.2M): the exact amount is on the screen
+// beside it, so the ring only has to say how big.
+export function centreFigure(amount: number) {
+  return amount < 1000 ? `$${usd(amount)}` : `$${compactUsd(amount)}`;
+}
