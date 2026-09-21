@@ -90,36 +90,9 @@ export function websocketOrigin(origin: string): string {
  *     compromised dependency would reach for first, and does not close the
  *     question.
  */
-/**
- * Everything the Cashfree checkout needs, as one origin pattern.
- *
- * Paying used to happen on the website because this policy blocked the SDK in
- * the WebView, which made the app the one place a stalled run could not be
- * fixed. It blocked it in four separate ways, and all four had to open:
- *
- *   - script-src, for the SDK itself from sdk.cashfree.com;
- *   - connect-src, for its calls to api.cashfree.com (sandbox.cashfree.com in
- *     a sandbox build);
- *   - frame-src, which was absent and therefore fell back to default-src
- *     'self'. checkout({ redirectTarget: "_modal" }) renders the hosted
- *     payment page in an iframe, so a missing frame-src blocked the payment
- *     UI outright;
- *   - form-action, for a bank or card page that posts back.
- *
- * A wildcard rather than a list, which is a deliberate trade against the rest
- * of this file's precision. The SDK's bundle names only sdk.cashfree.com, but
- * the host that ends up in the iframe is Cashfree's to choose and is not
- * published as a stable set. A missing host here does not fail at build time
- * or in a test -- it fails when a real person taps Pay, with the reason in a
- * console nobody is watching, which is the exact failure mode this file
- * already warns about twice. The scope is one vendor's domain, and that vendor
- * is already trusted with the payment.
- */
-const PAYMENTS = "https://*.cashfree.com";
-
 export function buildCsp(apiUrl: string | undefined): string {
   const origin = apiOrigin(apiUrl);
-  const connect = ["'self'", PAYMENTS];
+  const connect = ["'self'"];
   if (origin) {
     connect.push(origin, websocketOrigin(origin));
   }
@@ -128,7 +101,7 @@ export function buildCsp(apiUrl: string | undefined): string {
     ["default-src", ["'self'"]],
     // See the doc comment: neither of these can be tightened in a static export
     // without a server to mint nonces.
-    ["script-src", ["'self'", "'unsafe-inline'", PAYMENTS]],
+    ["script-src", ["'self'", "'unsafe-inline'"]],
     ["style-src", ["'self'", "'unsafe-inline'"]],
     // Connector logos and user avatars come from arbitrary https hosts, and a
     // broken image is a cosmetic failure rather than a security one. data: and
@@ -147,13 +120,10 @@ export function buildCsp(apiUrl: string | undefined): string {
     ["font-src", ["'self'"]],
     ["connect-src", connect],
     ["media-src", ["'self'", "data:", "blob:"]],
-    // The hosted payment page is framed, not redirected to. Without this
-    // the directive falls back to default-src and the checkout is blank.
-    ["frame-src", ["'self'", PAYMENTS]],
     ["worker-src", ["'self'", "blob:"]],
     ["object-src", ["'none'"]],
     ["base-uri", ["'self'"]],
-    ["form-action", ["'self'", PAYMENTS]],
+    ["form-action", ["'self'"]],
     // frame-ancestors is deliberately absent. It is one of the directives the
     // spec says a <meta>-delivered policy MUST ignore (along with sandbox and
     // report-uri), and Chrome says so out loud: "The Content Security Policy

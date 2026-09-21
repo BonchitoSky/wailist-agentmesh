@@ -74,8 +74,6 @@ describe("buildCsp", () => {
       .slice(1);
     expect(sources).toEqual([
       "'self'",
-      // The payment vendor, so a top-up can happen in the app.
-      "https://*.cashfree.com",
       "https://api.agent-mesh.app",
       "wss://api.agent-mesh.app",
     ]);
@@ -88,10 +86,7 @@ describe("buildCsp", () => {
 
   it("still produces a valid policy with no API configured", () => {
     const policy = buildCsp("");
-    // The payment vendor does not depend on the API being configured.
-    expect(directive(policy, "connect-src")).toBe(
-      "connect-src 'self' https://*.cashfree.com",
-    );
+    expect(directive(policy, "connect-src")).toBe("connect-src 'self'");
     expect(policy).not.toContain("null");
     expect(policy).not.toContain("undefined");
   });
@@ -100,11 +95,7 @@ describe("buildCsp", () => {
     const policy = buildCsp(API);
     expect(directive(policy, "object-src")).toBe("object-src 'none'");
     expect(directive(policy, "base-uri")).toBe("base-uri 'self'");
-    // form-action also admits the payment vendor, so that a bank or card
-    // page can post back. Everything else is still shut.
-    expect(directive(policy, "form-action")).toBe(
-      "form-action 'self' https://*.cashfree.com",
-    );
+    expect(directive(policy, "form-action")).toBe("form-action 'self'");
   });
 
   it("closes font-src, since the fonts are self-hosted", () => {
@@ -138,52 +129,5 @@ describe("buildCsp", () => {
     const policy = buildCsp(API);
     expect(policy).not.toContain("\n");
     expect(policy.startsWith("default-src 'self'")).toBe(true);
-  });
-});
-
-// Paying inside the app is the whole point of these four directives. Each one
-// blocked a different part of the Cashfree checkout, and each failed silently
-// at the moment someone tapped Pay.
-describe("the payment origins", () => {
-  const policy = buildCsp(API);
-  const PAY = "https://*.cashfree.com";
-
-  it("lets the SDK load", () => {
-    expect(directive(policy, "script-src")).toContain(PAY);
-  });
-
-  it("lets the SDK talk to its own API", () => {
-    expect(directive(policy, "connect-src")).toContain(PAY);
-  });
-
-  // redirectTarget: "_modal" renders the hosted page in an iframe. Without a
-  // frame-src the directive falls back to default-src 'self' and the
-  // checkout comes up blank.
-  it("lets the hosted payment page be framed", () => {
-    expect(directive(policy, "frame-src")).toContain(PAY);
-  });
-
-  it("lets a bank or card page post back", () => {
-    expect(directive(policy, "form-action")).toContain(PAY);
-  });
-
-  it("opens nothing wider than that one vendor", () => {
-    // The wildcard is a subdomain of one domain, never a bare https:.
-    for (const name of [
-      "script-src",
-      "connect-src",
-      "frame-src",
-      "form-action",
-    ]) {
-      const d = directive(policy, name);
-      expect(d).not.toMatch(/\shttps:(\s|$)/);
-      expect(d).not.toContain("*.com");
-    }
-  });
-
-  it("still names the backend, and still refuses everything else", () => {
-    expect(directive(policy, "connect-src")).toContain(API);
-    expect(directive(policy, "object-src")).toBe("object-src 'none'");
-    expect(directive(policy, "default-src")).toBe("default-src 'self'");
   });
 });
