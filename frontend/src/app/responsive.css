@@ -347,11 +347,9 @@
 /* Not decoration, so it goes entirely rather than being shortened: someone who
    has asked for less motion is not asking for faster motion.
 
-   With no animation there is no animationend, so the class is never cleaned off
-   the wrapper. That is deliberate and harmless -- it paints nothing, and the
-   next navigation strips both classes before adding one. Worth writing down,
-   because "the class is still on the element" looks like a leak to anyone
-   reading the DOM rather than this comment. */
+   RouteTransition does not add the class at all in this case: with no
+   animation there would be no animationend to remove it, and it would keep the
+   frame clipped. This rule covers a preference that changes mid-animation. */
 @media (prefers-reduced-motion: reduce) {
   .route-enter-fwd,
   .route-enter-back {
