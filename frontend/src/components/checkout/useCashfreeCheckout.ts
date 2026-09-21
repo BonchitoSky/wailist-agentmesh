@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type CashfreeInstance, load } from "@cashfreepayments/cashfree-js";
+import type { CashfreeInstance } from "@cashfreepayments/cashfree-js";
 import { payments } from "@/lib/api";
 
 export function useCashfreeCheckout({
@@ -27,7 +27,13 @@ export function useCashfreeCheckout({
       process.env.NEXT_PUBLIC_CASHFREE_MODE === "sandbox"
         ? "sandbox"
         : "production";
-    load({ mode })
+    // Imported here, not at the top of the file: the package injects
+    // Cashfree's script as soon as it is imported. The Credits page imports
+    // the checkout modal, so a static import fetched the payment SDK on every
+    // visit, including in the Android app, which pays on the website instead
+    // and whose CSP refuses the script. Now it loads once a checkout opens.
+    import("@cashfreepayments/cashfree-js")
+      .then(({ load }) => load({ mode }))
       .then((cf) => {
         cashfreeRef.current = cf;
         setReady(true);
