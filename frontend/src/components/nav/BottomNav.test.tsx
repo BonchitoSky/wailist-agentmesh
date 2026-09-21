@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe("BottomNav", () => {
-  it("offers Workflows, Activity, Credits and Account on a handheld", () => {
+  it("offers Workflows, Activity, Usage and Account on a handheld", () => {
     state.pathname = "/activity";
     render(<BottomNav />);
 
@@ -26,13 +26,13 @@ describe("BottomNav", () => {
     expect(links.map((l) => l.textContent)).toEqual([
       "Workflows",
       "Activity",
-      "Credits",
+      "Usage",
       "Account",
     ]);
     expect(links.map((l) => l.getAttribute("href"))).toEqual([
       "/workflows",
       "/activity",
-      "/billing",
+      "/usage",
       "/account",
     ]);
     expect(
@@ -43,17 +43,21 @@ describe("BottomNav", () => {
     expect(document.body.hasAttribute("data-bottomnav")).toBe(true);
   });
 
-  // Reaching /billing from the Workflows "+" used to land on a screen with no
-  // bottom bar and no back button. It is a tab root now, so the bar is there.
-  it("shows on the Credits tab, so billing is never a dead end", () => {
-    state.pathname = "/billing";
+  it("shows on the Usage tab", () => {
+    state.pathname = "/usage";
     render(<BottomNav />);
     expect(
-      screen
-        .getByRole("link", { name: "Credits" })
-        .getAttribute("aria-current"),
+      screen.getByRole("link", { name: "Usage" }).getAttribute("aria-current"),
     ).toBe("page");
     expect(document.body.hasAttribute("data-bottomnav")).toBe(true);
+  });
+
+  // Credits is reached from the Workflows "+" and from Account, and carries
+  // its own Back link, so the bar does not show there.
+  it("does not show on Credits, which is not a tab", () => {
+    state.pathname = "/billing";
+    render(<BottomNav />);
+    expect(screen.queryByRole("navigation", { name: "Primary" })).toBeNull();
   });
 
   it("no longer offers the Bazaar", () => {

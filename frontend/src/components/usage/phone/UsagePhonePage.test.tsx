@@ -33,12 +33,10 @@ function renderPage(over: Partial<UsagePhoneProps> = {}) {
 afterEach(cleanup);
 
 describe("UsagePhonePage", () => {
-  // Usage is not a tab, so the phone shows no bottom bar here.
-  it("has a way back to Account", () => {
+  // Usage is a tab, so the bottom bar is the way around; no back link.
+  it("has no back link of its own", () => {
     renderPage();
-    expect(
-      screen.getByRole("link", { name: /Account/ }).getAttribute("href"),
-    ).toBe("/account");
+    expect(screen.queryByRole("link", { name: /Account|Back/ })).toBeNull();
   });
 
   it("marks the chosen range and reports a new one", () => {

@@ -15,8 +15,8 @@ describe("isTabRoot", () => {
   });
 
   it("is false for a route with no tab, and for the marketing page", () => {
-    expect(isTabRoot("/usage")).toBe(false);
     expect(isTabRoot("/bazaar")).toBe(false);
+    expect(isTabRoot("/billing")).toBe(false);
     expect(isTabRoot("/")).toBe(false);
   });
 
@@ -28,13 +28,15 @@ describe("isTabRoot", () => {
 describe("the handheld tabs", () => {
   const labels = () => HANDHELD_TAB_ITEMS.map((i) => i.label);
 
-  it("carry Credits, so a run short of credit can be fixed from a phone", () => {
-    expect(labels()).toEqual(["Workflows", "Activity", "Credits", "Account"]);
-    expect(HANDHELD_TAB_ITEMS.find((i) => i.label === "Credits")?.href).toBe(
-      "/billing",
+  // Usage is something you check; Credits is somewhere you go to top up,
+  // reached from the Workflows "+" and from Account.
+  it("carry Usage rather than Credits", () => {
+    expect(labels()).toEqual(["Workflows", "Activity", "Usage", "Account"]);
+    expect(HANDHELD_TAB_ITEMS.find((i) => i.label === "Usage")?.href).toBe(
+      "/usage",
     );
     // Being a tab root is what puts the bottom bar on that screen.
-    expect(isTabRoot("/billing")).toBe(true);
+    expect(isTabRoot("/usage")).toBe(true);
   });
 
   it("leave out the Bazaar, which is for building on a computer", () => {

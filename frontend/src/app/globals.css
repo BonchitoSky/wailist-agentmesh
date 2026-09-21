@@ -2581,18 +2581,20 @@ body[data-typing] .bottomnav {
   color: var(--fg-muted);
 }
 
+/* Credits is not a tab root, so it carries its own way back. */
+.bilp-back {
+  margin-bottom: 14px;
+}
+
 /* ── Usage on a phone ─────────────────────────────────────────────────────
    Built on the Credits blocks above (.bilp-stats, -section, -seg, -heading,
    -note), so the two money screens read as one family. What is new here is
    the row: the desktop page's 984px endpoints table and 720px settlements
    table become lists with the one figure that matters on the right. */
 .usgp-page[data-loading="true"]
-  > :not(.usgp-back):not(.bilp-title):not(.bilp-sub):not(.usgp-seg) {
+  > :not(.bilp-title):not(.bilp-sub):not(.usgp-seg) {
   opacity: 0.6;
   transition: opacity 0.15s var(--ease);
-}
-.usgp-back {
-  margin-bottom: 14px;
 }
 /* Three ranges, not the four amounts .bilp-seg was written for. */
 .usgp-seg {

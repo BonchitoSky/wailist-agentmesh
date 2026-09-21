@@ -1,7 +1,6 @@
 "use client";
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ghostBtn } from "@/components/ui/buttons";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ExternalLink } from "@/components/ExternalLink";
@@ -73,16 +72,6 @@ export function UsagePhonePage(p: UsagePhoneProps) {
       style={{ flex: 1, minHeight: 0, background: "var(--bg)" }}
     >
       <main className="bilp-page usgp-page" data-loading={p.loading}>
-        {/* Usage is reached from Account and is not a tab, so there is no
-            bottom bar here -- this is the way back. */}
-        <Link
-          href="/account"
-          className="usgp-back"
-          style={{ ...ghostBtn, minHeight: 44, textDecoration: "none" }}
-        >
-          ← Account
-        </Link>
-
         <h1 className="bilp-title">Usage</h1>
         <p className="bilp-sub">What your agents spent, and on what.</p>
 

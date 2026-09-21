@@ -40,18 +40,18 @@ export const APP_NAV_ITEMS: readonly NavItem[] = [
 
 /**
  * Tabs for the bottom bar on a phone or tablet. A handheld is mostly used to
- * check on workflows, so Activity takes a tab. Credits takes one too: a run
- * that stops for want of credit is the thing a phone has to fix on the spot,
- * and a tab root is also the only place the bottom bar shows, so reaching
- * /billing any other way left that screen with no visible way back. Usage
- * still sits under Account, and the Bazaar is deliberately absent: it is for
- * building, which happens on a computer.
+ * check on workflows, so Activity and Usage take tabs: both are things you
+ * look at. Credits is not a tab: the app pays on the website, so it is a place
+ * you go to top up, reached from the Workflows "+", Account's Credits row and
+ * low-balance notifications. It is not a tab root, so it has no bottom bar and
+ * carries its own Back link instead. The Bazaar is deliberately absent: it is
+ * for building, which happens on a computer.
  * APP_NAV_ITEMS stays the desktop and top bar navigation.
  */
 export const HANDHELD_TAB_ITEMS: readonly NavItem[] = [
   { label: "Workflows", href: "/workflows" },
   { label: "Activity", href: "/activity" },
-  { label: "Credits", href: "/billing" },
+  { label: "Usage", href: "/usage" },
   { label: "Account", href: "/account" },
 ];
 

@@ -9,7 +9,6 @@ import {
   isTabRoot,
   type NavItem,
 } from "@/lib/nav";
-import { IconWallet } from "@/components/ui";
 
 // The app's navigation on a phone.
 //
@@ -123,13 +122,13 @@ export function BottomNav() {
 }
 
 // Icons live here rather than in lib/nav.ts, which is a plain manifest and has
-// no business importing JSX. IconWallet already exists and already means the
-// right thing; the others are drawn here because nothing in the set did.
+// no business importing JSX. They are drawn here because nothing in the set
+// had them.
 function TabIcon({ item }: { item: NavItem }) {
   const size = 20;
   switch (item.href) {
-    case "/billing":
-      return <IconWallet size={size} />;
+    case "/usage":
+      return <IconBars size={size} />;
     case "/activity":
       return <IconPulse size={size} />;
     case "/account":
@@ -174,6 +173,21 @@ const IconPulse = ({ size = 16 }: { size?: number }) => (
       strokeLinecap="round"
       strokeLinejoin="round"
     />
+  </svg>
+);
+
+const IconBars = ({ size = 16 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.3"
+    aria-hidden="true"
+    style={{ display: "block" }}
+  >
+    <path d="M2 14h12M4 11.5V8M8 11.5V3.5M12 11.5V6" strokeLinecap="round" />
   </svg>
 );
 

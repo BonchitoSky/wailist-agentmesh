@@ -1,5 +1,7 @@
 "use client";
 import { useState } from "react";
+import Link from "next/link";
+import { ghostBtn } from "@/components/ui/buttons";
 import { IconArrow, IconWallet } from "@/components/ui";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { creditsForTopup } from "@/lib/credits/fx";
@@ -69,6 +71,22 @@ export function BillingPhonePage(p: BillingPhoneProps) {
 
   return (
     <main className="bilp-page">
+      {/* Credits is not a tab -- it is reached from the Workflows "+", from
+          Account and from a low-balance notification -- so there is no bottom
+          bar here. Back returns to wherever it was opened from; with nothing
+          to go back to, Workflows is home. */}
+      <Link
+        href="/workflows"
+        className="bilp-back"
+        style={{ ...ghostBtn, minHeight: 44, textDecoration: "none" }}
+        onClick={(e) => {
+          if (window.history.length <= 1) return;
+          e.preventDefault();
+          window.history.back();
+        }}
+      >
+        ← Back
+      </Link>
       <h1 className="bilp-title">Credits</h1>
       <p className="bilp-sub">What you hold, and what your agents spent.</p>
 

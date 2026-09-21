@@ -258,3 +258,23 @@ describe("in the Android app", () => {
     expect(screen.getByText("Last payment")).toBeTruthy();
   });
 });
+
+// Credits is not a tab, so it has no bottom bar and needs its own way back.
+describe("the way back", () => {
+  it("returns to wherever Credits was opened from", () => {
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const length = vi.spyOn(window.history, "length", "get").mockReturnValue(3);
+    renderPage();
+    fireEvent.click(screen.getByRole("link", { name: /Back/ }));
+    expect(back).toHaveBeenCalledTimes(1);
+    back.mockRestore();
+    length.mockRestore();
+  });
+
+  it("falls back to Workflows when there is nothing to go back to", () => {
+    renderPage();
+    expect(
+      screen.getByRole("link", { name: /Back/ }).getAttribute("href"),
+    ).toBe("/workflows");
+  });
+});
