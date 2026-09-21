@@ -151,17 +151,14 @@ func (d *Deps) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
 	encryptedNodes := encryptNodes(body.Nodes, d.EncryptionKey, existing.Nodes)
 	encryptedNodes = ensureWebhookSecrets(encryptedNodes, d.EncryptionKey)
 	graph := models.WorkflowGraph{Nodes: encryptedNodes, Edges: body.Edges}
-	wf, err := d.Store.UpdateWorkflow(r.Context(), id, body.Name, graph)
+	var newDescription *string
+	if body.Description != nil {
+		newDescription = &description
+	}
+	wf, err := d.Store.UpdateWorkflowAndDescription(r.Context(), id, body.Name, graph, newDescription)
 	if err != nil {
 		respond.Error(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	if body.Description != nil {
-		if err := d.Store.SetWorkflowDescription(r.Context(), id, description); err != nil {
-			respond.Error(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		wf.Description = description
 	}
 	decrypted := decryptNodes(wf.Nodes, d.EncryptionKey)
 	wf.Nodes = unmaskWebhookSecrets(maskNodes(wf.Nodes), decrypted)

@@ -602,12 +602,27 @@ func (s *Store) attachWorkflowStats(ctx context.Context, userID string, wfs []mo
 }
 
 func (s *Store) UpdateWorkflow(ctx context.Context, id, name string, graph models.WorkflowGraph) (models.Workflow, error) {
+	return s.UpdateWorkflowAndDescription(ctx, id, name, graph, nil)
+}
+
+// UpdateWorkflowAndDescription saves the name, the graph and, when
+// description is non-nil, the description, in one statement. A save that
+// changes both either takes effect whole or not at all; two statements could
+// commit the graph and then fail on the description, answering 500 for a save
+// that half happened. A nil description leaves the stored one alone, and an
+// empty one clears it.
+func (s *Store) UpdateWorkflowAndDescription(ctx context.Context, id, name string, graph models.WorkflowGraph, description *string) (models.Workflow, error) {
 	graphJSON, _ := json.Marshal(graph)
+	var value *string
+	if description != nil && *description != "" {
+		value = description
+	}
 	row := s.pool.QueryRow(ctx, `
-		UPDATE workflows SET name=$2, graph=$3::jsonb, updated_at=NOW()
+		UPDATE workflows SET name=$2, graph=$3::jsonb, updated_at=NOW(),
+			description = CASE WHEN $4::boolean THEN $5::text ELSE description END
 		WHERE id=$1
 		RETURNING `+workflowColumns+`
-	`, id, name, string(graphJSON))
+	`, id, name, string(graphJSON), description != nil, value)
 	return scanWorkflowRow(row)
 }
 
