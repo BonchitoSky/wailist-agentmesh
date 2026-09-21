@@ -263,6 +263,12 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     workflow !== null && (runsLoaded || runsUnavailable || runsError !== null);
   const hasZone = workflow?.geofenceLat !== undefined;
 
+  // The sheet follows the row, not the copy taken when it was tapped, so a
+  // refresh that brings new spend or a new status reaches the open sheet.
+  const selectedRun = selected
+    ? (shown.find((r) => r.id === selected.id) ?? selected)
+    : null;
+
   return (
     <div
       className="am-viewport"
@@ -476,9 +482,9 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
       </PullToRefresh>
 
       <style>{SUMMARY_CSS}</style>
-      {selected && (
+      {selectedRun && (
         <RunSheet
-          run={selected}
+          run={selectedRun}
           onClose={() => setSelected(null)}
           returnFocusTo={openerRef}
         />

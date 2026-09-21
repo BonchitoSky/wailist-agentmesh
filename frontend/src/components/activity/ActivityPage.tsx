@@ -109,6 +109,12 @@ export function ActivityPage() {
     }
   };
 
+  // The sheet follows the row, not the copy taken when it was tapped, so a
+  // refresh that brings new spend or a new status reaches the open sheet.
+  const selectedRun = selected
+    ? (runList.find((r) => r.id === selected.id) ?? selected)
+    : null;
+
   return (
     <div
       className="am-viewport"
@@ -222,9 +228,9 @@ export function ActivityPage() {
       </PullToRefresh>
 
       <style>{ACTIVITY_CSS}</style>
-      {selected && (
+      {selectedRun && (
         <RunSheet
-          run={selected}
+          run={selectedRun}
           onClose={() => setSelected(null)}
           returnFocusTo={openerRef}
         />

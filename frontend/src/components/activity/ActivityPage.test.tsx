@@ -150,6 +150,25 @@ describe("ActivityPage", () => {
     ).toBeNull();
   });
 
+  // The sheet shows the row as it is now, not as it was when tapped.
+  it("updates an open sheet when a refresh brings new figures", async () => {
+    api.recent
+      .mockResolvedValueOnce(page([run({ id: "r-1", status: "running" })]))
+      .mockResolvedValueOnce(
+        page([run({ id: "r-1", status: "running", spendUsdMicros: 90_000 })]),
+      );
+    render(<ActivityPage />);
+    fireEvent.click(
+      (await screen.findByText("Morning digest")).closest("button")!,
+    );
+    expect(screen.getByRole("dialog").dataset.spend).toBe("21000");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    });
+    expect(screen.getByRole("dialog").dataset.spend).toBe("90000");
+  });
+
   it("drops an older page that lands after a refresh", async () => {
     const older = deferred<RunPage>();
     api.recent
