@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import type { RunPage, RunSummary } from "@/lib/types";
 
 // The screen is tested against a stubbed API. The top bar, the pull gesture
@@ -16,15 +22,35 @@ vi.mock("@/lib/api", () => ({
 }));
 vi.mock("@/components/Topbar", () => ({ Topbar: () => null }));
 vi.mock("@/components/PullToRefresh", () => ({
-  PullToRefresh: ({ children }: { children: React.ReactNode }) => (
-    <div>{children}</div>
+  PullToRefresh: ({
+    children,
+    onRefresh,
+  }: {
+    children: React.ReactNode;
+    onRefresh: () => Promise<unknown>;
+  }) => (
+    <div>
+      <button type="button" onClick={() => void onRefresh()}>
+        Pull to refresh
+      </button>
+      {children}
+    </div>
   ),
 }));
 vi.mock("@/components/runs/RunSheet", () => ({
   RunSheet: ({ run }: { run: RunSummary }) => (
-    <div role="dialog">sheet for {run.id}</div>
+    <div role="dialog" data-spend={run.spendUsdMicros}>
+      sheet for {run.id}
+    </div>
   ),
 }));
+
+// A promise the test settles when it chooses, to put responses out of order.
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
 
 import { ActivityPage } from "./ActivityPage";
 
@@ -122,5 +148,70 @@ describe("ActivityPage", () => {
     expect(
       screen.queryByRole("button", { name: "Show older runs" }),
     ).toBeNull();
+  });
+
+  // The sheet shows the row as it is now, not as it was when tapped.
+  it("updates an open sheet when a refresh brings new figures", async () => {
+    api.recent
+      .mockResolvedValueOnce(page([run({ id: "r-1", status: "running" })]))
+      .mockResolvedValueOnce(
+        page([run({ id: "r-1", status: "running", spendUsdMicros: 90_000 })]),
+      );
+    render(<ActivityPage />);
+    fireEvent.click(
+      (await screen.findByText("Morning digest")).closest("button")!,
+    );
+    expect(screen.getByRole("dialog").dataset.spend).toBe("21000");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    });
+    expect(screen.getByRole("dialog").dataset.spend).toBe("90000");
+  });
+
+  it("drops an older page that lands after a refresh", async () => {
+    const older = deferred<RunPage>();
+    api.recent
+      .mockResolvedValueOnce(page([run({ id: "r-3" })], "c1"))
+      .mockReturnValueOnce(older.promise)
+      .mockResolvedValueOnce(
+        page([run({ id: "r-4", workflowName: "Fresh run" })], "c9"),
+      );
+    render(<ActivityPage />);
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Show older runs" }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    });
+    expect(screen.getByText("Fresh run")).toBeTruthy();
+
+    await act(async () => {
+      older.resolve(page([run({ id: "r-1", workflowName: "Stale page" })]));
+    });
+    expect(screen.queryByText("Stale page")).toBeNull();
+    // The cursor is still the refreshed list's.
+    fireEvent.click(screen.getByRole("button", { name: "Show older runs" }));
+    expect(api.recent).toHaveBeenLastCalledWith({ cursor: "c9", limit: 20 });
+  });
+
+  it("drops a slow first load that lands after a refresh", async () => {
+    const first = deferred<RunPage>();
+    api.recent
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(
+        page([run({ id: "r-4", workflowName: "Fresh run" })]),
+      );
+    render(<ActivityPage />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    });
+    await act(async () => {
+      first.resolve(page([run({ id: "r-1", workflowName: "Stale load" })]));
+    });
+    expect(screen.getByText("Fresh run")).toBeTruthy();
+    expect(screen.queryByText("Stale load")).toBeNull();
   });
 });
