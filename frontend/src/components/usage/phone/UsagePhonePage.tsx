@@ -212,7 +212,7 @@ function UsageBody({
           </span>
         </div>
         <div className="usgp-chart">
-          <AreaChart data={timeseries} algoUsd={ALGO_USD} />
+          <AreaChart data={timeseries} algoUsd={ALGO_USD} maxLabels={5} />
         </div>
       </section>
 

@@ -18,10 +18,16 @@ export function AreaChart({
   data,
   height = 210,
   algoUsd = 1,
+  maxLabels = 6,
 }: {
   data: UsagePoint[];
   height?: number;
   algoUsd?: number;
+  /**
+   * How many dates the axis may show. A narrow chart needs fewer: with the
+   * first label anchored left, it and the second ran together at 320px.
+   */
+  maxLabels?: number;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -65,7 +71,7 @@ export function AreaChart({
   const lineUsage = `M ${usageTop.join(" L ")}`;
 
   const gridY = [0, 0.25, 0.5, 0.75, 1].map((f) => padT + f * innerH);
-  const labelEvery = Math.max(1, Math.ceil(n / 6));
+  const labelEvery = Math.max(1, Math.ceil(n / maxLabels));
 
   const onMove = (e: React.MouseEvent) => {
     const el = wrapRef.current;
