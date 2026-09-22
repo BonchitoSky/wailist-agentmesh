@@ -26,6 +26,10 @@ const api = vi.hoisted(() => {
 
 vi.mock("@/lib/api", () => ({
   RunsUnavailableError: api.RunsUnavailableError,
+  // A scheduled workflow also shows its upcoming runs, which have their own
+  // tests; here they only need to answer.
+  UpcomingUnavailableError: class extends Error {},
+  schedules: { upcoming: vi.fn(async () => []) },
   workflows: { get: api.get, run: api.run, stop: api.stop },
   runs: { listForWorkflow: api.listForWorkflow, get: api.runGet },
 }));
