@@ -1,0 +1,59 @@
+import { describe, expect, it } from "vitest";
+import { describeSchedule } from "./describeSchedule";
+
+// The backend stores schedules as 5-field cron in UTC. People read them as
+// plain words in their own time, so every case pins a time zone.
+const NOW = new Date(Date.UTC(2026, 8, 22, 12, 0));
+const say = (cron: string, timeZone = "UTC") =>
+  describeSchedule(cron, NOW, timeZone);
+
+describe("describeSchedule", () => {
+  it("says a daily time", () => {
+    expect(say("0 9 * * *")).toBe("Every day at 9:00 AM");
+    expect(say("30 14 * * *")).toBe("Every day at 2:30 PM");
+  });
+
+  it("converts the time from UTC to the reader's zone", () => {
+    // 07:00 UTC is 12:30 in India.
+    expect(say("0 7 * * 1-5", "Asia/Kolkata")).toBe(
+      "Every weekday at 12:30 PM",
+    );
+  });
+
+  it("names weekdays, weekends, one day and short lists", () => {
+    expect(say("0 7 * * 1-5")).toBe("Every weekday at 7:00 AM");
+    expect(say("0 10 * * 0,6")).toBe("Every weekend at 10:00 AM");
+    expect(say("0 9 * * 1")).toBe("Every Monday at 9:00 AM");
+    expect(say("0 9 * * 1,3,5")).toBe("Every Mon, Wed and Fri at 9:00 AM");
+    expect(say("0 9 * * 7")).toBe("Every Sunday at 9:00 AM");
+  });
+
+  it("moves the day when the local time crosses midnight", () => {
+    // Monday 02:00 UTC is still Sunday evening in Los Angeles.
+    expect(say("0 2 * * 1", "America/Los_Angeles")).toBe(
+      "Every Sunday at 7:00 PM",
+    );
+    // Monday-Friday 20:00 UTC is Tuesday-Saturday morning in India.
+    expect(say("0 20 * * 1-5", "Asia/Kolkata")).toBe(
+      "Every Tue, Wed, Thu, Fri and Sat at 1:30 AM",
+    );
+  });
+
+  it("says a monthly day", () => {
+    expect(say("0 9 1 * *")).toBe("Every month on the 1st at 9:00 AM");
+    expect(say("0 9 22 * *")).toBe("Every month on the 22nd at 9:00 AM");
+  });
+
+  it("says repeating intervals", () => {
+    expect(say("0 */6 * * *")).toBe("Every 6 hours");
+    expect(say("0 * * * *")).toBe("Every hour");
+    expect(say("*/15 * * * *")).toBe("Every 15 minutes");
+    expect(say("* * * * *")).toBe("Every minute");
+  });
+
+  it("never shows the raw expression for a shape it does not know", () => {
+    for (const cron of ["0 9 * 1 *", "0 9 1 * 1", "5 4 * * sun", "nope", ""]) {
+      expect(say(cron)).toBe("On a custom schedule");
+    }
+  });
+});

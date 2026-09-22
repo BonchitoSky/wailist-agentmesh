@@ -25,6 +25,7 @@ import {
   triggerLabel,
 } from "@/lib/runFormat";
 import { workflowHref } from "@/lib/routes";
+import { describeSchedule } from "@/lib/describeSchedule";
 
 // A workflow as a phone needs it: is it running, what did its runs do and
 // cost, and Run or Stop. The graph itself is not shown here; it is edited on a
@@ -332,8 +333,12 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
                   : workflow.scheduleCron
                     ? "Runs on a schedule · "
                     : "Runs when started"}
+                {/* In words and the reader's own time. The cron itself stays
+                    in the tooltip for whoever needs the exact expression. */}
                 {!chat && workflow.scheduleCron && (
-                  <code style={cron}>{workflow.scheduleCron}</code>
+                  <span style={schedule} title={workflow.scheduleCron}>
+                    {describeSchedule(workflow.scheduleCron)}
+                  </span>
                 )}
               </p>
 
@@ -551,8 +556,7 @@ const copy: React.CSSProperties = {
   margin: 0,
 };
 
-const cron: React.CSSProperties = {
-  font: "500 12px/1 var(--font-mono)",
+const schedule: React.CSSProperties = {
   color: "var(--fg)",
 };
 
