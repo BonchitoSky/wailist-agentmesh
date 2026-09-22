@@ -141,6 +141,9 @@ export function ActivityPage() {
         applyFirstPage(page);
       } else {
         setRunList((prev) => mergeRuns([...page.runs, ...updated], prev));
+        // An accepted answer means the list is current again, so an error
+        // left by an earlier failure no longer describes anything.
+        setError(null);
       }
     } catch {
       // The next tick tries again.

@@ -44,6 +44,21 @@ describe("describeSchedule", () => {
     expect(say("0 9 22 * *")).toBe("Every month on the 22nd at 9:00 AM");
   });
 
+  // NOW is in September, which has no 31st. Sampling only this month rolled
+  // the day into October 1st and named the wrong day.
+  it("keeps a late day that the current month does not have", () => {
+    expect(say("0 9 31 * *")).toBe("Every month on the 31st at 9:00 AM");
+    expect(say("0 9 29 * *")).toBe("Every month on the 29th at 9:00 AM");
+  });
+
+  // 02:00 UTC on the 1st is the evening before in Los Angeles -- the 31st,
+  // 30th or 28th depending on the month -- so no single day is true.
+  it("says custom when the local day changes from month to month", () => {
+    expect(say("0 2 1 * *", "America/Los_Angeles")).toBe(
+      "On a custom schedule",
+    );
+  });
+
   it("says repeating intervals", () => {
     expect(say("0 */6 * * *")).toBe("Every 6 hours");
     expect(say("0 * * * *")).toBe("Every hour");

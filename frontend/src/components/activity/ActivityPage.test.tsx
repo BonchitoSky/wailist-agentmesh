@@ -205,6 +205,24 @@ describe("ActivityPage", () => {
     expect(screen.queryByText("Older answer")).toBeNull();
   });
 
+  // A failed first load shows an error; the next successful poll has to take
+  // it away, not leave it standing above rows that loaded fine.
+  it("clears the error when a later poll succeeds", async () => {
+    api.recent
+      .mockRejectedValueOnce(new Error("Could not reach the server"))
+      .mockResolvedValue(page([run({ id: "r-1" })]));
+    render(<ActivityPage />);
+    expect(await screen.findByText("Could not reach the server")).toBeTruthy();
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(await screen.findByText("Morning digest")).toBeTruthy();
+    expect(screen.queryByText("Could not reach the server")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("refreshes on coming back to the foreground", async () => {
     api.recent
       .mockResolvedValueOnce(page([run({ id: "r-1" })]))
