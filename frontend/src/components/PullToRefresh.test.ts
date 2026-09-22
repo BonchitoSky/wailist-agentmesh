@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { damp, PULL_THRESHOLD_PX } from "./PullToRefresh";
+import { arrowTurn, damp, PULL_THRESHOLD_PX } from "./PullToRefresh";
 
 // The resistance curve, tested without a touchscreen.
 //
@@ -42,5 +42,24 @@ describe("damp", () => {
     // a long pull hauls the indicator down the whole screen.
     expect(damp(400)).toBeLessThan(damp(200) * 2);
     expect(damp(400)).toBeLessThan(400);
+  });
+});
+
+// The arrow turns with the pull instead of flipping at the threshold. A flip
+// on a timer fought the finger, and flickered when the pull hovered there.
+describe("arrowTurn", () => {
+  it("points down at rest and up once the pull will fire", () => {
+    expect(arrowTurn(0)).toBe(0);
+    expect(arrowTurn(PULL_THRESHOLD_PX)).toBe(180);
+  });
+
+  it("turns in step with the pull, never past half a turn", () => {
+    expect(arrowTurn(PULL_THRESHOLD_PX / 2)).toBe(90);
+    expect(arrowTurn(PULL_THRESHOLD_PX * 3)).toBe(180);
+    let previous = -1;
+    for (let offset = 0; offset <= PULL_THRESHOLD_PX; offset += 4) {
+      expect(arrowTurn(offset)).toBeGreaterThanOrEqual(previous);
+      previous = arrowTurn(offset);
+    }
   });
 });
