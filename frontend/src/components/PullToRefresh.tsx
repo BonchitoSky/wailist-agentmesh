@@ -37,6 +37,19 @@ export function damp(distance: number): number {
   return Math.round(Math.sqrt(distance) * 6);
 }
 
+/**
+ * How far the arrow has turned for a given pull, in degrees: 0 (pointing down)
+ * at rest, 180 (pointing up, "let go now") once the pull will fire.
+ *
+ * Proportional rather than a flip at the threshold. The flip ran on a timer,
+ * so it lagged the finger, and a pull hovering at the threshold made it flick
+ * back and forth. Turning in step with the pull keeps it attached to the
+ * thumb, and still ends pointing up exactly when release would refresh.
+ */
+export function arrowTurn(offset: number): number {
+  return Math.round(Math.min(Math.max(offset, 0) / PULL_THRESHOLD_PX, 1) * 180);
+}
+
 export function PullToRefresh({
   onRefresh,
   className,
@@ -159,7 +172,7 @@ export function PullToRefresh({
           data-spinning={refreshing ? "" : undefined}
           style={{ transform: `translate(-50%, ${offset - 28}px)` }}
         >
-          <Arrow armed={offset >= PULL_THRESHOLD_PX} spinning={refreshing} />
+          {refreshing ? <Spinner /> : <Arrow turn={arrowTurn(offset)} />}
         </div>
       )}
       <div
@@ -179,7 +192,10 @@ export function PullToRefresh({
   );
 }
 
-function Arrow({ armed, spinning }: { armed: boolean; spinning: boolean }) {
+// Points down while pulling and turns with the pull, pointing up once letting
+// go will refresh. No transition: it tracks the finger frame by frame, as the
+// indicator's position already does.
+function Arrow({ turn }: { turn: number }) {
   return (
     <svg
       width="16"
@@ -189,15 +205,31 @@ function Arrow({ armed, spinning }: { armed: boolean; spinning: boolean }) {
       stroke="currentColor"
       strokeWidth="1.5"
       strokeLinecap="round"
-      style={{
-        display: "block",
-        // Points down while pulling, flips once it will fire. The rotation is
-        // the only thing that says "let go now" before the release.
-        transform: spinning ? undefined : `rotate(${armed ? 180 : 0}deg)`,
-        transition: "transform 0.15s var(--ease)",
-      }}
+      style={{ display: "block", transform: `rotate(${turn}deg)` }}
     >
       <path d="M8 2.5v11M3.5 9 8 13.5 12.5 9" />
+    </svg>
+  );
+}
+
+// What the refresh shows instead of the arrow: an open ring, which reads as
+// loading however it is rotated. The arrow used to stay and spin, and an arrow
+// turning in circles reads as something gone wrong. The ring turns through the
+// indicator's ptr-spin animation (responsive.css).
+function Spinner() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      style={{ display: "block" }}
+      data-testid="ptr-spinner"
+    >
+      <path d="M8 2a6 6 0 1 1-6 6" />
     </svg>
   );
 }
