@@ -71,19 +71,21 @@ export function BottomNav() {
     // keyboard and leaves the field focused, and the bar used to stay hidden
     // with nothing on screen to hide it for. So the keyboard is read from the
     // viewport, which shrinks by the keyboard's height when it opens, measured
-    // against the tallest height seen at this width (rotation starts over).
+    // against the tallest height seen at this width.
+    //
+    // Rotation starts the baseline over, except while the keyboard is up: the
+    // first height in the new orientation is already shrunk by it, and taking
+    // that as full height brought the bar back above the open keyboard. Then
+    // the baseline stays unknown -- keyboard assumed up -- until the height
+    // jumps back (the keyboard closed) or focus leaves the field.
     const KEYBOARD_MIN_PX = 150;
     const height = () => window.visualViewport?.height ?? window.innerHeight;
-    let tallest = height();
+    let tallest: number | null = height();
+    let last = height();
     let width = window.innerWidth;
     const sync = () => {
       if (!live) return;
-      if (window.innerWidth !== width) {
-        width = window.innerWidth;
-        tallest = height();
-      }
-      tallest = Math.max(tallest, height());
-      const keyboardUp = tallest - height() > KEYBOARD_MIN_PX;
+      const h = height();
       const el = document.activeElement;
       const textField =
         (el instanceof HTMLInputElement &&
@@ -91,6 +93,18 @@ export function BottomNav() {
           !el.readOnly) ||
         (el instanceof HTMLTextAreaElement && !el.readOnly) ||
         (el instanceof HTMLElement && el.isContentEditable);
+      if (window.innerWidth !== width) {
+        width = window.innerWidth;
+        const keyboardWasUp = document.body.hasAttribute("data-typing");
+        tallest = keyboardWasUp && textField ? null : h;
+      }
+      if (tallest === null && (!textField || h - last > KEYBOARD_MIN_PX)) {
+        tallest = h;
+      }
+      if (tallest !== null) tallest = Math.max(tallest, h);
+      last = h;
+      const keyboardUp =
+        tallest === null ? true : tallest - h > KEYBOARD_MIN_PX;
       if (textField && keyboardUp) {
         document.body.setAttribute("data-typing", "");
       } else {

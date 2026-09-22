@@ -46,9 +46,7 @@ describe("WorkflowsPhoneHeader", () => {
   it("shows the credit balance, labelled so it is not read as spend", () => {
     const { container } = renderHeader();
     expect(container.textContent).toContain("$12.50");
-    expect(
-      screen.getByLabelText("Credit balance $12.50, add credits"),
-    ).toBeTruthy();
+    expect(screen.getByLabelText("Credit $12.50, add credits")).toBeTruthy();
   });
 
   it("shows a dash, not $0.00, until the balance is known", () => {
@@ -56,6 +54,25 @@ describe("WorkflowsPhoneHeader", () => {
     const { container } = renderHeader();
     expect(container.textContent).toContain("—");
     expect(container.textContent).not.toContain("$0.00");
+    // The spoken name still starts with what is on screen.
+    expect(
+      screen.getByLabelText("Credit —, balance not loaded yet, add credits"),
+    ).toBeTruthy();
+  });
+
+  // WCAG 2.5.3: a voice-control user says what they see.
+  it("starts the balance's spoken name with its visible text", () => {
+    renderHeader();
+    const balance = screen.getByRole("button", { name: /add credits/ });
+    const visible = balance.textContent!.replace("›", "").trim();
+    expect(balance.getAttribute("aria-label")!.startsWith(visible)).toBe(true);
+  });
+
+  it("shows dashes, not zeros, for a list that has not loaded", () => {
+    const { container } = renderHeader({ known: false });
+    expect(screen.getByLabelText("Workflows not loaded")).toBeTruthy();
+    expect(container.textContent).not.toContain("6 total");
+    expect(container.textContent).not.toContain("$8.71");
   });
 
   // The balance is the way to top up. No separate button: a labelled pill

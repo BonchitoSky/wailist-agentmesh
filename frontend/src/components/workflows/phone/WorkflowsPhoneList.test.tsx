@@ -146,5 +146,9 @@ describe("WorkflowsPhoneList", () => {
     expect(screen.getByText(/Couldn.t load your workflows/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
+    // Nothing loaded, so there are no figures to show -- not zeros.
+    const summary = screen.getByLabelText("Workflows not loaded");
+    expect(summary.textContent).not.toMatch(/0 total|\$0/);
+    expect(screen.queryByLabelText(/0 workflows/)).toBeNull();
   });
 });
