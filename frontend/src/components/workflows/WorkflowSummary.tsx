@@ -204,20 +204,37 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   // change in run activity -- and they can overlap. Numbered the same way, so
   // a slow read (say, the one a run starting triggered) cannot land after a
   // newer one and put back figures from before the run finished.
+  //
+  // "Newer" means newer and successful. A read that fails changes nothing on
+  // screen, so it must not stop an older one from landing: the quiet re-read
+  // after a run starts can fail while the first load is still in flight, and
+  // when that outranked the first load the screen stayed on its skeleton.
   const workflowSeq = useRef(0);
+  const shownWorkflowSeq = useRef(0);
+  const landWorkflow = useCallback(
+    (seq: number, wf: Workflow) => {
+      if (seq <= shownWorkflowSeq.current) return;
+      shownWorkflowSeq.current = seq;
+      applyWorkflow(wf);
+    },
+    [applyWorkflow],
+  );
+  // An error is shown only while nothing newer has succeeded.
+  const landWorkflowError = useCallback(
+    (seq: number, e: unknown, onError?: (e: unknown) => void) => {
+      if (seq > shownWorkflowSeq.current) onError?.(e);
+    },
+    [],
+  );
   const readWorkflow = useCallback(
     (onError?: (e: unknown) => void) => {
       const seq = ++workflowSeq.current;
       return workflowsApi.get(workflowId).then(
-        (wf) => {
-          if (seq === workflowSeq.current) applyWorkflow(wf);
-        },
-        (e: unknown) => {
-          if (seq === workflowSeq.current) onError?.(e);
-        },
+        (wf) => landWorkflow(seq, wf),
+        (e: unknown) => landWorkflowError(seq, e, onError),
       );
     },
-    [workflowId, applyWorkflow],
+    [workflowId, landWorkflow, landWorkflowError],
   );
   const loadWorkflow = useCallback(
     () => readWorkflow(applyWorkflowError),
@@ -233,18 +250,15 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
       (value: T) => {
         if (!cancelled) apply(value);
       };
+    // Reads still in flight for a previous workflow must never land here.
+    shownWorkflowSeq.current = workflowSeq.current;
     const wfSeq = ++workflowSeq.current;
-    const unlessNewerRead =
-      <T,>(apply: (value: T) => void) =>
-      (value: T) => {
-        if (wfSeq === workflowSeq.current) apply(value);
-      };
-    workflowsApi
-      .get(workflowId)
-      .then(
-        unlessGone(unlessNewerRead(applyWorkflow)),
-        unlessGone(unlessNewerRead(applyWorkflowError)),
-      );
+    workflowsApi.get(workflowId).then(
+      unlessGone((wf: Workflow) => landWorkflow(wfSeq, wf)),
+      unlessGone((e: unknown) =>
+        landWorkflowError(wfSeq, e, applyWorkflowError),
+      ),
+    );
     const seq = ++runsSeq.current;
     const unlessSuperseded =
       <T,>(apply: (value: T) => void) =>
@@ -262,7 +276,8 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     };
   }, [
     workflowId,
-    applyWorkflow,
+    landWorkflow,
+    landWorkflowError,
     applyWorkflowError,
     applyRunPage,
     applyRunsError,
