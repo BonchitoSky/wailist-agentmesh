@@ -51,6 +51,19 @@ describe("describeSchedule", () => {
     expect(say("0 9 29 * *")).toBe("Every month on the 29th at 9:00 AM");
   });
 
+  // 09:00 UTC is 5:00 AM in New York while daylight saving lasts and 4:00 AM
+  // after it. The time used to be read from January, so September said 4:00.
+  // It is the next run that counts, so the answer follows the season.
+  it("gives the time of the next run in a daylight-saving zone", () => {
+    expect(say("0 9 22 * *", "America/New_York")).toBe(
+      "Every month on the 22nd at 5:00 AM",
+    );
+    const december = new Date(Date.UTC(2026, 11, 1, 12, 0));
+    expect(describeSchedule("0 9 22 * *", december, "America/New_York")).toBe(
+      "Every month on the 22nd at 4:00 AM",
+    );
+  });
+
   // 02:00 UTC on the 1st is the evening before in Los Angeles -- the 31st,
   // 30th or 28th depending on the month -- so no single day is true.
   it("says custom when the local day changes from month to month", () => {
