@@ -38,13 +38,15 @@ export function WorkflowsPhoneHeader({
     <header className="wfp-head">
       <div className="wfp-head__top">
         <h1 className="wfp-title">Workflows</h1>
+        {/* Says what it does. A bare "+" beside the title read as "new
+            workflow", which the phone cannot do, not as "add credits". */}
         <button
           type="button"
           className="wfp-head__add"
-          aria-label="Add credits"
           onClick={() => router.push("/billing")}
         >
-          <IconPlus size={16} />
+          <IconPlus size={14} />
+          Add credits
         </button>
       </div>
       <div className="wfp-head__facts">

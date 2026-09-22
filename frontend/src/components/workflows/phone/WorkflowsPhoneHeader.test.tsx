@@ -56,9 +56,13 @@ describe("WorkflowsPhoneHeader", () => {
     expect(container.textContent).not.toContain("$0.00");
   });
 
-  it("opens billing from the + button", () => {
+  // A bare "+" did not say it adds credits, so the button says it in words.
+  it("labels the add-credits button in words and opens billing", () => {
     renderHeader();
-    fireEvent.click(screen.getByRole("button", { name: "Add credits" }));
+    const button = screen.getByRole("button", { name: "Add credits" });
+    expect(button.textContent).toBe("Add credits");
+    expect(button.hasAttribute("aria-label")).toBe(false);
+    fireEvent.click(button);
     expect(state.push).toHaveBeenCalledWith("/billing");
   });
 });
