@@ -1,7 +1,12 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { auth, AuthCheckError, AuthUser, isConnectionFailure } from "@/lib/api";
-import { IS_NATIVE, setAuthToken, authReady } from "@/lib/nativeAuth";
+import {
+  IS_NATIVE,
+  setAuthToken,
+  getAuthToken,
+  authReady,
+} from "@/lib/nativeAuth";
 import { resetCredits } from "@/lib/credits/store";
 
 const UI_COOKIE = "agentmesh_ui";
@@ -76,12 +81,18 @@ export function useAuth() {
 
   useEffect(() => {
     let cancelled = false;
+    // The token this check is made with. A rejection is about this one only:
+    // a sign-in can replace it before the answer arrives.
+    let sent: string | null = null;
     // On native, wait for NativeBoot to finish restoring (or fail to
     // restore) the persisted token before asking who's signed in -- calling
     // auth.me() first would race it and 401 with no Authorization header
     // attached yet.
     authReady
-      .then(() => auth.me())
+      .then(() => {
+        sent = getAuthToken();
+        return auth.me();
+      })
       .then((u) => {
         if (cancelled) return;
         setUICookie();
@@ -103,14 +114,21 @@ export function useAuth() {
         // treats any token it holds as a session, so a stale one left in
         // place let a tapped notification open a protected screen without
         // signing in, and the next launch restored it again.
+        //
+        // Only the token this check sent, and only while it is still the
+        // current one. Clearing whatever is current instead let a check that
+        // failed just before a sign-in -- AuthPage runs its own -- delete the
+        // session that sign-in had just saved.
+        const rejected = sent;
         if (
           IS_NATIVE &&
+          rejected !== null &&
           err instanceof AuthCheckError &&
           (err.status === 401 || err.status === 403)
         ) {
-          setAuthToken(null);
+          if (getAuthToken() === rejected) setAuthToken(null);
           void import("@/native")
-            .then(({ shell }) => shell.onSignedOut())
+            .then(({ shell }) => shell.onSessionRejected(rejected))
             .catch((e) =>
               console.error("native shell failed to clear a rejected token", e),
             );
