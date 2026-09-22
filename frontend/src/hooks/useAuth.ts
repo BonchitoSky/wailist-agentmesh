@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
-import { auth, AuthUser, isConnectionFailure } from "@/lib/api";
+import { auth, AuthCheckError, AuthUser, isConnectionFailure } from "@/lib/api";
 import { IS_NATIVE, setAuthToken, authReady } from "@/lib/nativeAuth";
 import { resetCredits } from "@/lib/credits/store";
 
@@ -97,6 +97,23 @@ export function useAuth() {
         if (isConnectionFailure(err)) {
           setOffline(true);
           return;
+        }
+        // The server has answered that this token is not a session. On the
+        // phone it has to go, from memory and from the device: NativeBoot
+        // treats any token it holds as a session, so a stale one left in
+        // place let a tapped notification open a protected screen without
+        // signing in, and the next launch restored it again.
+        if (
+          IS_NATIVE &&
+          err instanceof AuthCheckError &&
+          (err.status === 401 || err.status === 403)
+        ) {
+          setAuthToken(null);
+          void import("@/native")
+            .then(({ shell }) => shell.onSignedOut())
+            .catch((e) =>
+              console.error("native shell failed to clear a rejected token", e),
+            );
         }
         clearUICookie();
         setOffline(false);

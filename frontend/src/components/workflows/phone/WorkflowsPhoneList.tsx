@@ -59,6 +59,7 @@ export function WorkflowsPhoneList({
         total={workflows.length}
         shown={visible.length}
         spend={totalSpend(workflows)}
+        known={!loading && !(workflows.length === 0 && error)}
       />
       {error && (
         <p className="wfp-error" role="alert">
