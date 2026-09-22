@@ -126,6 +126,29 @@ describe("UsagePhonePage", () => {
     expect(link.getAttribute("href")).toBe(s.explorerURL);
   });
 
+  // The page fetches more settlements than it first shows; the rest must be
+  // reachable, and the list must close again.
+  it("lists the latest five settlements, and all of them on request", () => {
+    const data = buildUsage("30d");
+    expect(data.settlements.length).toBeGreaterThan(5);
+    renderPage({ data });
+    const heading = screen.getByRole("heading", { name: "Recent settlements" });
+    const list = heading.parentElement!.querySelector("ul")!;
+    expect(list.children).toHaveLength(5);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `See all settlements (${data.settlements.length})`,
+      }),
+    );
+    expect(list.children).toHaveLength(data.settlements.length);
+
+    const fewer = screen.getAllByRole("button", { name: "Show fewer" }).at(-1)!;
+    expect(fewer.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(fewer);
+    expect(list.children).toHaveLength(5);
+  });
+
   it("opens a workflow from its spend row", () => {
     const data = buildUsage("30d");
     renderPage({ data });

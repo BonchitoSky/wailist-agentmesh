@@ -164,6 +164,9 @@ function UsageBody({
   onToggleEndpoints: () => void;
 }) {
   const endpointsHeading = useRef<HTMLHeadingElement>(null);
+  const settlementsHeading = useRef<HTMLHeadingElement>(null);
+  // Five by default, like the endpoints; the rest on request.
+  const [allSettlements, setAllSettlements] = useState(false);
   const { summary, timeseries, byWorkflow, byEndpoint, settlements } = data;
 
   // The same category split the desktop donut draws, from endpoint totals.
@@ -338,38 +341,63 @@ function UsageBody({
 
       {settlements.length > 0 && (
         <section className="bilp-section">
-          <h2 className="bilp-heading">Recent settlements</h2>
+          <h2 className="bilp-heading" ref={settlementsHeading}>
+            Recent settlements
+          </h2>
           <ul className="usgp-list">
-            {settlements.slice(0, TOP).map((s) => (
-              <li key={s.txId} className="usgp-row">
-                <span className="usgp-row__main">
-                  <span className="usgp-row__name">{s.endpoint}</span>
-                  <span className="usgp-row__sub">
-                    {/* Part of the hash, as the website shows it -- first, so
+            {(allSettlements ? settlements : settlements.slice(0, TOP)).map(
+              (s) => (
+                <li key={s.txId} className="usgp-row">
+                  <span className="usgp-row__main">
+                    <span className="usgp-row__name">{s.endpoint}</span>
+                    <span className="usgp-row__sub">
+                      {/* Part of the hash, as the website shows it -- first, so
                         it is never the piece that wraps away. */}
-                    {/* The separator rides with the hash, so a long workflow
+                      {/* The separator rides with the hash, so a long workflow
                         name wraps onto a line that starts with the name
                         rather than with a stray dot. */}
-                    <span>
-                      <ExternalLink
-                        href={s.explorerURL}
-                        className="usgp-hash"
-                        style={{ color: TYPE_PILL.x402 }}
-                        aria-label={`Transaction ${s.txId}`}
-                      >
-                        {s.txId.slice(0, 10)}…
-                      </ExternalLink>{" "}
-                      ·
-                    </span>
-                    <span>
-                      {names.get(s.workflowId) ?? "—"} · {relTime(s.ts)}
+                      <span>
+                        <ExternalLink
+                          href={s.explorerURL}
+                          className="usgp-hash"
+                          style={{ color: TYPE_PILL.x402 }}
+                          aria-label={`Transaction ${s.txId}`}
+                        >
+                          {s.txId.slice(0, 10)}…
+                        </ExternalLink>{" "}
+                        ·
+                      </span>
+                      <span>
+                        {names.get(s.workflowId) ?? "—"} · {relTime(s.ts)}
+                      </span>
                     </span>
                   </span>
-                </span>
-                <span className="usgp-row__fig">${usd(s.amountAlgo, 4)}</span>
-              </li>
-            ))}
+                  <span className="usgp-row__fig">${usd(s.amountAlgo, 4)}</span>
+                </li>
+              ),
+            )}
           </ul>
+          {settlements.length > TOP && (
+            <button
+              type="button"
+              className="bilp-link bilp-link--block"
+              aria-expanded={allSettlements}
+              onClick={() => {
+                // As with endpoints: collapsing from the bottom of a long
+                // list would leave the reader in the middle of nowhere.
+                if (allSettlements) {
+                  settlementsHeading.current?.scrollIntoView?.({
+                    block: "start",
+                  });
+                }
+                setAllSettlements((v) => !v);
+              }}
+            >
+              {allSettlements
+                ? "Show fewer"
+                : `See all settlements (${settlements.length})`}
+            </button>
+          )}
         </section>
       )}
 
