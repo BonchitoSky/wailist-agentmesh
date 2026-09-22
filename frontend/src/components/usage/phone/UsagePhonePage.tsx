@@ -43,7 +43,8 @@ export interface UsagePhoneProps {
   data: UsagePayload | null;
   loading: boolean;
   error: Error | null;
-  onRetry: () => void;
+  // Reloads; settles when the new figures have landed.
+  onRetry: () => void | Promise<void>;
 }
 
 export function UsagePhonePage(p: UsagePhoneProps) {
@@ -66,7 +67,11 @@ export function UsagePhonePage(p: UsagePhoneProps) {
     ) : (
       <p className="bilp-note" data-tone="error" role="alert">
         Couldn&rsquo;t load usage.{" "}
-        <button type="button" className="bilp-link" onClick={p.onRetry}>
+        <button
+          type="button"
+          className="bilp-link"
+          onClick={() => void p.onRetry()}
+        >
           Retry
         </button>
       </p>
@@ -82,7 +87,9 @@ export function UsagePhonePage(p: UsagePhoneProps) {
 
   return (
     <PullToRefresh
-      onRefresh={async () => p.onRetry()}
+      onRefresh={async () => {
+        await p.onRetry();
+      }}
       style={{ flex: 1, minHeight: 0, background: "var(--bg)" }}
     >
       <main className="bilp-page usgp-page" data-loading={p.loading}>
@@ -129,7 +136,11 @@ export function UsagePhonePage(p: UsagePhoneProps) {
         {p.data && p.error && (
           <p className="bilp-note" data-tone="error" role="alert">
             Couldn&rsquo;t refresh; showing the last loaded figures.{" "}
-            <button type="button" className="bilp-link" onClick={p.onRetry}>
+            <button
+              type="button"
+              className="bilp-link"
+              onClick={() => void p.onRetry()}
+            >
               Retry
             </button>
           </p>

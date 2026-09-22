@@ -1,21 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { buildUsage } from "@/lib/data";
 
-const state = vi.hoisted(() => ({ readOnly: false }));
+const state = vi.hoisted(() => ({
+  readOnly: false,
+  // Held open by a test to keep the reload in flight.
+  gate: Promise.resolve() as Promise<void>,
+  phone: null as null | { onRetry: () => void | Promise<void> },
+}));
 
 vi.mock("@/hooks/useReadOnly", () => ({ useReadOnly: () => state.readOnly }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/components/Topbar", () => ({ Topbar: () => null }));
 vi.mock("./phone/UsagePhonePage", () => ({
-  UsagePhonePage: () => <div>phone usage</div>,
+  UsagePhonePage: (p: { onRetry: () => void | Promise<void> }) => {
+    state.phone = p;
+    return <div>phone usage</div>;
+  },
 }));
 vi.mock("@/lib/api", () => {
   const u = buildUsage("30d");
   return {
     usage: {
       invalidate: () => {},
-      summary: async () => u.summary,
+      summary: async () => {
+        await state.gate;
+        return u.summary;
+      },
       timeseries: async () => u.timeseries,
       byWorkflow: async () => u.byWorkflow,
       byEndpoint: async () => u.byEndpoint,
@@ -29,6 +40,8 @@ import { UsagePage } from "./UsagePage";
 afterEach(() => {
   cleanup();
   state.readOnly = false;
+  state.gate = Promise.resolve();
+  state.phone = null;
 });
 
 // The desktop page is two wide tables that only scroll sideways on a phone,
@@ -38,5 +51,36 @@ describe("UsagePage", () => {
     state.readOnly = true;
     render(<UsagePage />);
     expect(screen.getByText("phone usage")).toBeTruthy();
+  });
+
+  // Pull to refresh stops spinning when the promise it is given settles, so
+  // the reload has to hand back one that waits for the requests.
+  it("hands the pull a reload that settles when the data has landed", async () => {
+    state.readOnly = true;
+    render(<UsagePage />);
+    await waitFor(() => expect(state.phone).not.toBeNull());
+
+    let open!: () => void;
+    state.gate = new Promise<void>((r) => {
+      open = r;
+    });
+    let settled = false;
+    let reload!: Promise<void> | void;
+    act(() => {
+      reload = state.phone!.onRetry();
+    });
+    void Promise.resolve(reload).then(() => {
+      settled = true;
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      open();
+      await reload;
+    });
+    expect(settled).toBe(true);
   });
 });

@@ -40,6 +40,10 @@ export function UsagePage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<Error | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
+  // Callers waiting for a reload to land -- pull to refresh keeps spinning
+  // until its promise settles. Released when the newest batch finishes; a
+  // batch a newer one replaced keeps them waiting for that one instead.
+  const reloadWaiters = useRef<Array<() => void>>([]);
   const [scopedWf, setScopedWf] = useState<string | null>(null);
 
   // ?workflow=<id> deep-link filter (read without useSearchParams to avoid a
@@ -75,7 +79,11 @@ export function UsagePage() {
         setLoadError(e instanceof Error ? e : new Error(String(e)));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        setLoading(false);
+        const waiters = reloadWaiters.current;
+        reloadWaiters.current = [];
+        for (const done of waiters) done();
       });
     return () => {
       cancelled = true;
@@ -90,12 +98,16 @@ export function UsagePage() {
 
   // Retry must bust the mock-mode cache, otherwise the refetch resolves from
   // the memoized payload and the figures visibly never change.
-  const retry = () => {
-    usageApi.invalidate();
-    setLoading(true);
-    setLoadError(null);
-    setReloadNonce((n) => n + 1);
-  };
+  // Resolves once the reload it starts has landed (or failed), so pull to
+  // refresh spins for as long as the requests do.
+  const retry = () =>
+    new Promise<void>((resolve) => {
+      reloadWaiters.current.push(resolve);
+      usageApi.invalidate();
+      setLoading(true);
+      setLoadError(null);
+      setReloadNonce((n) => n + 1);
+    });
 
   // Clearing the scope must also drop ?workflow= from the URL, otherwise a
   // refresh or back-navigation silently reapplies the filter the user just cleared.
