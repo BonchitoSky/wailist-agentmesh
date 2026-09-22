@@ -39,6 +39,36 @@ describe("describeSchedule", () => {
     );
   });
 
+  // Daylight saving ends in the US on 1 November 2026. A schedule described
+  // on 31 October must describe the run that is coming, not the one that has
+  // already happened on the old offset.
+  describe("across a daylight-saving change", () => {
+    const eve = new Date(Date.UTC(2026, 9, 31, 12, 0));
+
+    it("gives a daily schedule the next run's time", () => {
+      // Today's 07:00 UTC was 3:00 AM EDT and is past; the next is 2:00 AM EST.
+      expect(describeSchedule("0 7 * * *", eve, "America/New_York")).toBe(
+        "Every day at 2:00 AM",
+      );
+    });
+
+    it("gives a weekly schedule the next run's time", () => {
+      // This week's Monday has passed. The next is 2 November, by which time
+      // New York is on standard time: 07:30 UTC is 2:30 AM, still a Monday.
+      expect(describeSchedule("30 7 * * 1", eve, "America/New_York")).toBe(
+        "Every Monday at 2:30 AM",
+      );
+    });
+
+    it("says custom when the local day itself depends on the season", () => {
+      // 07:30 UTC is Sunday 11:30 PM in Los Angeles on standard time and
+      // Monday 12:30 AM on daylight time, so no weekday is true all year.
+      expect(describeSchedule("30 7 * * 1", eve, "America/Los_Angeles")).toBe(
+        "On a custom schedule",
+      );
+    });
+  });
+
   it("says a monthly day", () => {
     expect(say("0 9 1 * *")).toBe("Every month on the 1st at 9:00 AM");
     expect(say("0 9 22 * *")).toBe("Every month on the 22nd at 9:00 AM");
