@@ -1845,46 +1845,60 @@ body[data-typing] .bottomnav {
 .wfp-head {
   padding-bottom: 2px;
 }
+/* Wraps rather than squeezing: at large system text the button drops below
+   the title instead of shrinking it to an ellipsis. */
 .wfp-head__top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  column-gap: 12px;
+  row-gap: 8px;
 }
 .wfp-head__top .wfp-title {
-  flex: 1;
-  min-width: 0;
+  flex: 1 0 auto;
 }
-/* A plain accent glyph rather than a boxed button: the cards below carry the
-   screen's structure, and a second outlined box competes with them. */
+/* A labelled pill rather than a bare "+": the glyph alone read as "new
+   workflow", not "add credits". Tinted, not filled, so it stays quieter than
+   the cards below it. 36px tall, with the ::after extending the touch target
+   to 44px. */
 .wfp-head__add {
+  position: relative;
   flex-shrink: 0;
-  width: 44px;
-  height: 44px;
-  margin-right: -10px;
+  height: 36px;
+  padding: 0 14px 0 11px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  border: none;
-  border-radius: var(--r-2);
-  background: transparent;
+  gap: 6px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: var(--accent-soft);
   color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   touch-action: manipulation;
   transition:
     transform 0.12s var(--ease),
     background 0.15s var(--ease);
 }
+.wfp-head__add::after {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
+}
 .wfp-head__add:active {
-  transform: scale(0.92);
-  background: var(--accent-soft);
+  transform: scale(0.96);
+  background: var(--accent-line);
 }
 .wfp-head__add:focus-visible {
-  outline: 2px solid var(--accent-line);
-  outline-offset: -2px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 @media (hover: hover) {
   .wfp-head__add:hover {
-    background: var(--accent-soft);
+    background: var(--accent-line);
   }
 }
 @media (prefers-reduced-motion: reduce) {
