@@ -96,8 +96,29 @@ it("handles a callback once when the initial intent and a live event overlap", a
 it("clears pending storage if opening the browser fails", async () => {
   state.open.mockRejectedValueOnce(new Error("browser unavailable"));
   const { start } = await import("./oauth");
-  await expect(start("github")).rejects.toThrow("browser unavailable");
+  await expect(start("github", "/workflows/app?id=wf-1")).rejects.toThrow(
+    "browser unavailable",
+  );
   expect(state.values.has(key)).toBe(false);
+  expect(state.values.has("agentmesh.oauth.next")).toBe(false);
+});
+
+// Where sign-in was headed has to survive the app being killed while the
+// Custom Tab is in front, like the verifier does.
+it("carries the next target across a fresh module load and clears it", async () => {
+  const { start } = await import("./oauth");
+  await start("google", "/workflows/app?id=wf-1");
+  vi.resetModules();
+  state.getLaunchUrl.mockResolvedValue({ url: callback });
+  const { listenForCallback } = await import("./oauth");
+  const result = vi.fn();
+  await listenForCallback(result);
+  expect(result).toHaveBeenCalledWith({
+    ok: true,
+    token: "session",
+    next: "/workflows/app?id=wf-1",
+  });
+  expect(state.values.has("agentmesh.oauth.next")).toBe(false);
 });
 
 it("ignores a lookalike callback host without consuming the pending verifier", async () => {
