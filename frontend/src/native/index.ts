@@ -4,7 +4,7 @@
 // is to reconnect two halves that are otherwise unaware of each other: the
 // session the app persisted, and whatever the OS queued while the app was
 // closed.
-import { loadToken, saveToken, clearToken } from "./auth";
+import { loadToken, saveToken, clearTokenIf } from "./auth";
 import { flush, start, stop } from "./geofence";
 import { setGeofence, clearGeofence } from "./api";
 import { clearOptedIn } from "./pushPrefs";
@@ -25,6 +25,11 @@ import { safeNextPath } from "@/lib/routes";
 export interface NativeShell {
   onSignedIn(token: string): Promise<void>;
   onSignedOut(): Promise<void>;
+  /**
+   * Clears a session the server has refused. Given the token that was refused,
+   * so a check that failed before a newer sign-in cannot clear that sign-in.
+   */
+  onSessionRejected(token: string): Promise<void>;
   setGeofence(
     workflowId: string,
     fence: { lat: number; lng: number; radiusM: number },
@@ -151,6 +156,10 @@ export const shell: NativeShell = {
   },
 
   async onSignedOut() {
+    // The session being signed out, read before anything slow: if someone
+    // signs in while the notification work below is still running, their new
+    // token is not this one and must survive the clear at the end.
+    const token = await loadToken();
     // Notifications first, and only then the token: unregistering is an
     // authenticated call, so clearing the session first would guarantee it
     // fails and leave this device receiving the next user's run results.
@@ -161,7 +170,20 @@ export const shell: NativeShell = {
     // the NEXT person to sign in on this phone is registered for
     // notifications they were never asked about.
     await clearOptedIn();
-    await clearToken();
+    await clearTokenIf(token);
+  },
+
+  async onSessionRejected(token: string) {
+    // The reverse of onSignedOut's order. The server has already refused this
+    // token, so an authenticated unregister cannot succeed with it and there
+    // is nothing to wait for: the token goes first, before anything slow.
+    // Only this token -- a sign-in may already have replaced it, and then
+    // the device belongs to the new session and is left alone entirely.
+    if (!(await clearTokenIf(token))) return;
+    await disablePush().catch(() => {});
+    // Checked again after the slow part, for the same reason.
+    if ((await loadToken()) !== null) return;
+    await clearOptedIn();
   },
 
   async enableNotifications() {
