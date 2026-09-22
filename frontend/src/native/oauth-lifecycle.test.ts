@@ -9,19 +9,32 @@ const state = vi.hoisted(() => ({
   addListener: vi.fn(),
   getLaunchUrl: vi.fn(),
 }));
-vi.mock("./secureStore", () => ({ SecureStore: {
-  get: async ({ key }: { key: string }) => ({ value: state.values.get(key) ?? null }),
-  set: async ({ key, value }: { key: string; value: string }) => { state.values.set(key, value); },
-  remove: async ({ key }: { key: string }) => { state.values.delete(key); },
-} }));
+vi.mock("./secureStore", () => ({
+  SecureStore: {
+    get: async ({ key }: { key: string }) => ({
+      value: state.values.get(key) ?? null,
+    }),
+    set: async ({ key, value }: { key: string; value: string }) => {
+      state.values.set(key, value);
+    },
+    remove: async ({ key }: { key: string }) => {
+      state.values.delete(key);
+    },
+  },
+}));
 vi.mock("@capacitor/app", () => ({ App: state }));
 vi.mock("@capacitor/browser", () => ({ Browser: state }));
-vi.mock("@/lib/api", () => ({ auth: {
-  nativeOAuthURL: async (provider: string) => `https://app.test/api/auth/oauth/${provider}`,
-  oauthExchange: state.exchange,
-} }));
+vi.mock("@/lib/api", () => ({
+  auth: {
+    nativeOAuthURL: async (provider: string) =>
+      `https://app.test/api/auth/oauth/${provider}`,
+    oauthExchange: state.exchange,
+  },
+}));
 
-const scheme = readFileSync("../mobile/capacitor.config.ts", "utf8").match(/appId:\s*"([^"]+)"/)![1];
+const scheme = readFileSync("../mobile/capacitor.config.ts", "utf8").match(
+  /appId:\s*"([^"]+)"/,
+)![1];
 const callback = `${scheme}://auth?code=launch-code`;
 const key = "agentmesh.oauth.verifier";
 
@@ -89,7 +102,9 @@ it("clears pending storage if opening the browser fails", async () => {
 
 it("ignores a lookalike callback host without consuming the pending verifier", async () => {
   state.values.set(key, "verifier");
-  state.getLaunchUrl.mockResolvedValue({ url: `${scheme}://auth-other?code=x` });
+  state.getLaunchUrl.mockResolvedValue({
+    url: `${scheme}://auth-other?code=x`,
+  });
   const { listenForCallback } = await import("./oauth");
   const result = vi.fn();
   await listenForCallback(result);
