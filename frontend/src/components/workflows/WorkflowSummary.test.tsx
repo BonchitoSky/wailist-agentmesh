@@ -304,6 +304,45 @@ describe("WorkflowSummary", () => {
     expect(fact("Total runs")).toBe("3");
   });
 
+  // The quiet re-read a run starting triggers has no error handler: failing
+  // keeps what is shown. It used to count as "newer" all the same, so a first
+  // load still in flight was thrown away when it landed after that failure,
+  // and the screen stayed on its skeleton. Only a read that has succeeded
+  // outranks an older one.
+  it("still shows the first load when a newer quiet read fails first", async () => {
+    let settleFirst!: (wf: Workflow) => void;
+    api.get
+      .mockReturnValueOnce(
+        new Promise<Workflow>((r) => {
+          settleFirst = r;
+        }),
+      )
+      .mockRejectedValueOnce(new Error("offline"));
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await waitFor(() => expect(api.listForWorkflow).toHaveBeenCalledTimes(1));
+
+    const started = {
+      ...FINISHED,
+      id: "r-2",
+      status: "running" as const,
+      startedAt: new Date().toISOString(),
+      finishedAt: undefined,
+    };
+    api.listForWorkflow.mockResolvedValue(page([started, FINISHED]));
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+
+    await act(async () => {
+      settleFirst(workflow({ totalRuns: 1 }));
+    });
+    const fact = (label: string) =>
+      screen.queryByText(label)?.nextElementSibling?.textContent;
+    await waitFor(() => expect(fact("Total runs")).toBe("1"));
+  });
+
   it("re-reads its figures when a run starts and when it finishes", async () => {
     render(<WorkflowSummary workflowId="wf-1" />);
     await screen.findByText("Succeeded");
