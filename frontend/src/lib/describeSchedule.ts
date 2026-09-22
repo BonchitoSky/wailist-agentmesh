@@ -127,11 +127,24 @@ export function describeSchedule(
     return `${phraseDays(localDays)} at ${at(instants[0])}`;
   }
 
+  // Monthly. One sampled month is not enough: Date.UTC rolls a day the month
+  // lacks (the 31st in September) into the next month, and a day near
+  // midnight can land on a different local day depending on the month's
+  // length. So every month of the year is checked -- skipping months that do
+  // not have the day, as the scheduler does -- and a single local day is
+  // named only when every month agrees on it.
   const day = asInt(dom, 1, 31);
   if (dow === "*" && day !== null) {
-    const instant = new Date(Date.UTC(year, mon, day, h, m));
-    const localDay = Number(read(instant, { day: "numeric" }));
-    return `Every month on the ${ordinal(localDay)} at ${at(instant)}`;
+    const instants = Array.from(
+      { length: 12 },
+      (_, month) => new Date(Date.UTC(year, month, day, h, m)),
+    ).filter((instant) => instant.getUTCDate() === day);
+    const localDays = new Set(
+      instants.map((instant) => read(instant, { day: "numeric" })),
+    );
+    if (instants.length === 0 || localDays.size !== 1) return CUSTOM;
+    const localDay = Number([...localDays][0]);
+    return `Every month on the ${ordinal(localDay)} at ${at(instants[0])}`;
   }
 
   return CUSTOM;
