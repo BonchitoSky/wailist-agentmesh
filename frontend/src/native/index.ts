@@ -20,6 +20,7 @@ import {
 import { listenForCallback } from "./oauth";
 import { listenForBack } from "./back";
 import { navigateInApp } from "@/lib/nativeNav";
+import { safeNextPath } from "@/lib/routes";
 
 export interface NativeShell {
   onSignedIn(token: string): Promise<void>;
@@ -115,19 +116,28 @@ export async function boot(): Promise<string | null> {
   // The result is routed inside the app, not by a page load, which would
   // reopen the launch page and drop the error reason (see lib/nativeNav.ts).
   // Replacing the entry keeps Back from returning to the sign-in screen.
+  //
+  // Where sign-in was headed (a tapped notification's workflow, say) comes back
+  // with the result: success goes there, and a failure keeps it on the sign-in
+  // screen so the next attempt still does -- as password sign-in's ?next= does.
   void listenForCallback(async (result) => {
+    const next = safeNextPath(result.next);
+    const retryWithNext = (reason: string) =>
+      navigateInApp(
+        `/signin?error=${encodeURIComponent(reason)}` +
+          (next ? `&next=${encodeURIComponent(next)}` : ""),
+        { replace: true },
+      );
     if (!result.ok) {
-      navigateInApp(`/signin?error=${encodeURIComponent(result.reason)}`, {
-        replace: true,
-      });
+      retryWithNext(result.reason);
       return;
     }
     const { persistNativeSession } = await import("@/hooks/useAuth");
     try {
       await persistNativeSession(result.token);
-      navigateInApp("/workflows", { replace: true });
+      navigateInApp(next ?? "/workflows", { replace: true });
     } catch {
-      navigateInApp("/signin?error=session_persist", { replace: true });
+      retryWithNext("session_persist");
     }
   }).catch(() => {});
   return token;

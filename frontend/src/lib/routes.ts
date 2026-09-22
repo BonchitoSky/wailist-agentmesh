@@ -31,3 +31,26 @@ export function workflowHref(
   const search = params.toString();
   return search ? `${path}?${search}` : path;
 }
+
+/**
+ * A `next` target that is safe to navigate to after sign-in, or null.
+ *
+ * Only a path on this app: it must start with "/" but not "//", which a
+ * browser reads as another host, and must not contain a backslash, which
+ * browsers normalize to "/" so "/\evil.com" would pass as a path and land off
+ * site. A sign-in page is refused too, so a failed sign-in cannot loop back to
+ * itself. Shared by password sign-in and the app's social sign-in.
+ */
+export function safeNextPath(raw: string | null | undefined): string | null {
+  if (
+    !raw ||
+    !raw.startsWith("/") ||
+    raw.startsWith("//") ||
+    raw.includes("\\") ||
+    raw.startsWith("/signin") ||
+    raw.startsWith("/signup")
+  ) {
+    return null;
+  }
+  return raw;
+}
