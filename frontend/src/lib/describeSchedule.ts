@@ -109,22 +109,48 @@ export function describeSchedule(
   const mon = now.getUTCMonth();
   const date = now.getUTCDate();
 
+  // Every description is of the NEXT run, never of one already past. Today's
+  // run, or this week's, can sit on the other side of a daylight-saving
+  // change from the next one, and then its clock time is simply wrong: on 31
+  // October in New York, 07:00 UTC has already happened at 3:00 AM, while the
+  // run being described happens at 2:00 AM.
   if (dom === "*" && dow === "*") {
-    return `Every day at ${at(new Date(Date.UTC(year, mon, date, h, m)))}`;
+    const today = new Date(Date.UTC(year, mon, date, h, m));
+    const next =
+      today >= now ? today : new Date(Date.UTC(year, mon, date + 1, h, m));
+    return `Every day at ${at(next)}`;
   }
 
   if (dom === "*") {
     const utcDays = parseDays(dow);
     if (!utcDays) return CUSTOM;
-    const instants = utcDays.map(
-      (d) => new Date(Date.UTC(year, mon, date - now.getUTCDay() + d, h, m)),
-    );
-    const localDays = [
-      ...new Set(
-        instants.map((i) => DAY_SHORT.indexOf(read(i, { weekday: "short" }))),
-      ),
-    ].sort((a, b) => a - b);
-    return `${phraseDays(localDays)} at ${at(instants[0])}`;
+    // The same weekdays, week by week. Week 0 is the one `now` is in.
+    const week = (offset: number) =>
+      utcDays.map(
+        (d) =>
+          new Date(
+            Date.UTC(year, mon, date - now.getUTCDay() + d + offset * 7, h, m),
+          ),
+      );
+    const localDays = (instants: Date[]) =>
+      [
+        ...new Set(
+          instants.map((i) => DAY_SHORT.indexOf(read(i, { weekday: "short" }))),
+        ),
+      ].sort((a, b) => a - b);
+    const upcoming = [...week(0), ...week(1)]
+      .filter((i) => i >= now)
+      .sort((a, b) => +a - +b);
+    const next = upcoming[0] ?? week(1)[0];
+    // The week the next run falls in is the one whose local days are named.
+    const nextWeek = week(0).some((i) => +i === +next) ? 0 : 1;
+    // A run near midnight lands on a different local day for half the year,
+    // and then no single weekday is true. Half a year on is the other offset,
+    // so if the days match there they hold all year; if they do not, the
+    // schedule has no weekday to name and reads as custom.
+    const named = localDays(week(nextWeek));
+    if (named.join() !== localDays(week(nextWeek + 26)).join()) return CUSTOM;
+    return `${phraseDays(named)} at ${at(next)}`;
   }
 
   // Monthly. One sampled month is not enough: Date.UTC rolls a day the month
