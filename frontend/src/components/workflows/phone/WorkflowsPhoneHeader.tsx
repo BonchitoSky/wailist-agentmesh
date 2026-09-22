@@ -1,6 +1,5 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { IconPlus } from "@/components/ui";
 import { useCredits } from "@/lib/credits/store";
 import { formatDollars } from "@/lib/workflowMeta";
 
@@ -38,16 +37,6 @@ export function WorkflowsPhoneHeader({
     <header className="wfp-head">
       <div className="wfp-head__top">
         <h1 className="wfp-title">Workflows</h1>
-        {/* Says what it does. A bare "+" beside the title read as "new
-            workflow", which the phone cannot do, not as "add credits". */}
-        <button
-          type="button"
-          className="wfp-head__add"
-          onClick={() => router.push("/billing")}
-        >
-          <IconPlus size={14} />
-          Add credits
-        </button>
       </div>
       <div className="wfp-head__facts">
         <span
@@ -56,20 +45,30 @@ export function WorkflowsPhoneHeader({
         >
           {count} <span aria-hidden>·</span> {spent} spent
         </span>
-        {/* Two dollar figures on one line: this one says which it is. */}
-        <span
+        {/* Two dollar figures on one line: this one says which it is. It is
+            also the way to top up: the balance is what adding credits
+            changes, so tapping it opens Credits. A separate "Add credits"
+            button beside the title looked out of place on a screen this
+            quiet. The chevron says it can be tapped; the label says where
+            it goes. */}
+        <button
+          type="button"
           className="wfp-head__balance"
           aria-label={
             balanceKnown
-              ? `Credit balance ${usd.format(balanceUSD)}`
-              : "Credit balance not loaded yet"
+              ? `Credit balance ${usd.format(balanceUSD)}, add credits`
+              : "Credit balance not loaded yet, add credits"
           }
+          onClick={() => router.push("/billing")}
         >
           <span className="wfp-head__balance-label" aria-hidden>
             Credit
           </span>{" "}
           {balanceKnown ? usd.format(balanceUSD) : "—"}
-        </span>
+          <span className="wfp-head__balance-chevron" aria-hidden>
+            ›
+          </span>
+        </button>
       </div>
     </header>
   );
