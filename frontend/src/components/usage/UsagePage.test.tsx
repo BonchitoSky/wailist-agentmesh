@@ -6,6 +6,8 @@ const state = vi.hoisted(() => ({
   readOnly: false,
   // Held open by a test to keep the reload in flight.
   gate: Promise.resolve() as Promise<void>,
+  // Set by a test to make one of the five requests fail at once.
+  failTimeseries: false,
   phone: null as null | { onRetry: () => void | Promise<void> },
 }));
 
@@ -27,7 +29,10 @@ vi.mock("@/lib/api", () => {
         await state.gate;
         return u.summary;
       },
-      timeseries: async () => u.timeseries,
+      timeseries: async () => {
+        if (state.failTimeseries) throw new Error("timeseries down");
+        return u.timeseries;
+      },
       byWorkflow: async () => u.byWorkflow,
       byEndpoint: async () => u.byEndpoint,
       settlements: async () => u.settlements,
@@ -41,6 +46,7 @@ afterEach(() => {
   cleanup();
   state.readOnly = false;
   state.gate = Promise.resolve();
+  state.failTimeseries = false;
   state.phone = null;
 });
 
@@ -64,6 +70,40 @@ describe("UsagePage", () => {
     state.gate = new Promise<void>((r) => {
       open = r;
     });
+    let settled = false;
+    let reload!: Promise<void> | void;
+    act(() => {
+      reload = state.phone!.onRetry();
+    });
+    void Promise.resolve(reload).then(() => {
+      settled = true;
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      open();
+      await reload;
+    });
+    expect(settled).toBe(true);
+  });
+
+  // Promise.all gives up at the first failure, while the other requests are
+  // still out. The pull used to stop there, and the page then changed again
+  // under a finished refresh as they landed.
+  it("keeps the pull going until every request has answered, even after one fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    state.readOnly = true;
+    render(<UsagePage />);
+    await waitFor(() => expect(state.phone).not.toBeNull());
+
+    let open!: () => void;
+    state.gate = new Promise<void>((r) => {
+      open = r;
+    });
+    state.failTimeseries = true;
     let settled = false;
     let reload!: Promise<void> | void;
     act(() => {

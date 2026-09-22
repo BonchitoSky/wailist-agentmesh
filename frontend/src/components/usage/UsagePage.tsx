@@ -60,23 +60,28 @@ export function UsagePage() {
   // already starts as loading. Sync setState in effects cascades renders.
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
+    const requests = [
       usageApi.summary(range),
       usageApi.timeseries(range),
       usageApi.byWorkflow(range),
       usageApi.byEndpoint(range),
       usageApi.settlements(18),
-    ])
+    ] as const;
+    Promise.all(requests)
       .then(([summary, timeseries, byWorkflow, byEndpoint, settlements]) => {
         if (cancelled) return;
         setData({ summary, timeseries, byWorkflow, byEndpoint, settlements });
       })
-      .catch((e) => {
+      .catch(async (e) => {
         if (cancelled) return;
         // Surface the failure but keep the last good payload -- a transient error
         // on a range switch shouldn't blank a page that was already working.
         console.error("usage load failed", e);
         setLoadError(e instanceof Error ? e : new Error(String(e)));
+        // Promise.all gives up at the first failure with the rest still out.
+        // The reload is not over until they have answered too, so a pull keeps
+        // spinning until then rather than stopping on a half-finished load.
+        await Promise.allSettled(requests);
       })
       .finally(() => {
         if (cancelled) return;
