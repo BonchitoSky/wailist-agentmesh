@@ -777,12 +777,14 @@ body {
    and the target-size rule exempts a link inside a sentence. The avatar and
    the Usage "+" are also left alone -- they keep their drawn size and take
    the tap through an invisible 44px square instead (see responsive.css), so
-   forcing a height here would only make the visible box bigger.
+   forcing a height here would only make the visible box bigger. So is the
+   Workflows header's balance, which is a line of text that happens to be
+   tappable; its own ::after gives it the 44px.
 
    hover: none alongside pointer: coarse, so a touchscreen LAPTOP -- which has
    a mouse as well -- keeps the compact layout it is drawn for. */
 @media (pointer: coarse) and (hover: none) {
-  button:not(.credit-topup):not(.profile-menu__trigger),
+  button:not(.credit-topup):not(.profile-menu__trigger):not(.wfp-head__balance),
   [role="button"],
   select,
   input:not(
@@ -1845,66 +1847,14 @@ body[data-typing] .bottomnav {
 .wfp-head {
   padding-bottom: 2px;
 }
-/* Wraps rather than squeezing: at large system text the button drops below
-   the title instead of shrinking it to an ellipsis. */
 .wfp-head__top {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  column-gap: 12px;
-  row-gap: 8px;
+  gap: 12px;
 }
 .wfp-head__top .wfp-title {
-  flex: 1 0 auto;
-}
-/* A labelled pill rather than a bare "+": the glyph alone read as "new
-   workflow", not "add credits". Tinted, not filled, so it stays quieter than
-   the cards below it. 36px tall, with the ::after extending the touch target
-   to 44px. */
-.wfp-head__add {
-  position: relative;
-  flex-shrink: 0;
-  height: 36px;
-  padding: 0 14px 0 11px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--accent-line);
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-family: var(--font-sans);
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-  cursor: pointer;
-  touch-action: manipulation;
-  transition:
-    transform 0.12s var(--ease),
-    background 0.15s var(--ease);
-}
-.wfp-head__add::after {
-  content: "";
-  position: absolute;
-  inset: -4px 0;
-}
-.wfp-head__add:active {
-  transform: scale(0.96);
-  background: var(--accent-line);
-}
-.wfp-head__add:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-@media (hover: hover) {
-  .wfp-head__add:hover {
-    background: var(--accent-line);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .wfp-head__add {
-    transition: none;
-  }
+  flex: 1;
+  min-width: 0;
 }
 .wfp-head__facts {
   display: flex;
@@ -1923,12 +1873,40 @@ body[data-typing] .bottomnav {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The balance doubles as the way to top up. It stays plain text -- no box,
+   no fill -- and only the chevron says it can be tapped. The ::after takes the
+   tap through a 44px-tall area without making the line any taller. */
 .wfp-head__balance {
+  position: relative;
   flex-shrink: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
   color: var(--fg);
   white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.wfp-head__balance::after {
+  content: "";
+  position: absolute;
+  inset: -13px -8px;
+}
+.wfp-head__balance:active {
+  opacity: 0.6;
+}
+.wfp-head__balance:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 3px;
+  border-radius: var(--r-1);
 }
 .wfp-head__balance-label {
+  color: var(--fg-muted);
+}
+.wfp-head__balance-chevron {
+  margin-left: 6px;
   color: var(--fg-muted);
 }
 

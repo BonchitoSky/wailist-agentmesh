@@ -46,7 +46,9 @@ describe("WorkflowsPhoneHeader", () => {
   it("shows the credit balance, labelled so it is not read as spend", () => {
     const { container } = renderHeader();
     expect(container.textContent).toContain("$12.50");
-    expect(screen.getByLabelText("Credit balance $12.50")).toBeTruthy();
+    expect(
+      screen.getByLabelText("Credit balance $12.50, add credits"),
+    ).toBeTruthy();
   });
 
   it("shows a dash, not $0.00, until the balance is known", () => {
@@ -56,13 +58,14 @@ describe("WorkflowsPhoneHeader", () => {
     expect(container.textContent).not.toContain("$0.00");
   });
 
-  // A bare "+" did not say it adds credits, so the button says it in words.
-  it("labels the add-credits button in words and opens billing", () => {
+  // The balance is the way to top up. No separate button: a labelled pill
+  // beside the title looked out of place.
+  it("opens Credits from the balance, with no separate add button", () => {
     renderHeader();
-    const button = screen.getByRole("button", { name: "Add credits" });
-    expect(button.textContent).toBe("Add credits");
-    expect(button.hasAttribute("aria-label")).toBe(false);
-    fireEvent.click(button);
+    const balance = screen.getByRole("button", { name: /add credits/ });
+    expect(balance.textContent).toBe("Credit $12.50›");
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(balance);
     expect(state.push).toHaveBeenCalledWith("/billing");
   });
 });
