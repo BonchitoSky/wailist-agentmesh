@@ -28,8 +28,24 @@ function setViewportHeight(height: number) {
   });
 }
 const typing = () => document.body.hasAttribute("data-typing");
+// Rotation: the width changes, and with the keyboard still open the height
+// arrives already shrunk.
+function rotate(width: number, height: number) {
+  Object.defineProperty(window, "innerWidth", {
+    value: width,
+    configurable: true,
+  });
+  setViewportHeight(height);
+}
+const WIDTH = window.innerWidth;
 
-beforeEach(() => setViewportHeight(FULL));
+beforeEach(() => {
+  Object.defineProperty(window, "innerWidth", {
+    value: WIDTH,
+    configurable: true,
+  });
+  setViewportHeight(FULL);
+});
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
@@ -81,6 +97,21 @@ describe("BottomNav while typing", () => {
       fireEvent.focusOut(field);
       vi.runAllTimers();
     });
+    expect(typing()).toBe(false);
+  });
+
+  // Rotating with the keyboard open used to take the shrunken height as the
+  // new full height, so the bar came back above the still-open keyboard.
+  it("stays aside through a rotation while the keyboard is open", () => {
+    renderWithSearch();
+    setViewportHeight(FULL - 320);
+    expect(typing()).toBe(true);
+
+    rotate(WIDTH + 400, 400 - 200);
+    expect(typing()).toBe(true);
+
+    // The keyboard closes in the new orientation: the height grows back.
+    setViewportHeight(400);
     expect(typing()).toBe(false);
   });
 
