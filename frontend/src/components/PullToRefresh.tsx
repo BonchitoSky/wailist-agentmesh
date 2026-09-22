@@ -38,16 +38,17 @@ export function damp(distance: number): number {
 }
 
 /**
- * How far the arrow has turned for a given pull, in degrees: 0 (pointing down)
- * at rest, 180 (pointing up, "let go now") once the pull will fire.
+ * How much of the ring is drawn for a given pull: 0 at rest, 1 once the pull
+ * will fire.
  *
- * Proportional rather than a flip at the threshold. The flip ran on a timer,
- * so it lagged the finger, and a pull hovering at the threshold made it flick
- * back and forth. Turning in step with the pull keeps it attached to the
- * thumb, and still ends pointing up exactly when release would refresh.
+ * The ring fills instead of anything turning. An arrow that rotated with the
+ * pull read as the indicator spinning for no reason, and rotation during a
+ * drag is motion the finger never asked for: the pull goes one way, so what it
+ * draws should grow one way. A full ring is then the same shape that spins
+ * once the refresh starts.
  */
-export function arrowTurn(offset: number): number {
-  return Math.round(Math.min(Math.max(offset, 0) / PULL_THRESHOLD_PX, 1) * 180);
+export function pullProgress(offset: number): number {
+  return Math.min(Math.max(offset, 0) / PULL_THRESHOLD_PX, 1);
 }
 
 export function PullToRefresh({
@@ -172,7 +173,10 @@ export function PullToRefresh({
           data-spinning={refreshing ? "" : undefined}
           style={{ transform: `translate(-50%, ${offset - 28}px)` }}
         >
-          {refreshing ? <Spinner /> : <Arrow turn={arrowTurn(offset)} />}
+          <Ring
+            progress={refreshing ? 1 : pullProgress(offset)}
+            spinning={refreshing}
+          />
         </div>
       )}
       <div
@@ -192,33 +196,30 @@ export function PullToRefresh({
   );
 }
 
-// Points down while pulling and turns with the pull, pointing up once letting
-// go will refresh. No transition: it tracks the finger frame by frame, as the
-// indicator's position already does.
-function Arrow({ turn }: { turn: number }) {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      style={{ display: "block", transform: `rotate(${turn}deg)` }}
-    >
-      <path d="M8 2.5v11M3.5 9 8 13.5 12.5 9" />
-    </svg>
-  );
-}
+// One shape for the whole gesture: a ring that draws itself as the pull grows,
+// closes when letting go would refresh, and then turns while the refresh runs.
+//
+// Nothing rotates until the refresh. During the pull the circle is simply
+// drawn further round, which is the pull's own direction rather than a second
+// motion competing with it.
+//
+// The spin belongs to THIS element, never to .ptr-indicator around it. That
+// element carries an inline `transform` that positions it under the finger,
+// and CSS applies the `rotate` property outside `transform`, so animating
+// `rotate` there swings the whole bubble around the top of the list on a 25px
+// radius -- an orbit, which is exactly what it looked like. This svg has no
+// transform of its own, so it turns about its own centre.
+const RING_RADIUS = 6;
+const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
 
-// What the refresh shows instead of the arrow: an open ring, which reads as
-// loading however it is rotated. The arrow used to stay and spin, and an arrow
-// turning in circles reads as something gone wrong. The ring turns through the
-// indicator's ptr-spin animation (responsive.css).
-function Spinner() {
+function Ring({ progress, spinning }: { progress: number; spinning: boolean }) {
+  // Refreshing: a fixed three-quarter gap, which is what makes a turning ring
+  // read as motion rather than a static circle.
+  const drawn = spinning ? RING_LENGTH * 0.75 : RING_LENGTH * progress;
   return (
     <svg
+      className="ptr-indicator__ring"
+      data-spinning={spinning ? "" : undefined}
       width="16"
       height="16"
       viewBox="0 0 16 16"
@@ -227,9 +228,18 @@ function Spinner() {
       strokeWidth="1.75"
       strokeLinecap="round"
       style={{ display: "block" }}
-      data-testid="ptr-spinner"
+      data-testid="ptr-ring"
     >
-      <path d="M8 2a6 6 0 1 1-6 6" />
+      <circle
+        cx="8"
+        cy="8"
+        r={RING_RADIUS}
+        strokeDasharray={RING_LENGTH}
+        strokeDashoffset={RING_LENGTH - drawn}
+        // Starts at the top and draws clockwise, so it fills the way the
+        // finger is travelling.
+        transform="rotate(-90 8 8)"
+      />
     </svg>
   );
 }
