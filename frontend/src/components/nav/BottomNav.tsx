@@ -63,17 +63,35 @@ export function BottomNav() {
       "tel",
       "url",
     ]);
+    // Focus alone does not mean the keyboard is up: Back on Android closes the
+    // keyboard and leaves the field focused, and the bar used to stay hidden
+    // with nothing on screen to hide it for. So the keyboard is read from the
+    // viewport, which shrinks by the keyboard's height when it opens, measured
+    // against the tallest height seen at this width (rotation starts over).
+    const KEYBOARD_MIN_PX = 150;
+    const height = () => window.visualViewport?.height ?? window.innerHeight;
+    let tallest = height();
+    let width = window.innerWidth;
     const sync = () => {
       if (!live) return;
+      if (window.innerWidth !== width) {
+        width = window.innerWidth;
+        tallest = height();
+      }
+      tallest = Math.max(tallest, height());
+      const keyboardUp = tallest - height() > KEYBOARD_MIN_PX;
       const el = document.activeElement;
-      const typing =
+      const textField =
         (el instanceof HTMLInputElement &&
           textTypes.has(el.type) &&
           !el.readOnly) ||
         (el instanceof HTMLTextAreaElement && !el.readOnly) ||
         (el instanceof HTMLElement && el.isContentEditable);
-      if (typing) document.body.setAttribute("data-typing", "");
-      else document.body.removeAttribute("data-typing");
+      if (textField && keyboardUp) {
+        document.body.setAttribute("data-typing", "");
+      } else {
+        document.body.removeAttribute("data-typing");
+      }
     };
     // focusout fires before focus reaches the next element, so the new focus
     // is read on the next task.
@@ -82,10 +100,14 @@ export function BottomNav() {
     };
     document.addEventListener("focusin", sync);
     document.addEventListener("focusout", onFocusOut);
+    window.addEventListener("resize", sync);
+    window.visualViewport?.addEventListener("resize", sync);
     return () => {
       live = false;
       document.removeEventListener("focusin", sync);
       document.removeEventListener("focusout", onFocusOut);
+      window.removeEventListener("resize", sync);
+      window.visualViewport?.removeEventListener("resize", sync);
       document.body.removeAttribute("data-typing");
     };
   }, [visible]);
