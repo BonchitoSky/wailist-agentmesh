@@ -246,6 +246,44 @@ describe("boot", () => {
       replace: true,
     });
   });
+
+  // Password sign-in follows ?next=; social sign-in must too, or a
+  // notification tapped while signed out loses its workflow.
+  it("goes where sign-in was headed, and keeps it on a failed attempt", async () => {
+    const h = harness({ token: null, optedIn: false });
+    const { boot } = await import("./index");
+    await boot();
+
+    await h.deliverOAuth({
+      ok: true,
+      token: "tok_oauth",
+      next: "/workflows/app?id=wf-1",
+    });
+    expect(h.navigate).toHaveBeenLastCalledWith("/workflows/app?id=wf-1", {
+      replace: true,
+    });
+
+    await h.deliverOAuth({
+      ok: false,
+      reason: "cancelled",
+      next: "/workflows/app?id=wf-1",
+    });
+    expect(h.navigate).toHaveBeenLastCalledWith(
+      "/signin?error=cancelled&next=%2Fworkflows%2Fapp%3Fid%3Dwf-1",
+      { replace: true },
+    );
+  });
+
+  it("ignores a next target that leaves the app", async () => {
+    const h = harness({ token: null, optedIn: false });
+    const { boot } = await import("./index");
+    await boot();
+
+    await h.deliverOAuth({ ok: true, token: "tok_oauth", next: "//evil.test" });
+    expect(h.navigate).toHaveBeenLastCalledWith("/workflows", {
+      replace: true,
+    });
+  });
 });
 
 describe("onSignedOut", () => {

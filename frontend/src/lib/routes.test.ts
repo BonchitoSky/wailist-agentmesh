@@ -59,3 +59,29 @@ describe("workflowHref in the native app", () => {
     );
   });
 });
+
+describe("safeNextPath", () => {
+  it("keeps a path inside the app", async () => {
+    const { safeNextPath } = await load(true);
+    expect(safeNextPath("/workflows/app?id=wf-1")).toBe(
+      "/workflows/app?id=wf-1",
+    );
+  });
+
+  it("refuses anything that could leave the app or loop to sign-in", async () => {
+    const { safeNextPath } = await load(true);
+    for (const raw of [
+      null,
+      undefined,
+      "",
+      "workflows",
+      "//evil.test",
+      "/\\evil.test",
+      "https://evil.test",
+      "/signin?error=x",
+      "/signup",
+    ]) {
+      expect(safeNextPath(raw)).toBeNull();
+    }
+  });
+});
