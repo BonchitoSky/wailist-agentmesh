@@ -115,6 +115,21 @@ describe("BottomNav while typing", () => {
     expect(typing()).toBe(false);
   });
 
+  // The converse: the rotation closes the keyboard and the field keeps focus.
+  // The landscape height with no keyboard is still below the portrait height
+  // with one, so nothing ever "grew back" and the bar stayed away. A width
+  // seen before now has its own full height to measure against.
+  it("returns when a rotation closes the keyboard in an orientation seen before", () => {
+    renderWithSearch();
+    rotate(WIDTH + 400, 400);
+    rotate(WIDTH, FULL);
+    setViewportHeight(FULL - 320);
+    expect(typing()).toBe(true);
+
+    rotate(WIDTH + 400, 400);
+    expect(typing()).toBe(false);
+  });
+
   it("ignores a small resize that is not a keyboard", () => {
     renderWithSearch();
     setViewportHeight(FULL - 60);

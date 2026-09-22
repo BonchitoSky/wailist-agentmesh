@@ -133,18 +133,24 @@ export function describeSchedule(
   // length. So every month of the year is checked -- skipping months that do
   // not have the day, as the scheduler does -- and a single local day is
   // named only when every month agrees on it.
+  //
+  // The twelve months start from this one, and the time given is the next
+  // run's. Daylight saving moves the local clock time across the year, and
+  // the one a reader needs is the one that is coming.
   const day = asInt(dom, 1, 31);
   if (dow === "*" && day !== null) {
     const instants = Array.from(
       { length: 12 },
-      (_, month) => new Date(Date.UTC(year, month, day, h, m)),
+      (_, i) => new Date(Date.UTC(year, mon + i, day, h, m)),
     ).filter((instant) => instant.getUTCDate() === day);
     const localDays = new Set(
       instants.map((instant) => read(instant, { day: "numeric" })),
     );
     if (instants.length === 0 || localDays.size !== 1) return CUSTOM;
     const localDay = Number([...localDays][0]);
-    return `Every month on the ${ordinal(localDay)} at ${at(instants[0])}`;
+    // This month's run may already be past; the next is then a month on.
+    const next = instants.find((instant) => instant >= now) ?? instants[0];
+    return `Every month on the ${ordinal(localDay)} at ${at(next)}`;
   }
 
   return CUSTOM;
