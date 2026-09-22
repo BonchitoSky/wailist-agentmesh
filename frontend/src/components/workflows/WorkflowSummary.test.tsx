@@ -259,6 +259,51 @@ describe("WorkflowSummary", () => {
 
   // The figures come with the workflow, which used to be read once, so they
   // stayed at their pre-run values while the run list moved on.
+  // Every read of the workflow is numbered. The read triggered when a run
+  // starts can be slow and land after the one triggered when it finishes; it
+  // must not put the older figures back.
+  it("keeps the newest figures when an older workflow read lands last", async () => {
+    let settleStart!: (wf: Workflow) => void;
+    api.get
+      .mockResolvedValueOnce(workflow({ totalRuns: 1 }))
+      .mockReturnValueOnce(
+        new Promise<Workflow>((r) => {
+          settleStart = r;
+        }),
+      )
+      .mockResolvedValue(workflow({ totalRuns: 3 }));
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await screen.findByText("Succeeded");
+    const fact = (label: string) =>
+      screen.queryByText(label)?.nextElementSibling?.textContent;
+
+    const started = {
+      ...FINISHED,
+      id: "r-2",
+      status: "running" as const,
+      startedAt: new Date().toISOString(),
+      finishedAt: undefined,
+    };
+    api.listForWorkflow.mockResolvedValue(page([started, FINISHED]));
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+
+    api.listForWorkflow.mockResolvedValue(
+      page([{ ...started, status: "success" }, FINISHED]),
+    );
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(fact("Total runs")).toBe("3"));
+
+    await act(async () => {
+      settleStart(workflow({ totalRuns: 2 }));
+    });
+    expect(fact("Total runs")).toBe("3");
+  });
+
   it("re-reads its figures when a run starts and when it finishes", async () => {
     render(<WorkflowSummary workflowId="wf-1" />);
     await screen.findByText("Succeeded");

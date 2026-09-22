@@ -200,9 +200,28 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
       },
     );
   }, [workflowId, applyRunPage, applyRunsError]);
+  // The workflow is read from three places -- the first load, a pull, and a
+  // change in run activity -- and they can overlap. Numbered the same way, so
+  // a slow read (say, the one a run starting triggered) cannot land after a
+  // newer one and put back figures from before the run finished.
+  const workflowSeq = useRef(0);
+  const readWorkflow = useCallback(
+    (onError?: (e: unknown) => void) => {
+      const seq = ++workflowSeq.current;
+      return workflowsApi.get(workflowId).then(
+        (wf) => {
+          if (seq === workflowSeq.current) applyWorkflow(wf);
+        },
+        (e: unknown) => {
+          if (seq === workflowSeq.current) onError?.(e);
+        },
+      );
+    },
+    [workflowId, applyWorkflow],
+  );
   const loadWorkflow = useCallback(
-    () => workflowsApi.get(workflowId).then(applyWorkflow, applyWorkflowError),
-    [workflowId, applyWorkflow, applyWorkflowError],
+    () => readWorkflow(applyWorkflowError),
+    [readWorkflow, applyWorkflowError],
   );
 
   // The first load. State is only set once a response lands, and not at all
@@ -214,9 +233,18 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
       (value: T) => {
         if (!cancelled) apply(value);
       };
+    const wfSeq = ++workflowSeq.current;
+    const unlessNewerRead =
+      <T,>(apply: (value: T) => void) =>
+      (value: T) => {
+        if (wfSeq === workflowSeq.current) apply(value);
+      };
     workflowsApi
       .get(workflowId)
-      .then(unlessGone(applyWorkflow), unlessGone(applyWorkflowError));
+      .then(
+        unlessGone(unlessNewerRead(applyWorkflow)),
+        unlessGone(unlessNewerRead(applyWorkflowError)),
+      );
     const seq = ++runsSeq.current;
     const unlessSuperseded =
       <T,>(apply: (value: T) => void) =>
@@ -293,11 +321,8 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     const previous = seenActivity.current;
     seenActivity.current = runActivity;
     if (previous === null || previous === runActivity) return;
-    workflowsApi
-      .get(workflowId)
-      .then(applyWorkflow)
-      .catch(() => {});
-  }, [runActivity, runsLoaded, workflowId, applyWorkflow]);
+    void readWorkflow();
+  }, [runActivity, runsLoaded, readWorkflow]);
 
   const now = useNow(anyRunning);
 
