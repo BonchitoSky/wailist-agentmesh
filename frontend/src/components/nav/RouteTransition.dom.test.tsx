@@ -39,4 +39,15 @@ describe("RouteTransition", () => {
     stubReducedMotion(true);
     expect(navigate().className).toBe("");
   });
+
+  // Turning reduced motion on mid-transition cancels the animation, so no
+  // animationend arrives to take the class off -- and the class clips the
+  // frame for as long as it stays.
+  it("drops the class when the animation is cancelled", () => {
+    stubReducedMotion(false);
+    const screen = navigate();
+    expect(screen.className).toBe("route-enter-fwd");
+    screen.dispatchEvent(new Event("animationcancel", { bubbles: true }));
+    expect(screen.className).toBe("");
+  });
 });
