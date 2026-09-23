@@ -366,6 +366,58 @@ describe("runProgress", () => {
     expect(p.failed).toBe(false);
   });
 
+  // Go marshals times as RFC3339Nano, which drops trailing zeros, so a
+  // fractional-second row and an exact-second one differ in length. Compared
+  // as text, "10:00:00.1Z" sorts BEFORE "10:00:00Z" -- "." is below "Z" --
+  // and the older attempt won.
+  it("prefers a fractional-second attempt over an earlier exact second", () => {
+    const p = runProgress(
+      steps,
+      [
+        { nodeId: "a", status: "failed", ts: "2026-09-23T10:00:00Z" },
+        {
+          nodeId: "a",
+          status: "success",
+          durationMs: 30,
+          ts: "2026-09-23T10:00:00.1Z",
+        },
+      ],
+      "success",
+    );
+    expect(p.steps[1].state).toBe("done");
+    expect(p.failed).toBe(false);
+  });
+
+  it("keeps the fractional winner whichever order it arrives in", () => {
+    const p = runProgress(
+      steps,
+      [
+        {
+          nodeId: "a",
+          status: "success",
+          durationMs: 30,
+          ts: "2026-09-23T10:00:00.1Z",
+        },
+        { nodeId: "a", status: "failed", ts: "2026-09-23T10:00:00Z" },
+      ],
+      "success",
+    );
+    expect(p.steps[1].state).toBe("done");
+    expect(p.failed).toBe(false);
+  });
+
+  it("falls back to array order for a timestamp it cannot read", () => {
+    const p = runProgress(
+      steps,
+      [
+        { nodeId: "a", status: "failed", ts: "not a time" },
+        { nodeId: "a", status: "success", ts: "also not a time" },
+      ],
+      "success",
+    );
+    expect(p.steps[1].state).toBe("done");
+  });
+
   it("calls a workflow with no steps complete rather than 0%", () => {
     expect(runProgress([], [], "success").percent).toBe(100);
   });

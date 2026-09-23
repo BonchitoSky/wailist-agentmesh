@@ -195,14 +195,29 @@ export function runProgress(
   // ts) and Resume recomputes step indexes against the current workflow, so
   // after a topology edit a retry that moved to a lower level sorts BEFORE
   // the older failed row it replaces -- and taking the last entry would show
-  // a run that succeeded as failed. Rows without a timestamp keep the old
-  // rule, later entry wins, which is also the tie-break for equal ones.
+  // a run that succeeded as failed.
+  //
+  // Compared as instants, never as text. Go marshals times as RFC3339Nano,
+  // which omits trailing zeros in the fractional part, so the two rows of a
+  // legitimate pair can differ in length: "...10:00:00.1Z" is later than
+  // "...10:00:00Z" but sorts before it as a string, because "." is below "Z".
+  // A row with no timestamp, or one that will not parse, keeps the old rule
+  // -- later entry wins -- which is also the tie-break for equal instants.
   const byNode = new Map<string, ProgressLog>();
   const isStep = new Set(steps.map((s) => s.id));
+  const at = (log: ProgressLog): number | null => {
+    if (!log.ts) return null;
+    const instant = Date.parse(log.ts);
+    return Number.isNaN(instant) ? null : instant;
+  };
   for (const log of logs) {
     if (!isStep.has(log.nodeId)) continue;
     const held = byNode.get(log.nodeId);
-    if (held && log.ts && held.ts && log.ts < held.ts) continue;
+    if (held) {
+      const incoming = at(log);
+      const kept = at(held);
+      if (incoming !== null && kept !== null && incoming < kept) continue;
+    }
     byNode.set(log.nodeId, log);
   }
 
