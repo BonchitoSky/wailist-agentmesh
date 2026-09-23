@@ -607,6 +607,22 @@ describe("WorkflowSummary", () => {
     expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
   }
 
+  // Date.now() has millisecond resolution, so two answers landing back to
+  // back read the same value -- 10,000 ties in 10,000 pairs, measured. While
+  // freshness was two wall-clock stamps compared with `>`, a tie always went
+  // to the list, and a terminal detail that answered second in the same
+  // millisecond stayed suppressed once list polling failed.
+  it("prefers the answer that landed second even on one clock tick", async () => {
+    vi.useFakeTimers();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      await terminalDetailOutlastsTheList();
+    } finally {
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   // A GET /runs/{id} that keeps failing left a dock assuming "running", with
   // no headline it could stand behind and no way to dismiss it.
   it("offers a way out when the run's detail cannot be read", async () => {

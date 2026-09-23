@@ -9,6 +9,7 @@ import { RunSheet } from "@/components/runs/RunSheet";
 import { RunProgressDock } from "@/components/runs/RunProgressDock";
 import { useRunDetail } from "@/components/runs/useRunDetail";
 import { workflowSteps } from "@/lib/runProgress";
+import { nextResponseSeq } from "@/lib/responseOrder";
 import { RunStatusPill } from "@/components/runs/RunStatusPill";
 import { UpcomingRuns } from "@/components/runs/UpcomingRuns";
 import { useNow } from "@/hooks/useNow";
@@ -161,10 +162,10 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   const [acting, setActing] = useState(false);
   // The same flag, readable and writable synchronously. See `run` below.
   const actingRef = useRef(false);
-  // When the run list last answered. Only a successful read sets it: a
-  // failed poll tells us nothing newer, and must not make the list look
-  // fresher than it is.
-  const [runsAnsweredAt, setRunsAnsweredAt] = useState<number | null>(null);
+  // Where the run list's last answer sits in the order responses landed.
+  // Only a successful read sets it: a failed poll tells us nothing newer,
+  // and must not make the list look fresher than it is.
+  const [runsAnsweredSeq, setRunsAnsweredSeq] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<RunSummary | null>(null);
@@ -176,7 +177,7 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   // What a response does to the screen, kept apart from the request so the
   // first load, a pull and the poll all apply it the same way.
   const applyRunPage = useCallback((page: RunPage) => {
-    setRunsAnsweredAt(Date.now());
+    setRunsAnsweredSeq(nextResponseSeq());
     setRunList((prev) => mergeRuns(page.runs, prev));
     if (!pagedRef.current) setNextCursor(page.nextCursor);
     setRunsUnavailable(false);
@@ -338,7 +339,10 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   // request, not an answer.
   const detailStatus = trackedDetail.run?.status ?? null;
   const rowStatus = trackedServerRow?.status ?? null;
-  const detailIsNewer = (trackedDetail.answeredAt ?? 0) > (runsAnsweredAt ?? 0);
+  // Both sides take their number from one counter, so there is no tie to
+  // break: whichever answer landed second has the larger one.
+  const detailIsNewer =
+    (trackedDetail.answeredSeq ?? 0) > (runsAnsweredSeq ?? 0);
   const trackedStatus =
     (rowStatus !== null && detailStatus !== null
       ? detailIsNewer

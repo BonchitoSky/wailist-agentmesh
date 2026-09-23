@@ -78,7 +78,7 @@ function detail(overrides: Partial<RunDetailState> = {}): RunDetailState {
     deadLetters: [],
     error: null,
     loading: false,
-    answeredAt: Date.parse(RUN.finishedAt!),
+    answeredSeq: 1,
     ...overrides,
   };
 }
