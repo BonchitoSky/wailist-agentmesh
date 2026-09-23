@@ -163,7 +163,16 @@ export function RunProgressDock({
       return false;
     }
   });
-  const celebrated = useRef(false);
+  // Held in a ref so the timer below need not depend on the caller passing
+  // the same function twice. It does not: WorkflowSummary renders these as
+  // inline arrows, so each poll makes new ones. Depending on the callback,
+  // the effect cleared its own timeout on the next render while the guard
+  // stopped it arming another, and a finished run then sat there for good.
+  // Found on a device; no test had a parent that re-rendered.
+  const dismissRef = useRef(onDismiss);
+  useEffect(() => {
+    dismissRef.current = onDismiss;
+  });
   const toggle = () => {
     setExpanded((was) => {
       const next = !was;
@@ -182,12 +191,14 @@ export function RunProgressDock({
   // A run that worked says so and leaves. One that failed stays: it is the
   // only thing on screen that can explain what went wrong.
   useEffect(() => {
-    if (!done || celebrated.current) return;
-    celebrated.current = true;
+    if (!done) return;
     void tapFeedback();
-    const timer = window.setTimeout(onDismiss, SUCCESS_LINGER_MS);
+    const timer = window.setTimeout(
+      () => dismissRef.current(),
+      SUCCESS_LINGER_MS,
+    );
     return () => window.clearTimeout(timer);
-  }, [done, onDismiss]);
+  }, [done]);
 
   const state = failed ? "failed" : done ? "success" : "running";
   const failedStep = progress.steps.find((s) => s.state === "failed");

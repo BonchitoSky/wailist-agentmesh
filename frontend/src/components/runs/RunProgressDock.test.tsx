@@ -158,6 +158,44 @@ describe("the run progress dock", () => {
     }
   });
 
+  // Found on a device: the screen re-renders every poll and passes new
+  // inline callbacks, which used to cancel the dismissal timer and leave a
+  // finished run docked for good.
+  it("still dismisses when the screen re-renders with new callbacks", () => {
+    vi.useFakeTimers();
+    try {
+      const onDismiss = vi.fn();
+      const props = {
+        steps: STEPS,
+        logs: STEPS.map((s) => ({ nodeId: s.id, status: "success" })),
+        runStatus: "success",
+        onDetails: vi.fn(),
+        onRunAgain: vi.fn(),
+      };
+      const { rerender } = render(
+        <RunProgressDock {...props} onDismiss={() => onDismiss()} />,
+      );
+      // Two more renders, each with a brand-new function, as a poll would.
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerender(<RunProgressDock {...props} onDismiss={() => onDismiss()} />);
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      rerender(<RunProgressDock {...props} onDismiss={() => onDismiss()} />);
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+      // And the haptic still only fires once, however often it re-renders.
+      expect(haptics.tapFeedback).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says where the run is for a screen reader", () => {
     show({ logs: [{ nodeId: "t", status: "success" }] });
     const dock = document.querySelector(".run-dock")!;
