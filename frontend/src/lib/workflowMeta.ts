@@ -20,6 +20,25 @@ export function totalSpend(list: Workflow[]): number {
   return list.reduce((sum, wf) => sum + spendDollars(wf.spend), 0);
 }
 
+/** The dash this screen shows wherever a figure is not known. */
+export const UNKNOWN = "—";
+
+/**
+ * Whether a workflow's run and spend figures mean anything.
+ *
+ * False when the backend's aggregation failed: `runs` and `spend` are then
+ * absent for the same reason they are absent on a workflow that never ran,
+ * and summing or printing them states an outage as fact.
+ */
+export function statsKnown(wf: Workflow): boolean {
+  return wf.statsUnavailable !== true;
+}
+
+/** True only when every row's figures are real, so a total can be summed. */
+export function totalSpendKnown(list: Workflow[]): boolean {
+  return list.every(statsKnown);
+}
+
 // Dollars through the same formatter every run's spend uses, so $0.890 and
 // $4.22 read alike wherever they appear.
 export function formatDollars(dollars: number): string {
@@ -97,8 +116,10 @@ export function workflowMeta(
   // not "status is draft": a draft with runs behind it says "not deployed".
   const runs = wf.runs ?? 0;
   return {
-    draft: wf.status === "draft" && runs === 0,
-    spent: formatDollars(spendDollars(wf.spend)),
+    // "Never run" is a claim about history, and an unavailable aggregation
+    // is not evidence for it.
+    draft: statsKnown(wf) && wf.status === "draft" && runs === 0,
+    spent: statsKnown(wf) ? formatDollars(spendDollars(wf.spend)) : UNKNOWN,
     state: state(wf, now, timeZone),
     statusWord: statusWord(wf.status),
   };
