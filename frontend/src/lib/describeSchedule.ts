@@ -148,16 +148,16 @@ export function describeSchedule(
     const next = upcoming[0] ?? week(1)[0];
     // The week the next run falls in is the one whose local days are named.
     const nextWeek = week(0).some((i) => +i === +next) ? 0 : 1;
-    // A run near midnight lands on a different local day whenever the zone's
-    // offset moves, and then no single weekday is true. Offset changes are
-    // not evenly spaced, so a single probe half a year on can step straight
-    // over one: Africa/Casablanca sits at UTC+1 but drops to UTC for
-    // Ramadan, a few weeks that come earlier each year. So every occurrence
-    // in the year ahead is read, and a weekday is named only when they all
-    // agree on it.
+    // A time-zone offset change can move a run to another local weekday.
+    // Check every occurrence for more than a year because some zones have
+    // short offset pauses that a seasonal sample would miss:
+    // Africa/Casablanca sits at UTC+1 but drops to UTC for Ramadan, a few
+    // weeks that come earlier each year.
     const named = localDays(week(nextWeek));
-    const ahead = Array.from({ length: 52 }, (_, i) => week(nextWeek + i));
-    if (localDays(ahead.flat()).join() !== named.join()) return CUSTOM;
+    const namedKey = named.join();
+    for (let offset = nextWeek + 1; offset <= nextWeek + 53; offset++) {
+      if (namedKey !== localDays(week(offset)).join()) return CUSTOM;
+    }
     return `${phraseDays(named)} at ${at(next)}`;
   }
 
