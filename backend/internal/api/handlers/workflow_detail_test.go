@@ -92,6 +92,39 @@ func TestGetWorkflowSendsAZeroRunCount(t *testing.T) {
 	}
 }
 
+// The detail endpoint marks its 30-day figures unavailable when the
+// aggregation behind them fails, because the zero values it falls back to
+// are indistinguishable from a workflow that had no runs and no spend.
+//
+// This covers the success half of that contract: a healthy read must NOT set
+// the flag, or every workflow's figures would show as dashes. The failure
+// half has no seam to test through -- Deps.Store is a concrete *db.Store, so
+// there is no way to make AttachWorkflowStats fail without breaking the
+// database out from under the whole request.
+func TestGetWorkflowLeavesStatsAvailableWhenTheyAggregate(t *testing.T) {
+	d := testDeps(t)
+	user := newTestUser(t, d)
+	id := scheduledWorkflow(t, d, user, "Aggregated", "", time.Time{}, false)
+	if _, err := d.Store.CreateRun(t.Context(), id, "manual", []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/workflows/"+id, nil)
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, user))
+	req = withURLParam(req, "id", id)
+	w := httptest.NewRecorder()
+	d.GetWorkflow(w, req)
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := body["statsUnavailable"]; ok {
+		t.Fatalf("statsUnavailable = %v, want it omitted on a successful read", got)
+	}
+	if body["runs"] != float64(1) {
+		t.Fatalf("runs = %v, want 1", body["runs"])
+	}
+}
+
 func TestUpdateWorkflowDescription(t *testing.T) {
 	d := testDeps(t)
 	user := newTestUser(t, d)
