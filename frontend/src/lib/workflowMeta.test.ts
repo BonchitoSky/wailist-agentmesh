@@ -167,6 +167,12 @@ describe("workflowAriaLabel", () => {
   // A scheduled workflow whose next time has not reached the list said "no
   // run queued", which reads as "nothing will happen" about a workflow that
   // runs every weekday.
+  //
+  // The zone is given explicitly. Which weekdays 07:00 UTC falls on is a
+  // property of where the reader is -- in Anchorage or Honolulu it is the
+  // evening before, so the same cron is Sunday to Thursday -- and this test
+  // is about the sentence being the schedule rather than "no run queued",
+  // not about the conversion, which describeSchedule's own tests cover.
   it("says the schedule when no next run time is known", () => {
     const meta = workflowMeta(
       {
@@ -177,7 +183,8 @@ describe("workflowAriaLabel", () => {
         edges: [],
         scheduleCron: "0 7 * * 1-5",
       },
-      Date.now(),
+      NOW,
+      "America/New_York",
     );
     expect(meta.state.text).toMatch(/^every weekday at /);
     expect(meta.state.text).not.toContain("0 7 * * 1-5");
