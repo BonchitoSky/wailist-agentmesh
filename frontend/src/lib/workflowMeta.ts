@@ -1,5 +1,6 @@
 import type { Workflow } from "./types";
 import { formatSpend, formatUntil } from "./runFormat";
+import { describeSchedule } from "./describeSchedule";
 
 // How one workflow reads on the phone list: a line of figures ending in the
 // one thing worth knowing about its state. Kept apart from the component so
@@ -54,7 +55,21 @@ function state(wf: Workflow, now: number): { text: string; tone: Tone } {
     ? formatUntil(wf.scheduleNextRunAt, now)
     : "—";
   // formatUntil says "—" for a time it cannot read.
-  if (until === "—") return { text: "no run queued", tone: "dim" };
+  if (until === "—") {
+    // A workflow on a schedule is not "no run queued" just because no next
+    // time reached this screen: it still runs every weekday, whether or not
+    // the list knows when. Saying the schedule is both truer and more useful.
+    if (wf.scheduleCron) {
+      const words = describeSchedule(wf.scheduleCron);
+      // Sentence case on its own line elsewhere, lower case in this line of
+      // figures ("$1.48 · every weekday at 7:00 AM").
+      return {
+        text: words.charAt(0).toLowerCase() + words.slice(1),
+        tone: "dim",
+      };
+    }
+    return { text: "no run queued", tone: "dim" };
+  }
   // It says "now" for a time already reached; "next now" is not English.
   return {
     text: until === "now" ? "due now" : `next ${until}`,

@@ -163,4 +163,54 @@ describe("workflowAriaLabel", () => {
       "Content Pipeline, draft. Never run.",
     );
   });
+
+  // A scheduled workflow whose next time has not reached the list said "no
+  // run queued", which reads as "nothing will happen" about a workflow that
+  // runs every weekday.
+  it("says the schedule when no next run time is known", () => {
+    const meta = workflowMeta(
+      {
+        id: "wf-1",
+        name: "Daily Market Brief",
+        status: "deployed",
+        nodes: [],
+        edges: [],
+        scheduleCron: "0 7 * * 1-5",
+      },
+      Date.now(),
+    );
+    expect(meta.state.text).toMatch(/^every weekday at /);
+    expect(meta.state.text).not.toContain("0 7 * * 1-5");
+  });
+
+  it("still says no run queued when there is no schedule at all", () => {
+    const meta = workflowMeta(
+      {
+        id: "wf-2",
+        name: "Manual only",
+        status: "deployed",
+        nodes: [],
+        edges: [],
+      },
+      Date.now(),
+    );
+    expect(meta.state.text).toBe("no run queued");
+  });
+
+  // A known next run is the more useful thing, so it still wins.
+  it("prefers the next run time when the list knows it", () => {
+    const meta = workflowMeta(
+      {
+        id: "wf-3",
+        name: "Daily Market Brief",
+        status: "deployed",
+        nodes: [],
+        edges: [],
+        scheduleCron: "0 7 * * 1-5",
+        scheduleNextRunAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+      },
+      Date.now(),
+    );
+    expect(meta.state.text).toMatch(/^next in /);
+  });
 });
