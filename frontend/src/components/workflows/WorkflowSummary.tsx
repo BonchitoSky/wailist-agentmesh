@@ -32,6 +32,7 @@ import {
 import { workflowHref } from "@/lib/routes";
 import { describeWorkflow, workflowAgents } from "@/lib/describeWorkflow";
 import { describeSchedule } from "@/lib/describeSchedule";
+import { statsKnown, UNKNOWN } from "@/lib/workflowMeta";
 
 // A workflow as a phone needs it: is it running, what did its runs do and
 // cost, and Run or Stop. The graph itself is not shown here; it is edited on a
@@ -68,6 +69,11 @@ const count = new Intl.NumberFormat();
 function WorkflowDetails({ workflow }: { workflow: Workflow }) {
   const agents = workflowAgents(workflow);
   const spent = Number.parseFloat(workflow.spend ?? "");
+  // The 30-day pair comes from the same aggregation the list uses, and it
+  // can fail on its own while the workflow itself reads fine. Both are then
+  // zero for want of an answer, not because nothing ran. `totalRuns` has its
+  // own nullable field and already says so by itself.
+  const figuresKnown = statsKnown(workflow);
   return (
     <>
       <section aria-label="About this workflow" style={{ marginTop: 24 }}>
@@ -88,14 +94,16 @@ function WorkflowDetails({ workflow }: { workflow: Workflow }) {
           </div>
           <div>
             <dt>Runs · 30 days</dt>
-            <dd>{count.format(workflow.runs ?? 0)}</dd>
+            <dd>{figuresKnown ? count.format(workflow.runs ?? 0) : UNKNOWN}</dd>
           </div>
           <div>
             <dt>Spent · 30 days</dt>
             <dd>
-              {formatSpend(
-                Number.isFinite(spent) ? Math.round(spent * 1e6) : 0,
-              )}
+              {figuresKnown
+                ? formatSpend(
+                    Number.isFinite(spent) ? Math.round(spent * 1e6) : 0,
+                  )
+                : UNKNOWN}
             </dd>
           </div>
           <div>
