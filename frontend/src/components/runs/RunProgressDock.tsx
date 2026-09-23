@@ -99,8 +99,14 @@ const DOCK_CSS = `
 .run-dock__chevron { flex: none; color: var(--fg-dim); font-size: 11px; }
 .run-dock__steps {
   list-style: none;
-  margin: 10px 0 0;
-  padding: 0;
+  /* Scrolling the steps costs the other axis too: a box with overflow-y set
+     computes overflow-x to auto rather than leaving it visible, and the
+     working node's dot pulses to 1.5x -- 2px past the content edge on each
+     side, which sliced it flat against the list's left edge. The padding
+     gives the pulse somewhere to go and the negative margin cancels it, so
+     nothing moves. */
+  margin: 10px -4px 0;
+  padding: 0 4px;
   /* min-height:0 lets a flex child actually shrink and scroll. */
   min-height: 0;
   overflow-y: auto;

@@ -296,6 +296,16 @@ describe("the run progress dock", () => {
     expect(style).toMatch(/\.run-dock__steps \{[\s\S]*?overflow-y: auto/);
   });
 
+  // Making the step list scroll cost the other axis: a box with overflow-y
+  // set computes overflow-x to auto rather than visible, and the working
+  // dot's 1.5x pulse was sliced flat against the list's left edge.
+  it("leaves the pulsing dot room inside the scrolling list", () => {
+    show({});
+    const style = document.querySelector(".run-dock style")!.textContent!;
+    expect(style).toMatch(/\.run-dock__steps \{[\s\S]*?padding: 0 4px/);
+    expect(style).toMatch(/\.run-dock__steps \{[\s\S]*?margin: 10px -4px 0/);
+  });
+
   it("gives its only expand control a thumb-sized target", () => {
     show({});
     const style = document.querySelector(".run-dock style")!.textContent!;
