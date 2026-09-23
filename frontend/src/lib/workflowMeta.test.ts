@@ -4,6 +4,7 @@ import {
   formatDollars,
   spendDollars,
   totalSpend,
+  totalSpendKnown,
   workflowAriaLabel,
   workflowMeta,
 } from "./workflowMeta";
@@ -188,6 +189,40 @@ describe("workflowAriaLabel", () => {
     );
     expect(meta.state.text).toMatch(/^every weekday at /);
     expect(meta.state.text).not.toContain("0 7 * * 1-5");
+  });
+
+  // ListWorkflows returns the base list when attachWorkflowStats fails, and
+  // `runs` is omitted at zero, so an outage looks exactly like a workflow
+  // that never ran. Printed as figures it reads as fact: "$0 spent".
+  describe("when the run and spend aggregation failed", () => {
+    const failed = (extra: Partial<Workflow> = {}) =>
+      wf({
+        statsUnavailable: true,
+        runs: undefined,
+        spend: undefined,
+        ...extra,
+      });
+
+    it("shows a dash for spend rather than $0", () => {
+      expect(workflowMeta(failed(), NOW).spent).toBe("—");
+    });
+
+    it("does not call a draft never run", () => {
+      const m = workflowMeta(failed({ status: "draft" }), NOW);
+      expect(m.draft).toBe(false);
+      expect(workflowAriaLabel(failed({ status: "draft" }), m)).not.toContain(
+        "Never run",
+      );
+    });
+
+    it("keeps saying $0 when the figures really are zero", () => {
+      expect(workflowMeta(wf({ spend: undefined }), NOW).spent).toBe("$0");
+    });
+
+    it("reports whether a total can be summed at all", () => {
+      expect(totalSpendKnown([wf({ spend: "1.00" })])).toBe(true);
+      expect(totalSpendKnown([wf({ spend: "1.00" }), failed()])).toBe(false);
+    });
   });
 
   it("still says no run queued when there is no schedule at all", () => {
