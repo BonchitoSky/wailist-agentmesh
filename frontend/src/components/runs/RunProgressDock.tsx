@@ -27,8 +27,21 @@ const DOCK_CSS = `
   background: var(--bg-elev-2);
   border-top: 1px solid var(--border);
   box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
-  padding: 10px 16px calc(10px + var(--safe-bottom, 0px));
+  /* Fixed to the viewport, so no ancestor's padding reaches it: in landscape
+     edge-to-edge a cutout or the system navigation bar would sit on top of
+     the headline and the buttons. Both horizontal insets are its own. */
+  padding: 10px calc(16px + var(--safe-right, 0px))
+    calc(10px + var(--safe-bottom, 0px)) calc(16px + var(--safe-left, 0px));
+  /* Expanded, a workflow with enough nodes made the dock taller than a
+     compact landscape screen and pushed its own collapse control off the
+     top. The bar, the line and the actions always fit; the step list takes
+     what is left and scrolls. */
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+  max-height: 70svh;
 }
+.run-dock__bar, .run-dock__line, .run-dock__actions { flex: none; }
 .run-dock__bar {
   position: relative;
   height: 4px;
@@ -46,6 +59,7 @@ const DOCK_CSS = `
 }
 .run-dock[data-state="failed"] .run-dock__fill { background: var(--danger); }
 .run-dock[data-state="success"] .run-dock__fill { background: var(--ok, #3ecf8e); }
+.run-dock[data-state="stopped"] .run-dock__fill { background: var(--fg-dim); }
 .run-dock__line {
   display: flex;
   align-items: center;
@@ -53,11 +67,20 @@ const DOCK_CSS = `
   width: 100%;
   background: none;
   border: none;
+  /* The only way to expand or collapse the dock. At one line tall it was
+     under both the 24px WCAG target and the 44px this screen uses
+     everywhere else. */
+  min-height: 44px;
   padding: 0;
   color: var(--fg);
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+.run-dock__line:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 .run-dock__count {
   font-family: var(--font-mono);
@@ -74,7 +97,15 @@ const DOCK_CSS = `
   min-width: 0;
 }
 .run-dock__chevron { flex: none; color: var(--fg-dim); font-size: 11px; }
-.run-dock__steps { list-style: none; margin: 10px 0 0; padding: 0; }
+.run-dock__steps {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  /* min-height:0 lets a flex child actually shrink and scroll. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .run-dock__step {
   display: flex;
   align-items: center;
@@ -109,6 +140,7 @@ const DOCK_CSS = `
   color: var(--fg-dim);
 }
 .run-dock__actions { display: flex; gap: 8px; margin-top: 10px; }
+.run-dock__actions button:disabled { opacity: 0.55; cursor: default; }
 @keyframes run-dock-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.5); opacity: 0.45; }
@@ -137,6 +169,8 @@ export function RunProgressDock({
   steps,
   logs,
   runStatus,
+  detailError = null,
+  busy = false,
   onDetails,
   onRunAgain,
   onDismiss,
@@ -145,6 +179,13 @@ export function RunProgressDock({
   logs: ProgressLog[];
   /** The run's own status: running, success, failed or stopped. */
   runStatus: string;
+  /**
+   * Set when the run's detail could not be read. The dock then says so and
+   * offers a way out rather than sitting on a status it cannot confirm.
+   */
+  detailError?: string | null;
+  /** True while a start request is in flight, which disables Run again. */
+  busy?: boolean;
   /** Opens the run's sheet, which already shows logs and problems. */
   onDetails: () => void;
   onRunAgain: () => void;
@@ -185,11 +226,26 @@ export function RunProgressDock({
     });
   };
 
-  const done = runStatus === "success";
-  const failed = runStatus === "failed" || progress.failed;
+  // Stop is a terminal status of its own and is read first. Cancelling a node
+  // in flight makes runner.go record THAT node as failed before finalising
+  // the run as stopped, so `progress.failed` is true for a run the reader
+  // stopped on purpose; without this precedence the dock called their own
+  // Stop a failure. With no node in flight there is no log at all, and the
+  // dock sat on "Starting…" with no way to dismiss it.
+  const stopped = runStatus === "stopped";
+  const done = !stopped && runStatus === "success";
+  // `progress.failed` reads the logs, which can be a stale answer about a
+  // run that has since been resumed under the same id. A run something says
+  // is going is not a failed one, whatever its last logs said.
+  const failed =
+    !stopped &&
+    (runStatus === "failed" ||
+      (progress.failed && runStatus !== "running" && runStatus !== "success"));
+  // Nothing more will happen, so the dock offers a way out of all three.
+  const over = stopped || done || failed;
 
-  // A run that worked says so and leaves. One that failed stays: it is the
-  // only thing on screen that can explain what went wrong.
+  // A run that worked says so and leaves. One that failed or was stopped
+  // stays: it is the only thing on screen that can explain what happened.
   useEffect(() => {
     if (!done) return;
     void tapFeedback();
@@ -200,13 +256,26 @@ export function RunProgressDock({
     return () => window.clearTimeout(timer);
   }, [done]);
 
-  const state = failed ? "failed" : done ? "success" : "running";
+  const state = stopped
+    ? "stopped"
+    : failed
+      ? "failed"
+      : done
+        ? "success"
+        : "running";
   const failedStep = progress.steps.find((s) => s.state === "failed");
-  const headline = failed
-    ? `Failed at ${failedStep?.name ?? "a step"}`
-    : done
-      ? "Finished"
-      : (progress.current?.name ?? "Starting…");
+  // A detail that cannot be read is reported as that, not as a status. The
+  // alternative -- showing the last status it managed to read, or assuming
+  // "running" -- states as fact something nothing has confirmed.
+  const headline = detailError
+    ? "Cannot read this run"
+    : stopped
+      ? "Stopped"
+      : failed
+        ? `Failed at ${failedStep?.name ?? "a step"}`
+        : done
+          ? "Finished"
+          : (progress.current?.name ?? "Starting…");
 
   return (
     <div
@@ -256,14 +325,20 @@ export function RunProgressDock({
         </ol>
       )}
 
-      {(failed || done) && (
+      {(over || detailError) && (
         <div className="run-dock__actions">
           <button type="button" onClick={onDetails} style={dockBtn}>
             Details
           </button>
-          {failed && (
-            <button type="button" onClick={onRunAgain} style={dockBtn}>
-              Run again
+          {(failed || stopped) && (
+            <button
+              type="button"
+              onClick={onRunAgain}
+              style={dockBtn}
+              disabled={busy}
+              aria-busy={busy}
+            >
+              {busy ? "Starting…" : "Run again"}
             </button>
           )}
           <button

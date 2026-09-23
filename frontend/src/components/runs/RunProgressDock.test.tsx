@@ -196,6 +196,113 @@ describe("the run progress dock", () => {
     }
   });
 
+  // Stop cancels the node in flight, and runner.go records THAT node as
+  // failed before finalising the run as stopped. The dock called the
+  // reader's own Stop a failure, and useRunDetail stops polling a terminal
+  // run, so it stayed that way.
+  it("calls a stopped run stopped, not failed", () => {
+    const { onDetails, onDismiss } = show({
+      logs: [
+        { nodeId: "t", status: "success" },
+        { nodeId: "a", status: "failed" },
+      ],
+      runStatus: "stopped",
+    });
+
+    expect(screen.getByText("Stopped")).toBeTruthy();
+    expect(screen.queryByText(/^Failed at /)).toBeNull();
+    expect(
+      document.querySelector(".run-dock")!.getAttribute("data-state"),
+    ).toBe("stopped");
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(onDetails).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(onDismiss).toHaveBeenCalled();
+  });
+
+  // Stop between levels cancels nothing, so there is no log at all. The dock
+  // read that as "not started yet" and sat on "Starting…" with no way out.
+  it("gives a stop between steps a headline and a way out", () => {
+    const { onDismiss } = show({ logs: [], runStatus: "stopped" });
+
+    expect(screen.getByText("Stopped")).toBeTruthy();
+    expect(screen.queryByText("Starting…")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(onDismiss).toHaveBeenCalled();
+  });
+
+  it("stays put after a stop instead of dismissing itself", () => {
+    vi.useFakeTimers();
+    try {
+      const { onDismiss } = show({ logs: [], runStatus: "stopped" });
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says so when the run's detail cannot be read", () => {
+    const { onDismiss } = show({
+      logs: [],
+      runStatus: "",
+      detailError: "Network error",
+    });
+
+    expect(screen.getByText("Cannot read this run")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(onDismiss).toHaveBeenCalled();
+  });
+
+  it("will not start a second run while one is starting", () => {
+    const { onRunAgain } = show({
+      logs: [{ nodeId: "t", status: "failed" }],
+      runStatus: "failed",
+      busy: true,
+    });
+    const again = screen.getByRole("button", { name: "Starting…" });
+    expect((again as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(again);
+    expect(onRunAgain).not.toHaveBeenCalled();
+  });
+
+  // It is fixed to the viewport, so no ancestor's padding reaches it: in
+  // landscape a cutout or the navigation bar would sit over the buttons.
+  it("keeps clear of the cutout on every side", () => {
+    show({});
+    const style = document.querySelector(".run-dock style")!.textContent!;
+    expect(style).toMatch(/\.run-dock \{[\s\S]*?--safe-left/);
+    expect(style).toMatch(/\.run-dock \{[\s\S]*?--safe-right/);
+    expect(style).toMatch(/\.run-dock \{[\s\S]*?--safe-bottom/);
+  });
+
+  // Expanded, a workflow with enough nodes grew taller than a compact
+  // landscape screen and pushed its own collapse control off the top.
+  it("scrolls its steps rather than outgrowing the screen", () => {
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      id: `n${i}`,
+      name: `Step ${i}`,
+    }));
+    show({ steps: many, logs: [] });
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+
+    expect(screen.getByText("Step 39")).toBeTruthy();
+    // The control that collapses it again is still there to be pressed.
+    expect(screen.getByRole("button", { expanded: true })).toBeTruthy();
+    const style = document.querySelector(".run-dock style")!.textContent!;
+    expect(style).toMatch(/\.run-dock \{[\s\S]*?max-height/);
+    expect(style).toMatch(/\.run-dock__steps \{[\s\S]*?overflow-y: auto/);
+  });
+
+  it("gives its only expand control a thumb-sized target", () => {
+    show({});
+    const style = document.querySelector(".run-dock style")!.textContent!;
+    expect(style).toMatch(/\.run-dock__line \{[\s\S]*?min-height: 44px/);
+    expect(style).toContain(".run-dock__line:focus-visible");
+  });
+
   it("says where the run is for a screen reader", () => {
     show({ logs: [{ nodeId: "t", status: "success" }] });
     const dock = document.querySelector(".run-dock")!;
