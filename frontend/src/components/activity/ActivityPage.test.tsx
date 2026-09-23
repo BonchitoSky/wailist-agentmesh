@@ -51,8 +51,12 @@ vi.mock("@/components/runs/RunSheet", () => ({
 // A promise the test settles when it chooses, to put responses out of order.
 function deferred<T>() {
   let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((r, j) => {
+    resolve = r;
+    reject = j;
+  });
+  return { promise, resolve, reject };
 }
 
 import { ActivityPage } from "./ActivityPage";
@@ -318,6 +322,59 @@ describe("ActivityPage", () => {
     });
     expect(screen.getByText("Fresh run")).toBeTruthy();
     expect(screen.queryByText("Stale load")).toBeNull();
+  });
+
+  it("drops an older refresh after a newer poll has landed", async () => {
+    const refresh = deferred<RunPage>();
+    const poll = deferred<RunPage>();
+    api.recent
+      .mockResolvedValueOnce(page([run({ id: "r-1" })]))
+      .mockReturnValueOnce(refresh.promise)
+      .mockReturnValueOnce(poll.promise);
+    render(<ActivityPage />);
+    await screen.findByText("Morning digest");
+
+    fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await act(async () => {
+      poll.resolve(
+        page([run({ id: "r-2", workflowName: "Newer poll result" })]),
+      );
+    });
+    expect(screen.getByText("Newer poll result")).toBeTruthy();
+
+    await act(async () => {
+      refresh.resolve(
+        page([run({ id: "r-3", workflowName: "Older refresh result" })]),
+      );
+    });
+    expect(screen.getByText("Newer poll result")).toBeTruthy();
+    expect(screen.queryByText("Older refresh result")).toBeNull();
+  });
+
+  it("accepts a pending refresh after a newer poll fails", async () => {
+    const refresh = deferred<RunPage>();
+    const poll = deferred<RunPage>();
+    api.recent
+      .mockResolvedValueOnce(page([run({ id: "r-1" })]))
+      .mockReturnValueOnce(refresh.promise)
+      .mockReturnValueOnce(poll.promise);
+    render(<ActivityPage />);
+    await screen.findByText("Morning digest");
+
+    fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await act(async () => {
+      poll.reject(new Error("offline"));
+    });
+    await act(async () => {
+      refresh.resolve(
+        page([run({ id: "r-2", workflowName: "Refreshed result" })]),
+      );
+    });
+    expect(screen.getByText("Refreshed result")).toBeTruthy();
   });
 
   describe("while a run is going", () => {
