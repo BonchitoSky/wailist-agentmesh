@@ -379,6 +379,29 @@ describe("WorkflowSummary", () => {
     expect(screen.queryByText("Summarised from its steps.")).toBeNull();
   });
 
+  // GetWorkflow leaves the 30-day pair at zero when its aggregation fails,
+  // exactly as it does for a workflow that had no runs and no spend. Printed
+  // as "0" and "$0.00" that is a figure the reader has no reason to doubt.
+  it("shows dashes for the 30-day figures the server could not total", async () => {
+    api.get.mockResolvedValue(
+      workflow({
+        statsUnavailable: true,
+        totalRuns: 7,
+        runs: 0,
+        spend: undefined,
+      }),
+    );
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await screen.findByText("Succeeded");
+    const fact = (label: string) =>
+      screen.getByText(label).nextElementSibling?.textContent;
+
+    expect(fact("Runs · 30 days")).toBe("—");
+    expect(fact("Spent · 30 days")).toBe("—");
+    // totalRuns has its own nullable field and was answered, so it stands.
+    expect(fact("Total runs")).toBe("7");
+  });
+
   it("shows its run figures", async () => {
     api.get.mockResolvedValue(
       workflow({ totalRuns: 1842, runs: 38, spend: "1.482" }),
