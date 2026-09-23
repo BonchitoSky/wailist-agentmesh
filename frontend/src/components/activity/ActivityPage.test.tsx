@@ -317,6 +317,43 @@ describe("ActivityPage", () => {
     expect(screen.queryByText("Stale load")).toBeNull();
   });
 
+  // The inverse of the two above: the slow request is the refresh, and the
+  // poll that started after it answers first.
+  it("drops a refresh that a later poll has already answered", async () => {
+    vi.useFakeTimers();
+    const slowRefresh = deferred<RunPage>();
+    api.recent
+      // The first load, with a second page to reach for.
+      .mockResolvedValueOnce(page([run({ id: "r-1" })], "c1"))
+      // "Show older runs".
+      .mockResolvedValueOnce(page([run({ id: "r-0", workflowName: "Older" })]))
+      // The pull, which does not answer until the end of the test.
+      .mockReturnValueOnce(slowRefresh.promise)
+      // The poll, started after the pull and answering before it.
+      .mockResolvedValueOnce(
+        page([run({ id: "r-9", workflowName: "Newer run" })]),
+      );
+    render(<ActivityPage />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "Show older runs" }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByText("Newer run")).toBeTruthy();
+
+    await act(async () => {
+      slowRefresh.resolve(
+        page([run({ id: "r-1", workflowName: "Stale pull" })]),
+      );
+    });
+    expect(screen.queryByText("Stale pull")).toBeNull();
+    expect(screen.getByText("Newer run")).toBeTruthy();
+    // The page already loaded is still there too.
+    expect(screen.getByText("Older")).toBeTruthy();
+    vi.useRealTimers();
+  });
+
   describe("while a run is going", () => {
     afterEach(() => vi.useRealTimers());
 

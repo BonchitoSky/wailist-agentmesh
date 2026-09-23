@@ -61,35 +61,51 @@ export function ActivityPage() {
   // newer list and its cursor.
   const generation = useRef(0);
 
+  // The generation alone does not order requests within one generation. A
+  // poll that starts after a pull shares the pull's generation, so if the
+  // poll answers first the slower pull would still pass the check and put
+  // its older page -- and only its page -- back over newer state. So every
+  // request for page one takes a ticket, and a response is dropped once a
+  // later ticket has already been applied.
+  const ticket = useRef(0);
+  const applied = useRef(0);
+  const stillNewest = useCallback((id: number, gen: number) => {
+    if (gen !== generation.current || id < applied.current) return false;
+    applied.current = id;
+    return true;
+  }, []);
+
   const refresh = useCallback(() => {
     const gen = ++generation.current;
+    const id = ++ticket.current;
     return runsApi.recent({ limit: PAGE_SIZE }).then(
       (page) => {
-        if (gen === generation.current) applyFirstPage(page);
+        if (stillNewest(id, gen)) applyFirstPage(page);
       },
       (e: unknown) => {
-        if (gen === generation.current) applyError(e);
+        if (stillNewest(id, gen)) applyError(e);
       },
     );
-  }, [applyFirstPage, applyError]);
+  }, [applyFirstPage, applyError, stillNewest]);
 
   // The first load. State is only set once the response lands, and not at all
   // if the screen has gone by then.
   useEffect(() => {
     let cancelled = false;
     const gen = ++generation.current;
+    const id = ++ticket.current;
     runsApi.recent({ limit: PAGE_SIZE }).then(
       (page) => {
-        if (!cancelled && gen === generation.current) applyFirstPage(page);
+        if (!cancelled && stillNewest(id, gen)) applyFirstPage(page);
       },
       (e: unknown) => {
-        if (!cancelled && gen === generation.current) applyError(e);
+        if (!cancelled && stillNewest(id, gen)) applyError(e);
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [applyFirstPage, applyError]);
+  }, [applyFirstPage, applyError, stillNewest]);
 
   const anyRunning = runList.some((r) => r.status === "running");
 
@@ -119,6 +135,7 @@ export function ActivityPage() {
   // request is then dropped rather than replacing newer figures.
   const poll = useCallback(async () => {
     const gen = generation.current;
+    const id = ++ticket.current;
     try {
       const page = await runsApi.recent({ limit: PAGE_SIZE });
       // A running row that twenty newer runs have pushed off page one would
@@ -135,7 +152,7 @@ export function ActivityPage() {
           ),
         ),
       );
-      if (gen !== generation.current) return;
+      if (!stillNewest(id, gen)) return;
       if (unavailable || !loaded) {
         generation.current += 1;
         applyFirstPage(page);
@@ -148,7 +165,7 @@ export function ActivityPage() {
     } catch {
       // The next tick tries again.
     }
-  }, [unavailable, loaded, applyFirstPage]);
+  }, [unavailable, loaded, applyFirstPage, stillNewest]);
   usePolling(poll, anyRunning ? POLL_MS : IDLE_POLL_MS);
 
   const now = useNow(anyRunning);

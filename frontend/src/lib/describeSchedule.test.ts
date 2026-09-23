@@ -67,6 +67,16 @@ describe("describeSchedule", () => {
         "On a custom schedule",
       );
     });
+
+    it("says custom when only a few weeks of the year disagree", () => {
+      // Morocco sits at UTC+1, so 23:30 UTC is Monday 12:30 AM -- except for
+      // the few weeks it drops to UTC for Ramadan, when the same run is
+      // Sunday 11:30 PM. In 2027 that is 7 February to 7 March, which a
+      // single sample half a year on never sees.
+      expect(describeSchedule("30 23 * * 0", eve, "Africa/Casablanca")).toBe(
+        "On a custom schedule",
+      );
+    });
   });
 
   it("says a monthly day", () => {
