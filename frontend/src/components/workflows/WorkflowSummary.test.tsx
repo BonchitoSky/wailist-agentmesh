@@ -517,39 +517,95 @@ describe("WorkflowSummary", () => {
     expect(api.run).toHaveBeenCalledTimes(2);
   });
 
+  const runDetail = (status: string) => ({
+    run: {
+      id: "r-2",
+      workflowId: "wf-1",
+      triggeredBy: "manual",
+      status,
+      startedAt: new Date().toISOString(),
+    },
+    logs: [{ nodeId: "t", status: status === "failed" ? "failed" : "running" }],
+    deadLetters: [],
+  });
+
   // useRunDetail stops polling a terminal run, so a Resume under the same id
   // left the dock on "failed" for good while the list moved back to running.
+  // The list saying "running" now restarts that polling.
   it("follows the list back to running after a resume", async () => {
-    api.runGet.mockResolvedValue({
-      run: {
-        id: "r-2",
-        workflowId: "wf-1",
-        triggeredBy: "manual",
-        status: "failed",
-        startedAt: new Date().toISOString(),
-      },
-      logs: [{ nodeId: "t", status: "failed" }],
-      deadLetters: [],
-    });
+    api.runGet.mockResolvedValue(runDetail("failed"));
     render(<WorkflowSummary workflowId="wf-1" />);
     await screen.findByText("Succeeded");
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
     await screen.findByRole("button", { name: "Run again" });
+    const readsBefore = api.runGet.mock.calls.length;
 
-    // The list picks the same run up again, resumed.
+    // The list picks the same run up again, resumed -- and so, now, does the
+    // run's own detail, which is what a real Resume writes.
+    api.listForWorkflow.mockResolvedValue(
+      page([
+        { ...FINISHED, id: "r-2", status: "running", finishedAt: undefined },
+      ]),
+    );
+    api.runGet.mockResolvedValue(runDetail("running"));
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Run again" })).toBeNull(),
+    );
+    // It did not merely defer to the list: it went and asked again.
+    expect(api.runGet.mock.calls.length).toBeGreaterThan(readsBefore);
+    expect(
+      document.querySelector(".run-dock")!.getAttribute("data-state"),
+    ).toBe("running");
+  });
+
+  // The mirror image of that case. The list says running, the detail then
+  // reads terminal, and the next list poll fails. useRunDetail stops after a
+  // terminal answer, so a dock that always took the list row sat on a stale
+  // "running" for good, with no Details and no Dismiss.
+  it("follows a terminal detail once the list stops answering", async () => {
+    vi.useFakeTimers();
+    try {
+      await terminalDetailOutlastsTheList();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  async function terminalDetailOutlastsTheList() {
+    api.runGet.mockResolvedValue(runDetail("running"));
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await act(async () => {});
+
+    // The server's own row now carries the run, still going.
     api.listForWorkflow.mockResolvedValue(
       page([
         { ...FINISHED, id: "r-2", status: "running", finishedAt: undefined },
       ]),
     );
     document.dispatchEvent(new Event("visibilitychange"));
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Run again" })).toBeNull(),
-    );
+    await act(async () => {});
     expect(
       document.querySelector(".run-dock")!.getAttribute("data-state"),
     ).toBe("running");
-  });
+
+    // The run then ends, and the list goes quiet, so the detail's own poll
+    // is the last thing to answer about this run.
+    api.runGet.mockResolvedValue(runDetail("failed"));
+    api.listForWorkflow.mockRejectedValue(new Error("offline"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(
+      document.querySelector(".run-dock")!.getAttribute("data-state"),
+    ).toBe("failed");
+    expect(screen.getByRole("button", { name: "Run again" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeTruthy();
+  }
 
   // A GET /runs/{id} that keeps failing left a dock assuming "running", with
   // no headline it could stand behind and no way to dismiss it.

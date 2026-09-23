@@ -13,6 +13,12 @@ export interface RunDetailState {
   deadLetters: DeadLetterRun[];
   error: string | null;
   loading: boolean;
+  /**
+   * When the last successful response landed, for a caller holding a second
+   * reading of the same run that needs to know which of the two is newer.
+   * Null before the first answer.
+   */
+  answeredAt: number | null;
 }
 
 // Polling interval while the run is still going. Short enough that a step
@@ -26,6 +32,7 @@ const EMPTY: Omit<RunDetailState, "loading"> = {
   logs: [],
   deadLetters: [],
   error: null,
+  answeredAt: null,
 };
 
 // One run's detail for the run sheet: fetched once, re-fetched every two
@@ -72,6 +79,7 @@ export function useRunDetail(
           deadLetters: data.deadLetters ?? [],
           error: null,
           loading: false,
+          answeredAt: Date.now(),
         });
         if (data.run.status === "running") timer = setTimeout(load, POLL_MS);
       } catch (e) {
@@ -110,5 +118,6 @@ export function useRunDetail(
     deadLetters: state.deadLetters,
     error: state.error,
     loading: state.loading,
+    answeredAt: state.answeredAt,
   };
 }

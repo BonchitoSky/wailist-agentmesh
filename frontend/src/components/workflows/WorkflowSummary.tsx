@@ -161,6 +161,10 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   const [acting, setActing] = useState(false);
   // The same flag, readable and writable synchronously. See `run` below.
   const actingRef = useRef(false);
+  // When the run list last answered. Only a successful read sets it: a
+  // failed poll tells us nothing newer, and must not make the list look
+  // fresher than it is.
+  const [runsAnsweredAt, setRunsAnsweredAt] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<RunSummary | null>(null);
@@ -172,6 +176,7 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   // What a response does to the screen, kept apart from the request so the
   // first load, a pull and the poll all apply it the same way.
   const applyRunPage = useCallback((page: RunPage) => {
+    setRunsAnsweredAt(Date.now());
     setRunList((prev) => mergeRuns(page.runs, prev));
     if (!pagedRef.current) setNextCursor(page.nextCursor);
     setRunsUnavailable(false);
@@ -323,12 +328,25 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   //     Resume under the same run id leaves the detail on "failed" for good
   //     while the list moves back to "running".
   //
-  // So the server's own row wins whenever the two disagree, the detail
-  // answers for a run the list has not heard of yet, and the optimistic row
-  // is the last resort -- it is the request, not an answer.
+  // Neither source is reliably the fresher one, so whichever answered last
+  // wins. Taking the row unconditionally broke the mirror image of the
+  // Resume case: the list says running, the detail then reads terminal, and
+  // the next list poll fails. useRunDetail has stopped polling by then, so
+  // the dock would have sat on a stale "running" for good, with no way out.
+  //
+  // The optimistic row stays the last resort either way -- it is the
+  // request, not an answer.
   const detailStatus = trackedDetail.run?.status ?? null;
+  const rowStatus = trackedServerRow?.status ?? null;
+  const detailIsNewer = (trackedDetail.answeredAt ?? 0) > (runsAnsweredAt ?? 0);
   const trackedStatus =
-    trackedServerRow?.status ?? detailStatus ?? trackedRow?.status ?? "running";
+    (rowStatus !== null && detailStatus !== null
+      ? detailIsNewer
+        ? detailStatus
+        : rowStatus
+      : (rowStatus ?? detailStatus)) ??
+    trackedRow?.status ??
+    "running";
   // Only worth saying while nothing else can answer. The optimistic row does
   // not count: it is the request, not an answer, and a detail that never
   // loads would otherwise leave the dock on a "running" nothing confirmed.
