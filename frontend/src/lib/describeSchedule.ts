@@ -132,11 +132,15 @@ export function describeSchedule(
             Date.UTC(year, mon, date - now.getUTCDay() + d + offset * 7, h, m),
           ),
       );
+    // One formatter for every sample: the year's worth below would otherwise
+    // build a few hundred of them.
+    const weekday = new Intl.DateTimeFormat("en-US", {
+      weekday: "short",
+      timeZone,
+    });
     const localDays = (instants: Date[]) =>
       [
-        ...new Set(
-          instants.map((i) => DAY_SHORT.indexOf(read(i, { weekday: "short" }))),
-        ),
+        ...new Set(instants.map((i) => DAY_SHORT.indexOf(weekday.format(i)))),
       ].sort((a, b) => a - b);
     const upcoming = [...week(0), ...week(1)]
       .filter((i) => i >= now)
@@ -144,12 +148,16 @@ export function describeSchedule(
     const next = upcoming[0] ?? week(1)[0];
     // The week the next run falls in is the one whose local days are named.
     const nextWeek = week(0).some((i) => +i === +next) ? 0 : 1;
-    // A run near midnight lands on a different local day for half the year,
-    // and then no single weekday is true. Half a year on is the other offset,
-    // so if the days match there they hold all year; if they do not, the
-    // schedule has no weekday to name and reads as custom.
+    // A run near midnight lands on a different local day whenever the zone's
+    // offset moves, and then no single weekday is true. Offset changes are
+    // not evenly spaced, so a single probe half a year on can step straight
+    // over one: Africa/Casablanca sits at UTC+1 but drops to UTC for
+    // Ramadan, a few weeks that come earlier each year. So every occurrence
+    // in the year ahead is read, and a weekday is named only when they all
+    // agree on it.
     const named = localDays(week(nextWeek));
-    if (named.join() !== localDays(week(nextWeek + 26)).join()) return CUSTOM;
+    const ahead = Array.from({ length: 52 }, (_, i) => week(nextWeek + i));
+    if (localDays(ahead.flat()).join() !== named.join()) return CUSTOM;
     return `${phraseDays(named)} at ${at(next)}`;
   }
 
