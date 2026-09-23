@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runProgress, workflowSteps } from "./runProgress";
-import type { Workflow } from "./types";
+import type { Workflow, WorkflowNode } from "./types";
 
 // A trigger, an agent with a model provider and a tool attached, then two
 // nodes after it. The engine runs the trigger, the agent and those two; the
@@ -71,6 +71,80 @@ describe("workflowSteps", () => {
       "tool",
       "n4",
     ]);
+  });
+
+  // engine/graph.go adds a dependency for every "{{ node.<id> }}" reference,
+  // so the backend runs the producer first even with no edge joining them.
+  // Ordering on edges alone put the consumer first and the dock then called
+  // it current while the engine was still on the producer.
+  it("waits for a node it only references", () => {
+    const ordered = workflowSteps({
+      id: "wf-2",
+      name: "Reference only",
+      nodes: [
+        {
+          id: "consumer",
+          type: "action",
+          name: "Send",
+          x: 0,
+          y: 0,
+          config: { body: "Total: {{ node.producer.amount }}" },
+        },
+        { id: "producer", type: "action", name: "Price", x: 0, y: 0 },
+      ],
+      edges: [],
+    });
+    expect(ordered.map((s) => s.id)).toEqual(["producer", "consumer"]);
+  });
+
+  it("reads references from every field the engine resolves", () => {
+    const steps = (n: Partial<WorkflowNode>) =>
+      workflowSteps({
+        id: "wf-3",
+        name: "Fields",
+        nodes: [
+          { id: "b", type: "action", name: "B", x: 0, y: 0, ...n },
+          { id: "a", type: "action", name: "A", x: 0, y: 0 },
+        ],
+        edges: [],
+      }).map((s) => s.id);
+
+    const ref = "{{ node.a }}";
+    expect(steps({ emailBody: ref })).toEqual(["a", "b"]);
+    expect(steps({ config: { to: ref } })).toEqual(["a", "b"]);
+    expect(steps({ paramDefaults: { q: ref } })).toEqual(["a", "b"]);
+    expect(
+      steps({ customParams: [{ name: "q", kind: "text", value: ref }] }),
+    ).toEqual(["a", "b"]);
+    // Not resolved at runtime, so not an ordering constraint -- the same
+    // fields engine/graph.go leaves out of templateEligibleStrings.
+    expect(steps({ systemPrompt: ref })).toEqual(["b", "a"]);
+    expect(steps({ description: ref })).toEqual(["b", "a"]);
+    expect(steps({ bodyTemplate: ref })).toEqual(["b", "a"]);
+    // Text, not a reference: the engine requires the closing braces too.
+    expect(steps({ config: { to: "{{ node.a" } })).toEqual(["b", "a"]);
+  });
+
+  // A pair that is both an edge and a reference must count once, or the node
+  // never reaches an in-degree of zero and drops out of the ordered walk.
+  it("counts an edge that is also a reference once", () => {
+    const ordered = workflowSteps({
+      id: "wf-4",
+      name: "Both",
+      nodes: [
+        { id: "a", type: "action", name: "A", x: 0, y: 0 },
+        {
+          id: "b",
+          type: "action",
+          name: "B",
+          x: 0,
+          y: 0,
+          config: { body: "{{ node.a }}" },
+        },
+      ],
+      edges: [{ id: "e1", from: "a", to: "b", kind: "flow" }],
+    });
+    expect(ordered.map((s) => s.id)).toEqual(["a", "b"]);
   });
 });
 
@@ -215,6 +289,81 @@ describe("runProgress", () => {
     );
     expect(p.steps[2].state).toBe("pending");
     expect(p.percent).toBe(25);
+  });
+
+  // The runner writes a "running" row before it executes a node, so a level
+  // running four at once says so. Guessing showed only the first.
+  it("shows every node the server says is running", () => {
+    const p = runProgress(
+      steps,
+      [
+        { nodeId: "t", status: "success" },
+        { nodeId: "a", status: "running" },
+        { nodeId: "n3", status: "running" },
+      ],
+      "running",
+    );
+    expect(p.steps.map((s) => s.state)).toEqual([
+      "done",
+      "running",
+      "running",
+      "pending",
+    ]);
+    expect(p.current?.id).toBe("a");
+  });
+
+  // A branch the run did not take has no log at all. The first-unanswered
+  // guess named it, announcing work on a branch nothing was running.
+  it("names the branch that is running, not the one passed over", () => {
+    const p = runProgress(
+      steps,
+      [
+        { nodeId: "t", status: "success" },
+        { nodeId: "n3", status: "running" },
+      ],
+      "running",
+    );
+    // "a" was skipped over; it is not what the run is working on.
+    expect(p.steps[1].state).toBe("pending");
+    expect(p.steps[2].state).toBe("running");
+    expect(p.current?.id).toBe("n3");
+  });
+
+  it("still guesses while no node has reported running", () => {
+    const p = runProgress(
+      steps,
+      [{ nodeId: "t", status: "success" }],
+      "running",
+    );
+    expect(p.current?.id).toBe("a");
+  });
+
+  // GetRunLogs orders by (stepIndex, ts) and Resume recomputes step indexes,
+  // so a retry that moved to a lower level arrives BEFORE the failed row it
+  // replaces. Taking the last entry called a successful run failed.
+  it("takes the newest attempt by time, not by position", () => {
+    const p = runProgress(
+      steps,
+      [
+        {
+          nodeId: "a",
+          status: "success",
+          durationMs: 30,
+          stepIndex: 0,
+          ts: "2026-09-23T10:05:00Z",
+        },
+        {
+          nodeId: "a",
+          status: "failed",
+          stepIndex: 2,
+          ts: "2026-09-23T10:00:00Z",
+        },
+      ],
+      "success",
+    );
+    expect(p.steps[1].state).toBe("done");
+    expect(p.steps[1].durationMs).toBe(30);
+    expect(p.failed).toBe(false);
   });
 
   it("calls a workflow with no steps complete rather than 0%", () => {

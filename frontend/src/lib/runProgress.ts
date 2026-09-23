@@ -52,10 +52,49 @@ export interface ProgressLog {
   status: string;
   durationMs?: number;
   stepIndex?: number;
+  /**
+   * When the row was written. Array order cannot stand in for it: the API
+   * orders logs by (stepIndex, ts), and Resume recomputes step indexes
+   * against the current workflow, so after a topology edit a newer retry at
+   * a lower level sorts before an older row at a higher one.
+   */
+  ts?: string;
 }
 
 function nodeName(n: WorkflowNode): string {
   return n.name || n.label || n.template || n.type;
+}
+
+// Kept in step with engine/graph.go's nodeRefPattern, which is itself kept in
+// step with the resolver's "node.<id>" / "node.<id>.field" forms. The closing
+// braces are required there and here: an unterminated "{{ node.n5" is text,
+// not a reference, and treating it as one would invent an ordering the
+// engine does not impose.
+const NODE_REF = /\{\{\s*node\.([A-Za-z0-9_-]+)(?:\.[A-Za-z0-9_.-]+)?\s*\}\}/g;
+
+/**
+ * Every node id this node's template-eligible fields refer to.
+ *
+ * The field list mirrors engine/graph.go's templateEligibleStrings: the
+ * fields a connector actually runs through the resolver. systemPrompt,
+ * bodyTemplate and description are deliberately left out there -- none is
+ * resolved at runtime, so "{{ node.x }}" in one of them is prose -- and
+ * leaving them out here keeps the two readings of the same graph the same.
+ * Credentials are not template text and are never scanned.
+ */
+function referencedNodeIds(n: WorkflowNode): string[] {
+  const fields = [
+    n.emailBody,
+    ...Object.values(n.config ?? {}),
+    ...Object.values(n.paramDefaults ?? {}),
+    ...(n.customParams ?? []).map((p) => p.value),
+  ];
+  const ids: string[] = [];
+  for (const field of fields) {
+    if (!field || !field.includes("{{")) continue;
+    for (const m of field.matchAll(NODE_REF)) ids.push(m[1]);
+  }
+  return ids;
 }
 
 /**
@@ -78,14 +117,32 @@ export function workflowSteps(wf: Workflow): { id: string; name: string }[] {
   const steps = nodes.filter((n) => !attached.has(n.id));
   const isStep = new Set(steps.map((n) => n.id));
 
-  const flow = edges.filter(
-    (e) => e.kind !== "attach" && isStep.has(e.from) && isStep.has(e.to),
-  );
   const waitingFor = new Map<string, number>(steps.map((n) => [n.id, 0]));
   const after = new Map<string, string[]>();
-  for (const e of flow) {
-    waitingFor.set(e.to, (waitingFor.get(e.to) ?? 0) + 1);
-    after.set(e.from, [...(after.get(e.from) ?? []), e.to]);
+  // Both kinds of dependency go through here, so a pair that is both a flow
+  // edge and a reference is counted once -- the same dedupe engine/graph.go
+  // does with seenDep, and for the same reason: counted twice, the node
+  // never reaches an in-degree of zero and falls out of the order entirely.
+  const seen = new Set<string>();
+  const dependsOn = (from: string, to: string) => {
+    if (from === to || !isStep.has(from) || !isStep.has(to)) return;
+    // Node ids are [A-Za-z0-9_-], so `>` cannot appear inside one.
+    const key = `${from}>${to}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    waitingFor.set(to, (waitingFor.get(to) ?? 0) + 1);
+    after.set(from, [...(after.get(from) ?? []), to]);
+  };
+
+  for (const e of edges) {
+    if (e.kind !== "attach") dependsOn(e.from, e.to);
+  }
+  // A "{{ node.x }}" reference makes this node wait for x's output whether or
+  // not an edge joins them. The engine orders on that (engine/graph.go), so a
+  // dock that ordered on flow edges alone could call a node current while the
+  // backend was still running the node it reads from.
+  for (const n of steps) {
+    for (const refId of referencedNodeIds(n)) dependsOn(refId, n.id);
   }
 
   const ordered: WorkflowNode[] = [];
@@ -116,10 +173,15 @@ export function workflowSteps(wf: Workflow): { id: string; name: string }[] {
  * going, the first one without an answer is the one being worked on; once it
  * has stopped, nothing is running any more.
  *
- * The backend publishes a node's log when it FINISHES, not when it starts, so
- * "running" is this reading rather than something the server said. That is
- * also why a failure stops the derivation: after a failed node, the ones
- * behind it never started.
+ * The runner writes a node's row with status "running" before it executes it
+ * and updates that row when it finishes, so the server usually does say which
+ * node is working. Those rows are believed. The first-unanswered guess below
+ * is only for the gap before one arrives: guessing when the answer is on hand
+ * hides the other half of a parallel level, and names the branch that was not
+ * taken once a later sibling was chosen.
+ *
+ * A failure still stops the guess: after a failed node, the ones behind it
+ * never started.
  */
 export function runProgress(
   steps: { id: string; name: string }[],
@@ -128,14 +190,29 @@ export function runProgress(
 ): RunProgressSummary {
   // One log per node: the newest attempt wins, and rows for anything that is
   // not a milestone (an attached tool's payment row) are ignored.
+  //
+  // Newest by timestamp, not by position. GetRunLogs orders by (stepIndex,
+  // ts) and Resume recomputes step indexes against the current workflow, so
+  // after a topology edit a retry that moved to a lower level sorts BEFORE
+  // the older failed row it replaces -- and taking the last entry would show
+  // a run that succeeded as failed. Rows without a timestamp keep the old
+  // rule, later entry wins, which is also the tie-break for equal ones.
   const byNode = new Map<string, ProgressLog>();
   const isStep = new Set(steps.map((s) => s.id));
   for (const log of logs) {
     if (!isStep.has(log.nodeId)) continue;
+    const held = byNode.get(log.nodeId);
+    if (held && log.ts && held.ts && log.ts < held.ts) continue;
     byNode.set(log.nodeId, log);
   }
 
   const running = runStatus === "running";
+  // What the server says is in flight, which beats any guess made here.
+  const saidRunning = new Set(
+    [...byNode.entries()]
+      .filter(([, log]) => log.status === "running")
+      .map(([nodeId]) => nodeId),
+  );
   // A run that ended well has nothing left to do: whatever never reported was
   // not reached, rather than still pending.
   const succeeded = runStatus === "success";
@@ -162,9 +239,15 @@ export function runProgress(
         durationMs: log?.durationMs,
       };
     }
-    // No answer yet. The first of these is what the run is working on, as
-    // long as it is still going and nothing has failed.
-    if (running && !failed && firstUnanswered) {
+    // The server named this node as the one it is working on. Every node it
+    // names is shown, so a level running four at once reads as four.
+    if (status === "running") {
+      return { id: step.id, name: step.name, state: "running" };
+    }
+    // No answer yet, and the server has not named anything either: the first
+    // node still unanswered is the one being worked on, as long as the run is
+    // going and nothing has failed.
+    if (running && !failed && firstUnanswered && saidRunning.size === 0) {
       firstUnanswered = false;
       return { id: step.id, name: step.name, state: "running" };
     }
