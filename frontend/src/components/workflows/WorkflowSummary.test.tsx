@@ -459,4 +459,109 @@ describe("WorkflowSummary", () => {
     const dock = document.querySelector(".run-dock")!;
     expect(dock.textContent).toContain("Triage Agent");
   });
+
+  // Two rapid activations, before React has committed `acting`, called
+  // workflows.run twice and billed for two runs.
+  it("starts one run however fast Run is pressed twice", async () => {
+    let start!: (v: { runId: string }) => void;
+    api.run.mockReturnValueOnce(
+      new Promise<{ runId: string }>((r) => (start = r)),
+    );
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await screen.findByText("Succeeded");
+
+    const button = screen.getByRole("button", { name: "Run" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(api.run).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      start({ runId: "r-2" });
+    });
+    expect(api.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts one run however fast the dock's Run again is pressed", async () => {
+    api.listForWorkflow.mockResolvedValue(
+      page([
+        { ...FINISHED, id: "r-2", status: "failed", finishedAt: undefined },
+      ]),
+    );
+    api.runGet.mockResolvedValue({
+      run: {
+        id: "r-2",
+        workflowId: "wf-1",
+        triggeredBy: "manual",
+        status: "failed",
+        startedAt: new Date().toISOString(),
+      },
+      logs: [{ nodeId: "t", status: "failed" }],
+      deadLetters: [],
+    });
+    let start!: (v: { runId: string }) => void;
+    api.run
+      .mockResolvedValueOnce({ runId: "r-2" })
+      .mockReturnValueOnce(new Promise<{ runId: string }>((r) => (start = r)));
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await screen.findByRole("button", { name: "Run" });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    const again = await screen.findByRole("button", { name: "Run again" });
+    fireEvent.click(again);
+    fireEvent.click(again);
+    expect(api.run).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      start({ runId: "r-3" });
+    });
+    expect(api.run).toHaveBeenCalledTimes(2);
+  });
+
+  // useRunDetail stops polling a terminal run, so a Resume under the same id
+  // left the dock on "failed" for good while the list moved back to running.
+  it("follows the list back to running after a resume", async () => {
+    api.runGet.mockResolvedValue({
+      run: {
+        id: "r-2",
+        workflowId: "wf-1",
+        triggeredBy: "manual",
+        status: "failed",
+        startedAt: new Date().toISOString(),
+      },
+      logs: [{ nodeId: "t", status: "failed" }],
+      deadLetters: [],
+    });
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await screen.findByText("Succeeded");
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("button", { name: "Run again" });
+
+    // The list picks the same run up again, resumed.
+    api.listForWorkflow.mockResolvedValue(
+      page([
+        { ...FINISHED, id: "r-2", status: "running", finishedAt: undefined },
+      ]),
+    );
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Run again" })).toBeNull(),
+    );
+    expect(
+      document.querySelector(".run-dock")!.getAttribute("data-state"),
+    ).toBe("running");
+  });
+
+  // A GET /runs/{id} that keeps failing left a dock assuming "running", with
+  // no headline it could stand behind and no way to dismiss it.
+  it("offers a way out when the run's detail cannot be read", async () => {
+    api.listForWorkflow.mockResolvedValue(page([]));
+    api.runGet.mockRejectedValue(new Error("offline"));
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await screen.findByRole("button", { name: "Run" });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    expect(await screen.findByText("Cannot read this run")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(document.querySelector(".run-dock")).toBeNull());
+  });
 });

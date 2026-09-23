@@ -159,6 +159,8 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   // The run just started from here, shown before the list has caught up.
   const [pending, setPending] = useState<RunSummary | null>(null);
   const [acting, setActing] = useState(false);
+  // The same flag, readable and writable synchronously. See `run` below.
+  const actingRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<RunSummary | null>(null);
@@ -299,9 +301,39 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     () => (workflow ? workflowSteps(workflow) : []),
     [workflow],
   );
+  const trackedRow = shown.find((r) => r.id === trackedRunId) ?? null;
+  // The row as the SERVER has it. `shown` may lead with the optimistic row
+  // put up the moment Run was pressed, which says "running" because that is
+  // what was asked for, not because anything has confirmed it.
+  const trackedServerRow = runList.find((r) => r.id === trackedRunId) ?? null;
   // The same 2s poll the run sheet uses. It stops by itself once the run is
-  // no longer running, so a finished dock costs nothing.
-  const trackedDetail = useRunDetail(trackedRunId);
+  // no longer running, so a finished dock costs nothing -- unless the list
+  // says this run is going again, which is how a Resume reaches it.
+  const trackedDetail = useRunDetail(
+    trackedRunId,
+    trackedServerRow?.status === "running",
+  );
+  // The list and the detail are two readings of one run, and each can be the
+  // fresher one:
+  //
+  //   - A GET /runs/{id} that keeps failing leaves the detail with nothing,
+  //     and assuming "running" left a dock that never finished and had no
+  //     Dismiss. The list polls separately and usually knows the answer.
+  //   - useRunDetail stops polling once it reads a terminal status, so a
+  //     Resume under the same run id leaves the detail on "failed" for good
+  //     while the list moves back to "running".
+  //
+  // So the server's own row wins whenever the two disagree, the detail
+  // answers for a run the list has not heard of yet, and the optimistic row
+  // is the last resort -- it is the request, not an answer.
+  const detailStatus = trackedDetail.run?.status ?? null;
+  const trackedStatus =
+    trackedServerRow?.status ?? detailStatus ?? trackedRow?.status ?? "running";
+  // Only worth saying while nothing else can answer. The optimistic row does
+  // not count: it is the request, not an answer, and a detail that never
+  // loads would otherwise leave the dock on a "running" nothing confirmed.
+  const trackedDetailError =
+    !trackedServerRow && !detailStatus ? trackedDetail.error : null;
   const newestRunning = shown[0]?.status === "running";
 
   // Keep refreshing while the screen is visible, and at once on coming back
@@ -376,6 +408,12 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
 
   const run = async () => {
     if (!workflow) return;
+    // setActing is a state update: React has not committed it by the time a
+    // second activation arrives in the same tick, and `acting` on the button
+    // is therefore still false. Two quick taps on Run, or on the dock's Run
+    // again, started two runs and billed for both. The ref is written now.
+    if (actingRef.current) return;
+    actingRef.current = true;
     setActing(true);
     setActionError(null);
     try {
@@ -395,11 +433,14 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Could not start a run.");
     } finally {
+      actingRef.current = false;
       setActing(false);
     }
   };
 
   const stop = async () => {
+    if (actingRef.current) return;
+    actingRef.current = true;
     setActing(true);
     setActionError(null);
     try {
@@ -410,6 +451,7 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
         e instanceof Error ? e.message : "Could not stop the run.",
       );
     } finally {
+      actingRef.current = false;
       setActing(false);
     }
   };
@@ -679,10 +721,11 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
         <RunProgressDock
           steps={steps}
           logs={trackedDetail.logs}
-          runStatus={trackedDetail.run?.status ?? "running"}
+          runStatus={trackedStatus}
+          detailError={trackedDetailError}
+          busy={acting}
           onDetails={() => {
-            const row = shown.find((r) => r.id === trackedRunId);
-            if (row) setSelected(row);
+            if (trackedRow) setSelected(trackedRow);
           }}
           onRunAgain={() => {
             setTrackedRunId(null);

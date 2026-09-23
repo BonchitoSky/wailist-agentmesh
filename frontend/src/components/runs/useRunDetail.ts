@@ -35,7 +35,16 @@ const EMPTY: Omit<RunDetailState, "loading"> = {
 // Deliberately not useRunTranscript. That hook opens a live stream and writes
 // the canvas's "last run" cache when a run finishes, which would replace the
 // canvas's own last run with whichever old run was tapped here.
-export function useRunDetail(runId: string | null): RunDetailState {
+/**
+ * @param live A run this hook has already read as finished, which something
+ * else -- the run list -- says is going again. Resume reuses the run id, so
+ * without this the hook sits on its last terminal answer with its polling
+ * stopped, and the screen keeps showing a run that has since restarted.
+ */
+export function useRunDetail(
+  runId: string | null,
+  live: boolean = false,
+): RunDetailState {
   // Keyed by the run it belongs to, so a new runId shows as loading without
   // resetting state synchronously inside the effect.
   const [state, setState] = useState<{ forId: string | null } & RunDetailState>(
@@ -91,7 +100,7 @@ export function useRunDetail(runId: string | null): RunDetailState {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [runId]);
+  }, [runId, live]);
 
   if (!runId) return { ...EMPTY, loading: false };
   if (state.forId !== runId) return { ...EMPTY, loading: true };
