@@ -1,11 +1,14 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Topbar } from "@/components/Topbar";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
 import { RunSheet } from "@/components/runs/RunSheet";
+import { RunProgressDock } from "@/components/runs/RunProgressDock";
+import { useRunDetail } from "@/components/runs/useRunDetail";
+import { workflowSteps } from "@/lib/runProgress";
 import { RunStatusPill } from "@/components/runs/RunStatusPill";
 import { UpcomingRuns } from "@/components/runs/UpcomingRuns";
 import { useNow } from "@/hooks/useNow";
@@ -159,6 +162,9 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<RunSummary | null>(null);
+  // The run started from here, followed step by step at the bottom of the
+  // screen until it finishes or is dismissed.
+  const [trackedRunId, setTrackedRunId] = useState<string | null>(null);
   const openerRef = useRef<HTMLElement | null>(null);
 
   // What a response does to the screen, kept apart from the request so the
@@ -287,6 +293,15 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     pending && !runList.some((r) => r.id === pending.id) ? pending : null;
   const shown = pendingShown ? [pendingShown, ...runList] : runList;
   const anyRunning = shown.some((r) => r.status === "running");
+  // The milestones the dock draws, from the graph rather than from the logs:
+  // logs arrive per attempt and carry a topological level, not a position.
+  const steps = useMemo(
+    () => (workflow ? workflowSteps(workflow) : []),
+    [workflow],
+  );
+  // The same 2s poll the run sheet uses. It stops by itself once the run is
+  // no longer running, so a finished dock costs nothing.
+  const trackedDetail = useRunDetail(trackedRunId);
   const newestRunning = shown[0]?.status === "running";
 
   // Keep refreshing while the screen is visible, and at once on coming back
@@ -365,6 +380,8 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
     setActionError(null);
     try {
       const { runId } = await workflowsApi.run(workflowId);
+      // The run started from this screen is the one the dock follows.
+      setTrackedRunId(runId);
       setPending({
         id: runId,
         workflowId,
@@ -658,6 +675,22 @@ export function WorkflowSummary({ workflowId }: { workflowId: string }) {
       </PullToRefresh>
 
       <style>{SUMMARY_CSS}</style>
+      {trackedRunId && workflow && (
+        <RunProgressDock
+          steps={steps}
+          logs={trackedDetail.logs}
+          runStatus={trackedDetail.run?.status ?? "running"}
+          onDetails={() => {
+            const row = shown.find((r) => r.id === trackedRunId);
+            if (row) setSelected(row);
+          }}
+          onRunAgain={() => {
+            setTrackedRunId(null);
+            void run();
+          }}
+          onDismiss={() => setTrackedRunId(null)}
+        />
+      )}
       {selectedRun && (
         <RunSheet
           run={selectedRun}

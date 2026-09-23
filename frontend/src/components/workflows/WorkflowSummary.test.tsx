@@ -417,4 +417,46 @@ describe("WorkflowSummary", () => {
     const status = await screen.findByText("Deployed");
     expect(status.className).toBe("wfd-status");
   });
+
+  // Tapping Run used to change a button and add a row; nothing said what the
+  // run was doing. The dock follows it node by node.
+  it("shows a run's progress at the bottom once it starts", async () => {
+    api.get.mockResolvedValue(
+      workflow({
+        nodes: [
+          { id: "t", type: "trigger", template: "manual", x: 0, y: 0 },
+          { id: "a", type: "agent", name: "Triage Agent", x: 0, y: 0 },
+          { id: "p", type: "provider", name: "Anthropic", x: 0, y: 0 },
+        ],
+        edges: [
+          { id: "e1", from: "t", to: "a", kind: "flow" },
+          { id: "e2", from: "p", to: "a", kind: "attach", toPort: "model" },
+        ],
+      }),
+    );
+    render(<WorkflowSummary workflowId="wf-1" />);
+    await screen.findByText("Succeeded");
+    expect(document.querySelector(".run-dock")).toBeNull();
+
+    // The run's detail answers with the trigger already done.
+    api.runGet.mockResolvedValue({
+      run: {
+        id: "r-2",
+        workflowId: "wf-1",
+        triggeredBy: "manual",
+        status: "running",
+        startedAt: new Date().toISOString(),
+      },
+      logs: [{ nodeId: "t", status: "success", durationMs: 20 }],
+      deadLetters: [],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    // Two milestones: the trigger and the agent. The provider hangs off the
+    // agent and is not a step.
+    expect(await screen.findByText("1/2")).toBeTruthy();
+    // The name is in the Agents section too, so this asks the dock itself.
+    const dock = document.querySelector(".run-dock")!;
+    expect(dock.textContent).toContain("Triage Agent");
+  });
 });
