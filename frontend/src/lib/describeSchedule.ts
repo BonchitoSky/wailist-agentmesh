@@ -144,12 +144,14 @@ export function describeSchedule(
     const next = upcoming[0] ?? week(1)[0];
     // The week the next run falls in is the one whose local days are named.
     const nextWeek = week(0).some((i) => +i === +next) ? 0 : 1;
-    // A run near midnight lands on a different local day for half the year,
-    // and then no single weekday is true. Half a year on is the other offset,
-    // so if the days match there they hold all year; if they do not, the
-    // schedule has no weekday to name and reads as custom.
+    // A time-zone offset change can move a run to another local weekday.
+    // Check every occurrence for more than a year because some zones have
+    // short offset pauses that a seasonal sample would miss.
     const named = localDays(week(nextWeek));
-    if (named.join() !== localDays(week(nextWeek + 26)).join()) return CUSTOM;
+    const namedKey = named.join();
+    for (let offset = nextWeek + 1; offset <= nextWeek + 53; offset++) {
+      if (namedKey !== localDays(week(offset)).join()) return CUSTOM;
+    }
     return `${phraseDays(named)} at ${at(next)}`;
   }
 

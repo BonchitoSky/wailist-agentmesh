@@ -67,6 +67,15 @@ describe("describeSchedule", () => {
         "On a custom schedule",
       );
     });
+
+    it("checks short offset pauses outside a seasonal sample", () => {
+      const october = new Date(Date.UTC(2026, 9, 31, 12, 0));
+      // Casablanca pauses UTC+1 around Ramadan. The Sunday UTC run is Monday
+      // after midnight for most of the year, but Sunday before midnight then.
+      expect(
+        describeSchedule("30 23 * * 0", october, "Africa/Casablanca"),
+      ).toBe("On a custom schedule");
+    });
   });
 
   it("says a monthly day", () => {
