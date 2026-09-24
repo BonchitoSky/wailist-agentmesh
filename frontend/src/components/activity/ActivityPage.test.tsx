@@ -276,7 +276,7 @@ describe("ActivityPage", () => {
     expect(screen.getByRole("dialog").dataset.spend).toBe("90000");
   });
 
-  it("polls spend while an open run is running, then stops", async () => {
+  it("polls spend while an open run is running, then switches to idle polling", async () => {
     vi.useFakeTimers();
     api.recent
       .mockResolvedValueOnce(
@@ -286,6 +286,9 @@ describe("ActivityPage", () => {
         page([run({ id: "r-1", status: "running", spendUsdMicros: 90_000 })]),
       )
       .mockResolvedValueOnce(
+        page([run({ id: "r-1", status: "success", spendUsdMicros: 120_000 })]),
+      )
+      .mockResolvedValue(
         page([run({ id: "r-1", status: "success", spendUsdMicros: 120_000 })]),
       );
 
@@ -301,8 +304,14 @@ describe("ActivityPage", () => {
     expect(screen.getByRole("dialog").dataset.spend).toBe("120000");
     expect(screen.getByRole("dialog").dataset.status).toBe("success");
 
-    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
     expect(api.recent).toHaveBeenCalledTimes(3);
+
+    await act(async () => vi.advanceTimersByTimeAsync(6_000));
+    expect(api.recent).toHaveBeenCalledTimes(3);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(api.recent).toHaveBeenCalledTimes(4);
   });
 
   it("drops an older page that lands after a refresh", async () => {
