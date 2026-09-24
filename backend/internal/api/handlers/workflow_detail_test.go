@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/agentmesh/backend/internal/api/handlers"
+	"github.com/agentmesh/backend/internal/models"
 )
 
 func newTestUser(t *testing.T, d *handlers.Deps) string {
@@ -98,9 +100,7 @@ func TestGetWorkflowSendsAZeroRunCount(t *testing.T) {
 //
 // This covers the success half of that contract: a healthy read must NOT set
 // the flag, or every workflow's figures would show as dashes. The failure
-// half has no seam to test through -- Deps.Store is a concrete *db.Store, so
-// there is no way to make AttachWorkflowStats fail without breaking the
-// database out from under the whole request.
+// half is covered separately through the handler's stats-loader seam.
 func TestGetWorkflowLeavesStatsAvailableWhenTheyAggregate(t *testing.T) {
 	d := testDeps(t)
 	user := newTestUser(t, d)
@@ -122,6 +122,32 @@ func TestGetWorkflowLeavesStatsAvailableWhenTheyAggregate(t *testing.T) {
 	}
 	if body["runs"] != float64(1) {
 		t.Fatalf("runs = %v, want 1", body["runs"])
+	}
+}
+
+func TestGetWorkflowMarksStatsUnavailableWhenAggregationFails(t *testing.T) {
+	d := testDeps(t)
+	user := newTestUser(t, d)
+	id := scheduledWorkflow(t, d, user, "Unavailable stats", "", time.Time{}, false)
+	d.WorkflowStatsLoader = func(context.Context, string, *models.Workflow) error {
+		return errors.New("stats database unavailable")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/workflows/"+id, nil)
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, user))
+	req = withURLParam(req, "id", id)
+	w := httptest.NewRecorder()
+	d.GetWorkflow(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		StatsUnavailable bool `json:"statsUnavailable"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.StatsUnavailable {
+		t.Fatal("statsUnavailable = false, want true after aggregation failure")
 	}
 }
 
