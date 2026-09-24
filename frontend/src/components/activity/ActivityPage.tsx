@@ -21,6 +21,7 @@ import {
 // the workflow list.
 
 const PAGE_SIZE = 20;
+const OPEN_RUN_POLL_MS = 2_000;
 
 export function ActivityPage() {
   const [runList, setRunList] = useState<RunSummary[]>([]);
@@ -65,6 +66,28 @@ export function ActivityPage() {
       },
     );
   }, [applyFirstPage, applyError]);
+
+  // An open sheet covers pull-to-refresh, but its running total still comes
+  // from the list row. Refresh the first page while that row is running and
+  // retain any older pages the user already loaded.
+  const pollOpenRun = useCallback(() => {
+    const gen = ++generation.current;
+    return runsApi.recent({ limit: PAGE_SIZE }).then(
+      (page) => {
+        if (gen !== generation.current) return;
+        setRunList((prev) => [
+          ...page.runs,
+          ...prev.filter((old) => !page.runs.some((run) => run.id === old.id)),
+        ]);
+        setUnavailable(false);
+        setError(null);
+      },
+      () => {
+        // Keep the last row visible. The next tick retries without putting a
+        // background-only error behind the open sheet.
+      },
+    );
+  }, []);
 
   // The first load. State is only set once the response lands, and not at all
   // if the screen has gone by then.
@@ -114,6 +137,21 @@ export function ActivityPage() {
   const selectedRun = selected
     ? (runList.find((r) => r.id === selected.id) ?? selected)
     : null;
+
+  useEffect(() => {
+    if (selectedRun?.status !== "running") return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      await pollOpenRun();
+      if (!cancelled) timer = setTimeout(poll, OPEN_RUN_POLL_MS);
+    };
+    timer = setTimeout(poll, OPEN_RUN_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [selectedRun?.status, pollOpenRun]);
 
   return (
     <div
