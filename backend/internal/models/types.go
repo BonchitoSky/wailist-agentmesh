@@ -149,6 +149,16 @@ type WorkflowNode struct {
 	// TendrilAmount is USD of AgentMesh credit to convert into Tendril
 	// credit, on a topup node.
 	TendrilAmount string `json:"tendrilAmount,omitempty"`
+	// TendrilMinBalance, on a topup node, makes the topup conditional: when
+	// the user's Tendril credit is already at or above this many USD, the
+	// node skips without paying anything. Empty means always top up.
+	TendrilMinBalance string `json:"tendrilMinBalance,omitempty"`
+	// TendrilCoverHours, on a topup node, sizes the topup to the next rent:
+	// it buys whatever the user's Tendril credit is short of renting the
+	// cheapest online machine for this many hours (never less than
+	// TendrilAmount), and skips when nothing is short. Overrides
+	// TendrilMinBalance.
+	TendrilCoverHours string `json:"tendrilCoverHours,omitempty"`
 	// TendrilLeaseToken is a bearer the TARGET needs, carried to the relay
 	// out of band. Never persisted on a saved workflow — it is only ever set
 	// on the synthesized nodes payTendril builds at call time.
@@ -286,6 +296,11 @@ const (
 	LogStatusRunning LogStatus = "running"
 	LogStatusSuccess LogStatus = "success"
 	LogStatusFailed  LogStatus = "failed"
+	// LogStatusDegraded is a read node that failed every attempt and was
+	// allowed to pass an error payload downstream rather than fail the run.
+	// The run continues and can still answer; this row exists so the failure
+	// is never invisible. Which nodes qualify is nodes.IsDegradable.
+	LogStatusDegraded LogStatus = "degraded"
 )
 
 type RunLog struct {
@@ -407,6 +422,11 @@ const (
 	DebitKindX402RelayCost     = "x402_relay_cost"
 	DebitKindPlatformKeyLLMFee = "platform_key_llm_fee"
 	DebitKindTendrilLease      = "tendril_lease"
+	// DebitKindBuildTestLLMFee is a platform-key agent call made by a chat
+	// build's test run. It is the one kind with no run to point at: a test
+	// run persists nothing, but it spends the platform's model credits just
+	// as a real run does, so it is charged the same fee.
+	DebitKindBuildTestLLMFee = "build_test_llm_fee"
 )
 
 // TendrilLease is one rented Tendril machine. A lease deliberately outlives

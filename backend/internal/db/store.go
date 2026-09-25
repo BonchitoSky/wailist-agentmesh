@@ -174,6 +174,20 @@ func (s *Store) SetWorkflowSchedule(ctx context.Context, workflowID, cronExpr st
 	return err
 }
 
+// RescheduleWorkflowNextRun moves a workflow's next scheduled run to next,
+// but only while its schedule is still cronExpr: a schedule changed or
+// removed since the caller read it is left as it now is. Reports whether a
+// row was updated.
+func (s *Store) RescheduleWorkflowNextRun(ctx context.Context, workflowID, cronExpr string, next time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE workflows SET schedule_next_run_at=$3 WHERE id=$1 AND schedule_cron=$2
+	`, workflowID, cronExpr, next)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // ClearWorkflowSchedule disables scheduling for a workflow. Idempotent --
 // clearing an already-unscheduled workflow is a no-op, not an error.
 func (s *Store) ClearWorkflowSchedule(ctx context.Context, workflowID string) error {
@@ -1618,6 +1632,22 @@ func (s *Store) DebitCreditsForPlatformLLM(ctx context.Context, userID string, a
 	})
 }
 
+// DebitCreditsForBuildTest charges a platform-key agent call made by a chat
+// build's test run. Same atomic lock/check/decrement as every other debit;
+// the only difference is that run_id is NULL, because a test run is never
+// persisted as a run (see migration 000037). Without this a user with a
+// single credit could test-run platform-key agents for free, over and over,
+// one build message at a time.
+func (s *Store) DebitCreditsForBuildTest(ctx context.Context, userID string, amountUSDMicros int64, workflowID, nodeID, model string) error {
+	return s.debitCredits(ctx, userID, amountUSDMicros, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO debit_ledger (user_id, workflow_id, run_id, node_id, kind, amount_usd_micros, model)
+			VALUES ($1, $2, NULL, $3, $4, $5, $6)
+		`, userID, workflowID, nodeID, models.DebitKindBuildTestLLMFee, amountUSDMicros, model)
+		return err
+	})
+}
+
 // ListDebitLedger returns every debit_ledger row for a run, oldest first.
 // Used by the credits/usage dashboard and by tests asserting exactly which
 // charges a run produced.
@@ -2051,6 +2081,28 @@ func (s *Store) LatestActiveLeaseForRun(ctx context.Context, runID string) (mode
 		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
 		 WHERE run_id = $1 AND status = 'active'
 		 ORDER BY started_at DESC LIMIT 1`, runID))
+}
+
+// ListActiveTendrilLeasesForRun returns every lease a run opened that is
+// still active, for the runner's end-of-run cleanup and Resume.
+func (s *Store) ListActiveTendrilLeasesForRun(ctx context.Context, runID string) ([]models.TendrilLease, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE run_id = $1 AND status = 'active'
+		 ORDER BY started_at`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TendrilLease
+	for rows.Next() {
+		l, err := scanTendrilLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
 }
 
 // LatestActiveLeaseForUser is the fallback resolveLease reaches for once a
