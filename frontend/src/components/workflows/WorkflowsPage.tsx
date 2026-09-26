@@ -1,5 +1,12 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   Pill,
@@ -31,9 +38,16 @@ import {
   type CadenceValue,
 } from "@/lib/cronCadence";
 
+const subscribeToHydration = () => () => {};
+
 export function WorkflowsPage() {
   const router = useRouter();
   const readOnly = useReadOnly();
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("all");
   const [view, setView] = useState<"rows" | "grid">("rows");
@@ -264,7 +278,12 @@ export function WorkflowsPage() {
                 Design, deploy, and monitor agent pipelines.
               </p>
             </div>
-            <div className="wf-actions">
+            <div
+              className="wf-actions"
+              data-readonly={readOnly}
+              // The server cannot classify the device; reserve space until it can.
+              style={{ visibility: hydrated ? undefined : "hidden" }}
+            >
               {can("workflow.create", readOnly) && (
                 <button style={ghostBtn} onClick={() => setImportOpen(true)}>
                   Import
