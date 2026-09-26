@@ -1,13 +1,78 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, renderHook } from "@testing-library/react";
 import { useCloseOnBack } from "./useCloseOnBack";
 
+const device = vi.hoisted(() => ({ handheld: false, native: false }));
+vi.mock("./useIsHandheld", () => ({
+  useIsHandheld: () => device.handheld,
+}));
+vi.mock("@/lib/nativeAuth", () => ({
+  get IS_NATIVE() {
+    return device.native;
+  },
+}));
+
+beforeEach(() => {
+  device.handheld = false;
+  device.native = false;
+  window.history.replaceState({ page: 1 }, "", "/workflows");
+  vi.useFakeTimers();
+});
+
 afterEach(() => {
   cleanup();
+  vi.clearAllTimers();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
-describe("useCloseOnBack", () => {
+describe("useCloseOnBack on desktop", () => {
+  it.each(["dismiss", "deactivate", "unmount"])(
+    "does not change history on open or %s",
+    (closeMethod) => {
+      const onClose = vi.fn();
+      const push = vi.spyOn(window.history, "pushState");
+      const replace = vi.spyOn(window.history, "replaceState");
+      const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+      const { result, rerender, unmount } = renderHook(
+        ({ active }) => useCloseOnBack(onClose, active),
+        { initialProps: { active: false } },
+      );
+
+      rerender({ active: true });
+      if (closeMethod === "dismiss") result.current();
+      if (closeMethod === "deactivate") rerender({ active: false });
+      unmount();
+      vi.runAllTimers();
+
+      expect(push).not.toHaveBeenCalled();
+      expect(replace).not.toHaveBeenCalled();
+      expect(back).not.toHaveBeenCalled();
+      expect(window.history.state).toEqual({ page: 1 });
+      expect(onClose).toHaveBeenCalledTimes(closeMethod === "dismiss" ? 1 : 0);
+    },
+  );
+
+  it("leaves browser Back navigation to the router", () => {
+    const onClose = vi.fn();
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
+    const { unmount } = renderHook(() => useCloseOnBack(onClose));
+
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    unmount();
+    vi.runAllTimers();
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(back).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(["handheld", "native"])("useCloseOnBack on %s", (platform) => {
+  beforeEach(() => {
+    device.handheld = platform === "handheld";
+    device.native = platform === "native";
+  });
+
   it("adds one history entry for the sheet, keeping the URL and state", () => {
     window.history.replaceState({ page: 1 }, "");
     const push = vi.spyOn(window.history, "pushState");
