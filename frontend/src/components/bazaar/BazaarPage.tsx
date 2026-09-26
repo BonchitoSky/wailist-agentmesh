@@ -305,15 +305,11 @@ const BAZAAR_CSS = `
 
 export function BazaarPage() {
   const [supported, setSupported] = useState<BazaarResource[]>([]);
-  // Whether the partners fetch has come back, either way. The partners block
-  // sits ABOVE the main list, so rendering the list first and inserting
-  // partners on top of it pushed the whole page down ~990px on a phone once
-  // the fetch landed. Both sections now wait for this, and appear together
-  // with nothing below them to move.
   const [supportedSettled, setSupportedSettled] = useState(false);
+  const [supportedError, setSupportedError] = useState(false);
   const [items, setItems] = useState<BazaarResource[]>([]);
   const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState<BazaarResource | null>(null);
@@ -400,7 +396,7 @@ export function BazaarPage() {
         if (!cancelled) setSupported(page.items);
       })
       .catch(() => {
-        /* the main list surfaces the error; a missing pinned row is not fatal */
+        if (!cancelled) setSupportedError(true);
       })
       .finally(() => {
         if (!cancelled) setSupportedSettled(true);
@@ -533,18 +529,28 @@ export function BazaarPage() {
           can drop straight onto a canvas.
         </p>
 
-        {!supportedSettled && (
-          <p style={{ marginTop: 28, fontSize: 12.5, color: "var(--fg-dim)" }}>
-            Loading…
-          </p>
-        )}
-
-        {supportedSettled && supported.length > 0 && (
-          <section style={{ marginTop: 28 }}>
-            <SectionHeading
-              title="Partners"
-              note="Set up and tested by us. Open one and start using it right away."
-            />
+        <section style={{ marginTop: 28 }}>
+          <SectionHeading
+            title="Partners"
+            note="Set up and tested by us. Open one and start using it right away."
+          />
+          <div
+            role="region"
+            aria-label="Partner services"
+            aria-busy={!supportedSettled}
+            tabIndex={0}
+            // Late partner results must never displace the independent catalogue.
+            style={{ height: 320, overflowY: "auto", scrollbarGutter: "stable" }}
+          >
+            {(!supportedSettled || supported.length === 0) && (
+              <p role="status" style={{ fontSize: 12.5, color: "var(--fg-dim)" }}>
+                {!supportedSettled
+                  ? "Loading partners…"
+                  : supportedError
+                    ? "Could not load partners."
+                    : "No partners available."}
+              </p>
+            )}
             {consoles.length > 0 && (
               <div style={CONSOLE_GRID}>
                 {consoles.map(([key, resources]) => (
@@ -565,219 +571,217 @@ export function BazaarPage() {
                 ))}
               </div>
             )}
-          </section>
-        )}
+          </div>
+        </section>
 
-        {supportedSettled && (
-          <section style={{ marginTop: 28 }}>
+        <section style={{ marginTop: 28 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+              marginBottom: 12,
+            }}
+          >
+            <SectionHeading
+              title="Everything else"
+              note="Public listings. Add one to a canvas and fill in its details yourself."
+            />
+            <div className="bz-toolbar">
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search…"
+                aria-label="Search endpoints"
+                style={{
+                  height: 32,
+                  padding: "0 10px",
+                  border: "1px solid var(--border)",
+                  background: "var(--bg)",
+                  borderRadius: "var(--r-2)",
+                  color: "var(--fg)",
+                  fontSize: 12.5,
+                  fontFamily: "var(--font-sans)",
+                }}
+              />
+              <select
+                value={sort}
+                onChange={(e) => setSort(e.target.value as BazaarSort)}
+                disabled={Boolean(activeQuery)}
+                aria-label="Sort endpoints"
+                title={
+                  activeQuery
+                    ? "Search results are already ordered by best match."
+                    : undefined
+                }
+                style={{
+                  height: 32,
+                  padding: "0 8px",
+                  border: "1px solid var(--border)",
+                  background: activeQuery ? "var(--bg-elev-2)" : "var(--bg)",
+                  borderRadius: "var(--r-2)",
+                  color: activeQuery ? "var(--fg-dim)" : "var(--fg)",
+                  fontSize: 12.5,
+                  fontFamily: "var(--font-sans)",
+                  cursor: activeQuery ? "default" : "pointer",
+                }}
+              >
+                {BAZAAR_SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="bz-list">
+            {groupedItems.map(([host, resources]) =>
+              resources.length === 1 ? (
+                <EndpointRow
+                  key={resources[0].id}
+                  resource={resources[0]}
+                  onAdd={onAdd}
+                />
+              ) : (
+                <ProviderGroupCard
+                  key={host}
+                  host={host}
+                  resources={resources}
+                  expanded={expandedHosts.has(host)}
+                  onToggle={() => toggleHost(host)}
+                  onAdd={onAdd}
+                  partial={false}
+                />
+              ),
+            )}
+          </div>
+
+          {error && (
+            <p
+              style={{
+                marginTop: 16,
+                fontSize: 12.5,
+                color: "var(--danger)",
+              }}
+            >
+              {error}{" "}
+              <button
+                type="button"
+                onClick={() => setRetryTick((t) => t + 1)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--accent)",
+                  cursor: "pointer",
+                  fontSize: 12.5,
+                  textDecoration: "underline",
+                  fontFamily: "var(--font-sans)",
+                }}
+              >
+                Retry
+              </button>
+            </p>
+          )}
+
+          {loading && (
+            <p
+              style={{
+                marginTop: 16,
+                fontSize: 12.5,
+                color: "var(--fg-dim)",
+              }}
+            >
+              Loading…
+            </p>
+          )}
+
+          {!loading && !error && items.length === 0 && activeQuery && (
+            <p
+              style={{
+                marginTop: 16,
+                fontSize: 12.5,
+                color: "var(--fg-dim)",
+              }}
+            >
+              Nothing matches “{activeQuery}”.
+            </p>
+          )}
+
+          {!loading && !error && items.length > 0 && (
             <div
               style={{
+                marginTop: 16,
                 display: "flex",
-                alignItems: "baseline",
+                alignItems: "center",
                 justifyContent: "space-between",
                 gap: 12,
                 flexWrap: "wrap",
-                marginBottom: 12,
               }}
             >
-              <SectionHeading
-                title="Everything else"
-                note="Public listings. Add one to a canvas and fill in its details yourself."
-              />
-              <div className="bz-toolbar">
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search…"
-                  aria-label="Search endpoints"
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 12,
+                  color: "var(--fg-dim)",
+                }}
+              >
+                <span>Show</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) =>
+                    setPageSize(Number(e.target.value) as PageSize)
+                  }
+                  aria-label="Results per page"
                   style={{
-                    height: 32,
-                    padding: "0 10px",
+                    height: 28,
+                    padding: "0 6px",
                     border: "1px solid var(--border)",
                     background: "var(--bg)",
                     borderRadius: "var(--r-2)",
                     color: "var(--fg)",
-                    fontSize: 12.5,
+                    fontSize: 12,
                     fontFamily: "var(--font-sans)",
-                  }}
-                />
-                <select
-                  value={sort}
-                  onChange={(e) => setSort(e.target.value as BazaarSort)}
-                  disabled={Boolean(activeQuery)}
-                  aria-label="Sort endpoints"
-                  title={
-                    activeQuery
-                      ? "Search results are already ordered by best match."
-                      : undefined
-                  }
-                  style={{
-                    height: 32,
-                    padding: "0 8px",
-                    border: "1px solid var(--border)",
-                    background: activeQuery ? "var(--bg-elev-2)" : "var(--bg)",
-                    borderRadius: "var(--r-2)",
-                    color: activeQuery ? "var(--fg-dim)" : "var(--fg)",
-                    fontSize: 12.5,
-                    fontFamily: "var(--font-sans)",
-                    cursor: activeQuery ? "default" : "pointer",
+                    cursor: "pointer",
                   }}
                 >
-                  {BAZAAR_SORT_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
                     </option>
                   ))}
                 </select>
+                <span>per page · {total} total</span>
               </div>
-            </div>
 
-            <div className="bz-list">
-              {groupedItems.map(([host, resources]) =>
-                resources.length === 1 ? (
-                  <EndpointRow
-                    key={resources[0].id}
-                    resource={resources[0]}
-                    onAdd={onAdd}
-                  />
-                ) : (
-                  <ProviderGroupCard
-                    key={host}
-                    host={host}
-                    resources={resources}
-                    expanded={expandedHosts.has(host)}
-                    onToggle={() => toggleHost(host)}
-                    onAdd={onAdd}
-                    partial={false}
-                  />
-                ),
-              )}
-            </div>
-
-            {error && (
-              <p
-                style={{
-                  marginTop: 16,
-                  fontSize: 12.5,
-                  color: "var(--danger)",
-                }}
-              >
-                {error}{" "}
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
+                  Page {page + 1} of {totalPages}
+                </span>
                 <button
                   type="button"
-                  onClick={() => setRetryTick((t) => t + 1)}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    color: "var(--accent)",
-                    cursor: "pointer",
-                    fontSize: 12.5,
-                    textDecoration: "underline",
-                    fontFamily: "var(--font-sans)",
-                  }}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={!canGoPrev}
+                  style={paginationBtnStyle(!canGoPrev)}
                 >
-                  Retry
+                  ← Prev
                 </button>
-              </p>
-            )}
-
-            {loading && (
-              <p
-                style={{
-                  marginTop: 16,
-                  fontSize: 12.5,
-                  color: "var(--fg-dim)",
-                }}
-              >
-                Loading…
-              </p>
-            )}
-
-            {!loading && !error && items.length === 0 && activeQuery && (
-              <p
-                style={{
-                  marginTop: 16,
-                  fontSize: 12.5,
-                  color: "var(--fg-dim)",
-                }}
-              >
-                Nothing matches “{activeQuery}”.
-              </p>
-            )}
-
-            {!loading && !error && items.length > 0 && (
-              <div
-                style={{
-                  marginTop: 16,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  flexWrap: "wrap",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    fontSize: 12,
-                    color: "var(--fg-dim)",
-                  }}
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={!canGoNext}
+                  style={paginationBtnStyle(!canGoNext)}
                 >
-                  <span>Show</span>
-                  <select
-                    value={pageSize}
-                    onChange={(e) =>
-                      setPageSize(Number(e.target.value) as PageSize)
-                    }
-                    aria-label="Results per page"
-                    style={{
-                      height: 28,
-                      padding: "0 6px",
-                      border: "1px solid var(--border)",
-                      background: "var(--bg)",
-                      borderRadius: "var(--r-2)",
-                      color: "var(--fg)",
-                      fontSize: 12,
-                      fontFamily: "var(--font-sans)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {PAGE_SIZE_OPTIONS.map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                  <span>per page · {total} total</span>
-                </div>
-
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
-                    Page {page + 1} of {totalPages}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                    disabled={!canGoPrev}
-                    style={paginationBtnStyle(!canGoPrev)}
-                  >
-                    ← Prev
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPage((p) => p + 1)}
-                    disabled={!canGoNext}
-                    style={paginationBtnStyle(!canGoNext)}
-                  >
-                    Next →
-                  </button>
-                </div>
+                  Next →
+                </button>
               </div>
-            )}
-          </section>
-        )}
+            </div>
+          )}
+        </section>
       </div>
 
       {adding && onAdd && (
