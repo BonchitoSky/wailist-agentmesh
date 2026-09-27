@@ -21,6 +21,9 @@ vi.mock("@/lib/api", () => ({
   runs: { recent: api.recent, get: api.get },
 }));
 vi.mock("@/components/Topbar", () => ({ Topbar: () => null }));
+vi.mock("@/components/runs/UpcomingRuns", () => ({
+  UpcomingRuns: () => null,
+}));
 vi.mock("@/components/PullToRefresh", () => ({
   PullToRefresh: ({
     children,
@@ -52,8 +55,12 @@ vi.mock("@/components/runs/RunSheet", () => ({
 // A promise the test settles when it chooses, to put responses out of order.
 function deferred<T>() {
   let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((r, j) => {
+    resolve = r;
+    reject = j;
+  });
+  return { promise, resolve, reject };
 }
 
 import { ActivityPage } from "./ActivityPage";
@@ -360,52 +367,58 @@ describe("ActivityPage", () => {
     expect(screen.queryByText("Stale load")).toBeNull();
   });
 
-  // The inverse of the two above: the slow request is the refresh, and the
-  // poll that started after it answers first.
-  it("drops a refresh that a later poll has already answered", async () => {
-    vi.useFakeTimers();
-    try {
-      await refreshDroppedByLaterPoll();
-    } finally {
-      // In `finally`, not at the end: an assertion that throws before the
-      // last line would otherwise leak fake timers into every test after it
-      // and fail them for the wrong reason.
-      vi.useRealTimers();
-    }
-  });
-
-  async function refreshDroppedByLaterPoll() {
-    const slowRefresh = deferred<RunPage>();
+  it("drops an older refresh after a newer poll has landed", async () => {
+    const refresh = deferred<RunPage>();
+    const poll = deferred<RunPage>();
     api.recent
-      // The first load, with a second page to reach for.
-      .mockResolvedValueOnce(page([run({ id: "r-1" })], "c1"))
-      // "Show older runs".
-      .mockResolvedValueOnce(page([run({ id: "r-0", workflowName: "Older" })]))
-      // The pull, which does not answer until the end of the test.
-      .mockReturnValueOnce(slowRefresh.promise)
-      // The poll, started after the pull and answering before it.
-      .mockResolvedValueOnce(
-        page([run({ id: "r-9", workflowName: "Newer run" })]),
-      );
+      .mockResolvedValueOnce(page([run({ id: "r-1" })]))
+      .mockReturnValueOnce(refresh.promise)
+      .mockReturnValueOnce(poll.promise);
     render(<ActivityPage />);
-    await act(async () => {});
+    await screen.findByText("Morning digest");
 
-    fireEvent.click(screen.getByRole("button", { name: "Show older runs" }));
-    await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
-    await act(async () => vi.advanceTimersByTimeAsync(10_000));
-    expect(screen.getByText("Newer run")).toBeTruthy();
+    document.dispatchEvent(new Event("visibilitychange"));
 
     await act(async () => {
-      slowRefresh.resolve(
-        page([run({ id: "r-1", workflowName: "Stale pull" })]),
+      poll.resolve(
+        page([run({ id: "r-2", workflowName: "Newer poll result" })]),
       );
     });
-    expect(screen.queryByText("Stale pull")).toBeNull();
-    expect(screen.getByText("Newer run")).toBeTruthy();
-    // The page already loaded is still there too.
-    expect(screen.getByText("Older")).toBeTruthy();
-  }
+    expect(screen.getByText("Newer poll result")).toBeTruthy();
+
+    await act(async () => {
+      refresh.resolve(
+        page([run({ id: "r-3", workflowName: "Older refresh result" })]),
+      );
+    });
+    expect(screen.getByText("Newer poll result")).toBeTruthy();
+    expect(screen.queryByText("Older refresh result")).toBeNull();
+  });
+
+  it("accepts a pending refresh after a newer poll fails", async () => {
+    const refresh = deferred<RunPage>();
+    const poll = deferred<RunPage>();
+    api.recent
+      .mockResolvedValueOnce(page([run({ id: "r-1" })]))
+      .mockReturnValueOnce(refresh.promise)
+      .mockReturnValueOnce(poll.promise);
+    render(<ActivityPage />);
+    await screen.findByText("Morning digest");
+
+    fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    await act(async () => {
+      poll.reject(new Error("offline"));
+    });
+    await act(async () => {
+      refresh.resolve(
+        page([run({ id: "r-2", workflowName: "Refreshed result" })]),
+      );
+    });
+    expect(screen.getByText("Refreshed result")).toBeTruthy();
+  });
 
   describe("while a run is going", () => {
     afterEach(() => vi.useRealTimers());

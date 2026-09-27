@@ -227,6 +227,14 @@ type Workflow struct {
 	// LastRunAt is when the newest run inside the same window as Runs
 	// started. Nil when nothing ran in that window.
 	LastRunAt *time.Time `json:"lastRunAt,omitempty"`
+	// Description says in a sentence or two what the workflow does. Empty
+	// until someone writes one; the app then summarises the graph instead.
+	Description string `json:"description,omitempty"`
+	// TotalRuns counts every run the workflow has ever had. Only the detail
+	// endpoint fills it; the list carries the 30-day Runs instead. A pointer
+	// so a real zero is sent: nil means the count could not be taken, and the
+	// app shows a dash for that, not for a workflow that has never run.
+	TotalRuns *int `json:"totalRuns,omitempty"`
 	// StatsUnavailable says the Runs/Spend/LastRunAt aggregation did not
 	// run, so their zero values mean "not known" rather than "none".
 	// Without it the three are indistinguishable from a genuine zero on the
