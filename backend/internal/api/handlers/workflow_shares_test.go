@@ -1,0 +1,471 @@
+package handlers_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/agentmesh/backend/internal/api/handlers"
+	"github.com/agentmesh/backend/internal/models"
+)
+
+// The share round trip, against a real database.
+//
+// testDeps/withURLParam come from workflows_test.go in this package; both skip
+// without TEST_DATABASE_URL, the convention every DB-touching test here
+// follows.
+
+// shareFixtureNodes is a workflow with one of everything that must not
+// travel: a BYOK key, a connector secret, a webhook secret, an agent wallet,
+// real addresses on an email node, a Google connection bound to the sharer's
+// own OAuth row, and an uploaded file's bytes.
+func shareFixtureNodes() []models.WorkflowNode {
+	return []models.WorkflowNode{
+		{
+			ID: "n_trigger", Type: models.NodeTypeTrigger, Template: "webhook",
+			Name: "When called",
+		},
+		{
+			ID: "n_provider", Type: models.NodeTypeProvider, Template: "openai",
+			Model: "gpt-fixture", APIKey: "sk-test-fixture-value",
+		},
+		{
+			ID: "n_agent", Type: models.NodeTypeAgent,
+			SystemPrompt: "Summarise the input.",
+			Wallet:       "FIXTUREWALLETADDRESS7777777777777777777777777777777777777",
+			Balance:      "12.5",
+		},
+		{
+			ID: "n_email", Type: models.NodeTypeAction, Template: "email",
+			EmailTo: "recipient@example.invalid", EmailFrom: "sender@example.invalid",
+			EmailSubject: "Your summary", EmailBody: "{{input}}",
+			EmailAPIKey: "re_test_fixture",
+			Secrets:     map[string]string{"slackOAuthAccessToken": "xoxb-fixture"},
+			Config:      map[string]string{"slackChannel": "#releases", "oauthCredentialID": "cred_fixture"},
+		},
+		{
+			ID: "n_tool", Type: models.NodeTypeTool402, Endpoint: "https://example.invalid/screen",
+			CustomParams: []models.CustomParam{
+				{Name: "resume", Kind: "file", Value: "JVBERi0xLjQKZml4dHVyZQ==", FileName: "cv.pdf", MIMEType: "application/pdf"},
+			},
+		},
+	}
+}
+
+// seedSharedWorkflow creates a workflow owned by userID, saved through the
+// real UpdateWorkflow so the stored nodes are encrypted and webhook-secreted
+// exactly as a user's own save would leave them. Sharing a hand-written row
+// would prove nothing about the path that actually matters.
+func seedSharedWorkflow(t *testing.T, d *handlers.Deps, userID string) models.Workflow {
+	t.Helper()
+	ctx := context.Background()
+
+	wf, err := d.Store.CreateWorkflow(ctx, "Resume screener", userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	body, _ := json.Marshal(map[string]any{
+		"name":  "Resume screener",
+		"nodes": shareFixtureNodes(),
+		"edges": []models.WorkflowEdge{
+			{ID: "e1", From: "n_trigger", To: "n_agent", Kind: models.EdgeKindFlow},
+			{ID: "e2", From: "n_provider", To: "n_agent", Kind: models.EdgeKindAttach, ToPort: "model"},
+			{ID: "e3", From: "n_tool", To: "n_agent", Kind: models.EdgeKindAttach, ToPort: "tools"},
+			{ID: "e4", From: "n_agent", To: "n_email", Kind: models.EdgeKindFlow},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPut, "/workflows/"+wf.ID, bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, userID))
+	req = withURLParam(req, "id", wf.ID)
+	w := httptest.NewRecorder()
+	d.UpdateWorkflow(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("seeding the workflow failed: %d %s", w.Code, w.Body.String())
+	}
+
+	saved, err := d.Store.GetWorkflow(ctx, wf.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return saved
+}
+
+// createShare drives the handler and returns the decoded share, failing the
+// test on any non-201.
+func createShare(t *testing.T, d *handlers.Deps, workflowID, userID, body string) (models.WorkflowShare, handlers.ShareRedactions) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/workflows/"+workflowID+"/share", strings.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, userID))
+	req = withURLParam(req, "id", workflowID)
+	w := httptest.NewRecorder()
+	d.CreateShare(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateShare = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Share      models.WorkflowShare     `json:"share"`
+		Redactions handlers.ShareRedactions `json:"redactions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Share, out.Redactions
+}
+
+func TestSharedSnapshotCarriesNothingThatBelongsToTheSharer(t *testing.T) {
+	d := testDeps(t)
+	wf := seedSharedWorkflow(t, d, "dev")
+
+	share, red := createShare(t, d, wf.ID, "dev", `{}`)
+
+	// The bluntest assertion available, and the one worth having: whatever
+	// the structure, none of these strings may appear anywhere in what a
+	// recipient is served. A field added later that leaks one of them fails
+	// here even if nobody thought to assert on it by name.
+	raw, _ := json.Marshal(share)
+	for _, forbidden := range []string{
+		"sk-test-fixture-value", // the BYOK key
+		"re_test_fixture",       // the email provider key
+		"xoxb-fixture",          // a connector secret
+		"enc:",                  // ciphertext of any of the above
+		handlers.EncSentinel,    // the mask, which imports as a phantom key
+		"webhookSecret",         // the credential for the public trigger
+		"FIXTUREWALLETADDRESS",  // the sharer's agent wallet
+		"recipient@example.invalid",
+		"sender@example.invalid",
+		"cred_fixture",             // the sharer's Google connection
+		"JVBERi0xLjQKZml4dHVyZQ==", // the uploaded file's bytes
+	} {
+		if bytes.Contains(raw, []byte(forbidden)) {
+			t.Errorf("the shared snapshot carries %q, which belongs to the sharer", forbidden)
+		}
+	}
+
+	// And the other half: it is still the workflow, not a husk.
+	if share.NodeCount != 5 || share.EdgeCount != 4 {
+		t.Errorf("expected the whole graph shared, got %d nodes / %d edges", share.NodeCount, share.EdgeCount)
+	}
+	if !strings.Contains(string(raw), "Summarise the input.") {
+		t.Error("the agent's prompt is what the workflow does and should survive")
+	}
+	if !strings.Contains(string(raw), "https://example.invalid/screen") {
+		t.Error("a tool node without its endpoint is not importable")
+	}
+	if !strings.Contains(string(raw), "cv.pdf") {
+		t.Error("the recipient still needs to know a file goes here")
+	}
+
+	if red.APIKeys != 2 || red.Secrets != 1 || red.WebhookSecrets != 1 ||
+		red.UploadedFiles != 1 || red.AgentWallets != 1 || red.EmailAddresses != 1 ||
+		red.ConnectedAccounts != 1 {
+		t.Errorf("redaction counts shown to the sharer look wrong: %+v", red)
+	}
+}
+
+func TestImportingAShareGivesTheRecipientTheirOwnWebhookSecret(t *testing.T) {
+	d := testDeps(t)
+	wf := seedSharedWorkflow(t, d, "dev")
+	share, _ := createShare(t, d, wf.ID, "dev", `{}`)
+
+	sharerSaved, err := d.Store.GetWorkflow(context.Background(), wf.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharerSecret := secretOf(t, sharerSaved.Nodes, "n_trigger", "webhookSecret")
+	if sharerSecret == "" {
+		t.Fatal("the fixture should have a webhook secret to begin with")
+	}
+
+	imported := importShare(t, d, share.Token, "dev-recipient")
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), imported.ID) })
+
+	recipientSaved, err := d.Store.GetWorkflow(context.Background(), imported.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientSecret := secretOf(t, recipientSaved.Nodes, "n_trigger", "webhookSecret")
+
+	if recipientSecret == "" {
+		t.Fatal("a webhook trigger with no secret can never be fired -- ensureWebhookSecrets should have minted one")
+	}
+	if recipientSecret == sharerSecret {
+		t.Error("sharer and recipient must not end up on the same webhook secret")
+	}
+	if recipientSaved.UserID != "dev-recipient" {
+		t.Errorf("the import belongs to the importer, got user %q", recipientSaved.UserID)
+	}
+	if recipientSaved.Status != models.WorkflowStatusDraft {
+		t.Errorf("an imported workflow starts as a draft, got %q", recipientSaved.Status)
+	}
+	if recipientSaved.ScheduleCron != nil || recipientSaved.GeofenceLat != nil {
+		t.Error("an import must not inherit the sharer's schedule or geofence")
+	}
+	if len(recipientSaved.Nodes) != 5 || len(recipientSaved.Edges) != 4 {
+		t.Errorf("the imported graph should match the shared one, got %d nodes / %d edges",
+			len(recipientSaved.Nodes), len(recipientSaved.Edges))
+	}
+}
+
+// A hand-crafted code is the case the ordinary save path cannot defend
+// against: encryptField returns an "enc:"-prefixed value untouched, and a
+// freshly created workflow has no prior value to compare it with, so it would
+// be stored verbatim and would decrypt with the server key on the next run.
+func TestPastedGraphCannotPlantACredential(t *testing.T) {
+	d := testDeps(t)
+
+	body, _ := json.Marshal(map[string]any{
+		"name": "Looks innocent",
+		"nodes": []models.WorkflowNode{{
+			ID: "n1", Type: models.NodeTypeProvider, Template: "openai",
+			APIKey:  "enc:3q2+7wAAAAAAAAAAAAAAAA==",
+			Secrets: map[string]string{"stripeSecretKey": "enc:3q2+7wAAAAAAAAAAAAAAAA=="},
+		}},
+		"edges": []models.WorkflowEdge{},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/workflows/import", bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev"))
+	w := httptest.NewRecorder()
+	d.ImportWorkflowGraph(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("ImportWorkflowGraph = %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	var created models.Workflow
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), created.ID) })
+
+	stored, err := d.Store.GetWorkflow(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range stored.Nodes {
+		if n.APIKey != "" {
+			t.Errorf("a pasted graph planted an API key: %q", n.APIKey)
+		}
+		if len(n.Secrets) > 0 {
+			t.Errorf("a pasted graph planted secrets: %v", n.Secrets)
+		}
+	}
+}
+
+func TestARevokedLinkIsIndistinguishableFromOneThatNeverExisted(t *testing.T) {
+	d := testDeps(t)
+	wf := seedSharedWorkflow(t, d, "dev")
+
+	live, _ := createShare(t, d, wf.ID, "dev", `{}`)
+	if code, _ := readShare(t, d, live.Token); code != http.StatusOK {
+		t.Fatalf("a fresh link should read 200, got %d", code)
+	}
+
+	revoked, _ := createShare(t, d, wf.ID, "dev", `{}`)
+	req := httptest.NewRequest(http.MethodDelete, "/shares/"+revoked.Token, nil)
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev"))
+	req = withURLParam(req, "token", revoked.Token)
+	w := httptest.NewRecorder()
+	d.RevokeShare(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("RevokeShare = %d, want 204: %s", w.Code, w.Body.String())
+	}
+
+	missingCode, missingBody := readShare(t, d, "a-token-that-was-never-minted")
+	revokedCode, revokedBody := readShare(t, d, revoked.Token)
+	if missingCode != http.StatusNotFound || revokedCode != http.StatusNotFound {
+		t.Fatalf("missing = %d, revoked = %d; both must be 404", missingCode, revokedCode)
+	}
+	// Same status AND same body: a different message would tell a caller
+	// which tokens have ever existed.
+	if missingBody != revokedBody {
+		t.Errorf("a revoked link answers %q but a missing one answers %q -- the difference is the leak",
+			revokedBody, missingBody)
+	}
+
+	// Revoking somebody else's link is the same 404, and does not work.
+	other := httptest.NewRequest(http.MethodDelete, "/shares/"+live.Token, nil)
+	other = other.WithContext(context.WithValue(other.Context(), handlers.CtxUserID, "dev-stranger"))
+	other = withURLParam(other, "token", live.Token)
+	ow := httptest.NewRecorder()
+	d.RevokeShare(ow, other)
+	if ow.Code != http.StatusNotFound {
+		t.Errorf("a stranger revoking a link = %d, want 404", ow.Code)
+	}
+	if code, _ := readShare(t, d, live.Token); code != http.StatusOK {
+		t.Error("a stranger's revoke attempt must not have killed the link")
+	}
+}
+
+func TestAnExpiredLinkReadsAsGone(t *testing.T) {
+	d := testDeps(t)
+	wf := seedSharedWorkflow(t, d, "dev")
+	ctx := context.Background()
+
+	// A link the handler makes expires in whole days at the earliest, so the
+	// expired row is written straight through the store. What is under test
+	// is that the read honours Live(), not the arithmetic that produced the
+	// timestamp -- and the handler's own end of that is covered below.
+	past := time.Now().UTC().Add(-time.Hour)
+	expired, err := d.Store.CreateWorkflowShare(ctx, models.WorkflowShare{
+		Token:      "expired-token-fixture-000001",
+		WorkflowID: wf.ID,
+		UserID:     "dev",
+		Name:       wf.Name,
+		Graph:      models.WorkflowGraph{Nodes: []models.WorkflowNode{{ID: "n1", Type: models.NodeTypeTrigger}}},
+		NodeCount:  1,
+		ExpiresAt:  &past,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, expiredBody := readShare(t, d, expired.Token)
+	if code != http.StatusNotFound {
+		t.Fatalf("an expired link = %d, want 404", code)
+	}
+	_, missingBody := readShare(t, d, "a-token-that-was-never-minted")
+	if expiredBody != missingBody {
+		t.Errorf("an expired link answers %q but a missing one answers %q -- the difference is the leak",
+			expiredBody, missingBody)
+	}
+
+	// The handler's half: a future expiry is stored, and the link still reads.
+	live, _ := createShare(t, d, wf.ID, "dev", `{"expiresInDays":7}`)
+	if live.ExpiresAt == nil || !live.ExpiresAt.After(time.Now()) {
+		t.Fatalf("expiresInDays should have set a future expiry, got %v", live.ExpiresAt)
+	}
+	if code, _ := readShare(t, d, live.Token); code != http.StatusOK {
+		t.Error("a link expiring in a week should read today")
+	}
+
+	// And the sweep only takes what has actually expired.
+	removed, err := d.Store.SweepExpiredWorkflowShares(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed < 1 {
+		t.Error("the sweep should have removed the expired row")
+	}
+	if code, _ := readShare(t, d, live.Token); code != http.StatusOK {
+		t.Error("the sweep must not remove a link that has not expired yet")
+	}
+}
+
+func TestOnlyTheOwnerCanShareAWorkflow(t *testing.T) {
+	d := testDeps(t)
+	wf := seedSharedWorkflow(t, d, "dev")
+
+	req := httptest.NewRequest(http.MethodPost, "/workflows/"+wf.ID+"/share", strings.NewReader(`{}`))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev-stranger"))
+	req = withURLParam(req, "id", wf.ID)
+	w := httptest.NewRecorder()
+	d.CreateShare(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("a stranger sharing somebody else's workflow = %d, want 404", w.Code)
+	}
+}
+
+func TestPublicReadHidesHowManyPeopleTookACopy(t *testing.T) {
+	d := testDeps(t)
+	wf := seedSharedWorkflow(t, d, "dev")
+	share, _ := createShare(t, d, wf.ID, "dev", `{}`)
+
+	imported := importShare(t, d, share.Token, "dev-recipient")
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), imported.ID) })
+
+	_, body := readShare(t, d, share.Token)
+	var out struct {
+		Share        models.WorkflowShare             `json:"share"`
+		Requirements handlers.ShareImportRequirements `json:"requirements"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Share.ImportCount != 0 {
+		t.Errorf("the public read exposed an import count of %d", out.Share.ImportCount)
+	}
+
+	// The sharer's own listing is where that number belongs.
+	lreq := httptest.NewRequest(http.MethodGet, "/workflows/"+wf.ID+"/shares", nil)
+	lreq = lreq.WithContext(context.WithValue(lreq.Context(), handlers.CtxUserID, "dev"))
+	lreq = withURLParam(lreq, "id", wf.ID)
+	lw := httptest.NewRecorder()
+	d.ListWorkflowShares(lw, lreq)
+	if lw.Code != http.StatusOK {
+		t.Fatalf("ListWorkflowShares = %d: %s", lw.Code, lw.Body.String())
+	}
+	var listed struct {
+		Shares []models.WorkflowShare `json:"shares"`
+	}
+	if err := json.Unmarshal(lw.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, s := range listed.Shares {
+		if s.Token != share.Token {
+			continue
+		}
+		found = true
+		if s.ImportCount != 1 {
+			t.Errorf("the sharer should see 1 import, got %d", s.ImportCount)
+		}
+		if len(s.Graph.Nodes) != 0 {
+			t.Error("the listing is about the links, not their contents")
+		}
+	}
+	if !found {
+		t.Error("the sharer's own listing did not include the link they just made")
+	}
+
+	// And the recipient is told what they have to supply: the BYOK provider
+	// key, and the file whose bytes were stripped.
+	if out.Requirements.APIKeys != 1 || out.Requirements.Files != 1 {
+		t.Errorf("requirements shown to the recipient look wrong: %+v", out.Requirements)
+	}
+}
+
+// --- helpers ---------------------------------------------------------------
+
+func readShare(t *testing.T, d *handlers.Deps, token string) (int, string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/shares/"+token, nil)
+	req = withURLParam(req, "token", token)
+	w := httptest.NewRecorder()
+	d.GetShare(w, req)
+	return w.Code, w.Body.String()
+}
+
+func importShare(t *testing.T, d *handlers.Deps, token, userID string) models.Workflow {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/shares/"+token+"/import", nil)
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, userID))
+	req = withURLParam(req, "token", token)
+	w := httptest.NewRecorder()
+	d.ImportShare(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("ImportShare = %d, want 201: %s", w.Code, w.Body.String())
+	}
+	var wf models.Workflow
+	if err := json.Unmarshal(w.Body.Bytes(), &wf); err != nil {
+		t.Fatal(err)
+	}
+	return wf
+}
+
+// secretOf reads one stored secret, decrypting it the way the engine would.
+func secretOf(t *testing.T, nodes []models.WorkflowNode, nodeID, key string) string {
+	t.Helper()
+	decrypted := handlers.DecryptNodes(nodes, testEncryptionKey)
+	for _, n := range decrypted {
+		if n.ID == nodeID {
+			return n.Secrets[key]
+		}
+	}
+	return ""
+}
