@@ -507,6 +507,102 @@ body {
   }
 }
 
+/* Share dialog controls. Classes rather than style props for the same reason
+   .credit-topup is one: :hover, :active, :disabled and the reduced-motion
+   escape cannot be written inline. Every one of these is 36px+ tall so it
+   clears a thumb on the phone-width layout the dialog also renders at. */
+.share-primary-btn,
+.share-ghost-btn,
+.share-icon-btn,
+.share-revoke-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: var(--r-2);
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    background 0.14s var(--ease),
+    border-color 0.14s var(--ease),
+    color 0.14s var(--ease),
+    transform 0.12s var(--ease);
+}
+.share-primary-btn {
+  width: 100%;
+  height: 38px;
+  border: 1px solid var(--accent-line);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+.share-ghost-btn {
+  flex: 1;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+}
+.share-icon-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+}
+.share-revoke-btn {
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 11.5px;
+}
+@media (hover: hover) {
+  .share-primary-btn:hover:not(:disabled) {
+    background: var(--accent-strong);
+  }
+  .share-ghost-btn:hover:not(:disabled),
+  .share-icon-btn:hover {
+    border-color: var(--accent-line);
+    color: var(--fg);
+  }
+  /* Revoking is destructive and irreversible, so its hover says so rather
+     than reaching for the accent every other control here uses. */
+  .share-revoke-btn:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+}
+.share-primary-btn:active:not(:disabled),
+.share-ghost-btn:active:not(:disabled),
+.share-icon-btn:active,
+.share-revoke-btn:active {
+  transform: scale(0.97);
+}
+.share-primary-btn:disabled,
+.share-ghost-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  .share-primary-btn,
+  .share-ghost-btn,
+  .share-icon-btn,
+  .share-revoke-btn {
+    transition: none;
+  }
+  .share-primary-btn:active:not(:disabled),
+  .share-ghost-btn:active:not(:disabled),
+  .share-icon-btn:active,
+  .share-revoke-btn:active {
+    transform: none;
+  }
+}
+
 /* The one action on a share link's public page. A class rather than inline
    styles because it needs :hover, :active and a reduced-motion escape, which
    a style prop cannot express -- the same reason .credit-topup above is one.

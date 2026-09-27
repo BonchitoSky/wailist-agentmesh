@@ -2,14 +2,28 @@
 import { useEffect, useState } from "react";
 import { IconClose } from "@/components/ui";
 import { useModalDismissal } from "@/hooks/useModalDismissal";
-import { workflows as workflowsApi } from "@/lib/api";
+import { shares as sharesApi } from "@/lib/api";
+import { shareUrl } from "@/lib/routes";
+import type { ShareRedactions, WorkflowShare } from "@/lib/types";
 import { encodeWorkflowShare } from "@/lib/workflowShare";
 
-// mailto: URLs get truncated by a lot of mail clients/OSes past roughly
-// 2000 total characters, so the code only goes in the email body when it's
-// short enough to survive that -- otherwise the body just points back at
-// the code already sitting in the user's clipboard from "Copy code".
-const MAILTO_SAFE_CODE_LENGTH = 1200;
+// Handing a workflow to somebody else.
+//
+// A link first, a code second. The previous version of this dialog produced
+// only a code, and its own X and Email buttons then refused to carry it --
+// they sent a caption and told the recipient to ask for the clipboard
+// separately, because a code is routinely longer than a mailto: survives. A
+// token is 22 characters, so the link goes wherever text goes.
+//
+// The code is still here for a channel that mangles URLs, and is built from
+// the graph the SERVER returned rather than from the workflow's own nodes.
+// One sanitiser, on the server; the client is never trusted to reproduce it.
+
+const EXPIRY_CHOICES = [
+  { label: "No expiry", days: 0 },
+  { label: "7 days", days: 7 },
+  { label: "30 days", days: 30 },
+] as const;
 
 const IconCopy = ({ size = 14 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
@@ -58,15 +72,32 @@ const IconMail = ({ size = 14 }: { size?: number }) => (
   </svg>
 );
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  return `${(n / 1024).toFixed(1)} KB`;
+const isLive = (s: WorkflowShare) =>
+  !s.revokedAt &&
+  (!s.expiresAt || new Date(s.expiresAt).getTime() > Date.now());
+
+// Sentences, not a count table. "your API key" is what a person needs to hear;
+// "apiKeys: 1" is what the API happens to return.
+function redactionLines(r: ShareRedactions): string[] {
+  const lines: string[] = [];
+  const plural = (n: number, one: string, many: string) =>
+    n === 1 ? one : `${n} ${many}`;
+  if (r.apiKeys > 0) lines.push(plural(r.apiKeys, "your API key", "API keys"));
+  if (r.secrets > 0)
+    lines.push(plural(r.secrets, "a connector secret", "connector secrets"));
+  if (r.webhookSecrets > 0) lines.push("your webhook secret");
+  if (r.connectedAccounts > 0) lines.push("your connected accounts");
+  if (r.uploadedFiles > 0)
+    lines.push(plural(r.uploadedFiles, "an uploaded file", "uploaded files"));
+  if (r.agentWallets > 0) lines.push("your agent wallet addresses");
+  if (r.emailAddresses > 0) lines.push("the addresses it sends email to");
+  if (r.leasedMachines > 0) lines.push("your leased machine");
+  return lines;
 }
 
 // Mounted only while open (the parent renders it conditionally on
 // shareWorkflowId, the same pattern AddToWorkflowDialog uses) -- so a fresh
-// mount per share is the reset, and the fetch-then-encode effect never needs
-// to synchronously setState before the async work starts.
+// mount per share is the reset, and no effect has to clear anything.
 export function ShareModal({
   workflowId,
   onClose,
@@ -74,33 +105,43 @@ export function ShareModal({
   workflowId: string;
   onClose: () => void;
 }) {
+  const [share, setShare] = useState<WorkflowShare | null>(null);
+  const [redactions, setRedactions] = useState<ShareRedactions | null>(null);
+  const [others, setOthers] = useState<WorkflowShare[]>([]);
+  const [expiryDays, setExpiryDays] = useState<number>(0);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [prepared, setPrepared] = useState<{ name: string; code: string } | null>(
-    null,
-  );
-  const [copied, setCopied] = useState(false);
-  const loading = !prepared && !error;
-  const name = prepared?.name ?? "";
-  const code = prepared?.code ?? "";
+  const [copied, setCopied] = useState<"link" | "code" | null>(null);
+  const loading = !share && !error;
 
   useModalDismissal(onClose);
 
+  // Reuse a live link rather than minting one on every open. Opening this
+  // dialog four times should not leave four links behind for somebody to
+  // wonder about later, and the per-account allowance is finite.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const wf = await workflowsApi.get(workflowId);
-        const encoded = await encodeWorkflowShare({
-          name: wf.name,
-          nodes: wf.nodes,
-          edges: wf.edges,
-        });
-        if (!cancelled) setPrepared({ name: wf.name, code: encoded });
+        const existing = await sharesApi.listFor(workflowId);
+        if (cancelled) return;
+        const live = existing.filter(isLive);
+        if (live.length > 0) {
+          setShare(live[0]);
+          setOthers(existing.filter((s) => s.token !== live[0].token));
+          return;
+        }
+        const created = await sharesApi.create(workflowId, 0);
+        if (cancelled) return;
+        setShare(created.share);
+        setRedactions(created.redactions);
+        setOthers(existing);
       } catch (e) {
-        if (!cancelled)
+        if (!cancelled) {
           setError(
-            e instanceof Error ? e.message : "could not prepare share code",
+            e instanceof Error ? e.message : "could not prepare a share link",
           );
+        }
       }
     })();
     return () => {
@@ -108,23 +149,81 @@ export function ShareModal({
     };
   }, [workflowId]);
 
-  const handleCopy = async () => {
+  const flash = (what: "link" | "code") => {
+    setCopied(what);
+    setTimeout(() => setCopied(null), 1500);
+  };
+
+  const handleCopyLink = async () => {
+    if (!share) return;
     try {
-      await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      await navigator.clipboard.writeText(shareUrl(share.token));
+      flash("link");
     } catch {
-      setError("clipboard write was blocked -- select the code and copy it manually");
+      setError("clipboard write was blocked -- select the link and copy it");
     }
   };
 
-  const caption = `Check out "${name}" -- a workflow I built with AgentMesh`;
-  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(caption)}`;
-  const emailBody =
-    code.length > 0 && code.length <= MAILTO_SAFE_CODE_LENGTH
-      ? `${caption}\n\nPaste this into Import on the Workflows page:\n\n${code}`
-      : `${caption}\n\nI copied the workflow code to my clipboard -- ask me for it, then paste it into Import on the Workflows page.`;
-  const mailUrl = `mailto:?subject=${encodeURIComponent(caption)}&body=${encodeURIComponent(emailBody)}`;
+  // The graph is fetched here rather than kept around: the listing deliberately
+  // does not carry graphs, and most people copy the link and never touch this.
+  const handleCopyCode = async () => {
+    if (!share || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { share: full } = await sharesApi.read(share.token);
+      const code = await encodeWorkflowShare({
+        name: full.name,
+        nodes: full.graph.nodes,
+        edges: full.graph.edges,
+      });
+      await navigator.clipboard.writeText(code);
+      flash("code");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "could not prepare a code");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleNewLink = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await sharesApi.create(workflowId, expiryDays);
+      setOthers((prev) => (share ? [share, ...prev] : prev));
+      setShare(created.share);
+      setRedactions(created.redactions);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "could not create a link");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRevoke = async (token: string) => {
+    setError(null);
+    try {
+      await sharesApi.revoke(token);
+      setOthers((prev) => prev.filter((s) => s.token !== token));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "could not revoke that link");
+    }
+  };
+
+  const url = share ? shareUrl(share.token) : "";
+  const caption = share
+    ? `Check out "${share.name}" -- a workflow I built with AgentMesh`
+    : "";
+  // Both carry the LINK now. The old version could not: a code is routinely
+  // longer than a mailto: body or a tweet survives, so it sent a caption and
+  // an apology instead.
+  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(caption)}&url=${encodeURIComponent(url)}`;
+  const mailUrl = `mailto:?subject=${encodeURIComponent(caption)}&body=${encodeURIComponent(`${caption}\n\n${url}`)}`;
+
+  const lines = redactions ? redactionLines(redactions) : [];
+  const liveOthers = others.filter(isLive);
 
   return (
     <div
@@ -151,6 +250,8 @@ export function ShareModal({
         style={{
           width: "100%",
           maxWidth: 480,
+          maxHeight: "calc(100dvh - 48px)",
+          overflowY: "auto",
           border: "1px solid var(--border-strong)",
           borderRadius: "var(--r-4)",
           background: "var(--bg-elev-1)",
@@ -178,91 +279,132 @@ export function ShareModal({
             >
               Share workflow
             </h2>
-            <p style={{ margin: "3px 0 0", fontSize: 12.5, color: "var(--fg-muted)" }}>
-              {name || "Loading…"}
+            <p
+              style={{
+                margin: "3px 0 0",
+                fontSize: 12.5,
+                color: "var(--fg-muted)",
+              }}
+            >
+              {share?.name || "Loading…"}
             </p>
           </div>
           <button
             type="button"
             aria-label="Close"
             onClick={onClose}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 30,
-              height: 30,
-              background: "transparent",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--r-2)",
-              color: "var(--fg-muted)",
-              cursor: "pointer",
-            }}
+            className="share-icon-btn"
           >
             <IconClose size={13} />
           </button>
         </div>
 
         {loading && (
-          <div style={{ padding: "24px 0", textAlign: "center", fontSize: 12.5, color: "var(--fg-dim)" }}>
-            Preparing share code…
+          <div
+            style={{
+              padding: "24px 0",
+              textAlign: "center",
+              fontSize: 12.5,
+              color: "var(--fg-dim)",
+            }}
+          >
+            Preparing a link…
           </div>
         )}
 
-        {!loading && error && (
-          <div style={{ fontSize: 12.5, color: "var(--danger)", padding: "8px 0" }}>
+        {error && (
+          <div
+            style={{
+              fontSize: 12.5,
+              color: "var(--danger)",
+              padding: "8px 0",
+              maxWidth: "60ch",
+            }}
+          >
             {error}
           </div>
         )}
 
-        {!loading && !error && code && (
+        {share && (
           <>
-            <div style={{ fontSize: 11.5, color: "var(--fg-dim)", marginBottom: 6 }}>
-              Code ({formatBytes(code.length)}) -- API keys are never included, so
-              re-enter them after importing.
+            <div
+              style={{
+                fontSize: 11.5,
+                color: "var(--fg-dim)",
+                marginBottom: 6,
+              }}
+            >
+              Anyone with this link can see the workflow and import a copy.
             </div>
-            <textarea
+            <input
               readOnly
-              value={code}
+              value={url}
               onFocus={(e) => e.currentTarget.select()}
+              aria-label="Share link"
               style={{
                 width: "100%",
-                height: 88,
-                resize: "none",
+                height: 38,
                 fontFamily: "var(--font-mono)",
-                fontSize: 11,
-                lineHeight: 1.5,
-                padding: 10,
+                fontSize: 11.5,
+                padding: "0 10px",
                 background: "var(--bg-elev-2)",
                 border: "1px solid var(--border)",
                 borderRadius: "var(--r-2)",
                 color: "var(--fg-muted)",
-                marginBottom: 12,
-                wordBreak: "break-all",
+                marginBottom: 10,
               }}
             />
             <button
               type="button"
-              onClick={handleCopy}
+              onClick={handleCopyLink}
+              className="share-primary-btn"
+            >
+              <IconCopy size={13} />{" "}
+              {copied === "link" ? "Copied!" : "Copy link"}
+            </button>
+
+            <div style={{ display: "flex", gap: 8, margin: "10px 0 14px" }}>
+              <a
+                href={tweetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="share-ghost-btn"
+              >
+                <IconX size={13} /> Post
+              </a>
+              <a href={mailUrl} className="share-ghost-btn">
+                <IconMail size={13} /> Email
+              </a>
+              <button
+                type="button"
+                onClick={handleCopyCode}
+                disabled={busy}
+                className="share-ghost-btn"
+              >
+                <IconCopy size={13} /> {copied === "code" ? "Copied!" : "Code"}
+              </button>
+            </div>
+
+            <div
               style={{
-                width: "100%",
-                height: 38,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 7,
+                border: "1px solid var(--border-soft)",
                 borderRadius: "var(--r-2)",
-                border: "1px solid var(--accent-line)",
-                background: "var(--accent)",
-                color: "var(--accent-fg)",
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
+                background: "var(--bg-elev-2)",
+                padding: "11px 13px",
                 marginBottom: 14,
+                fontSize: 12,
+                lineHeight: 1.65,
+                color: "var(--fg-muted)",
+                maxWidth: "60ch",
               }}
             >
-              <IconCopy size={13} /> {copied ? "Copied!" : "Copy code"}
-            </button>
+              <strong style={{ color: "var(--fg)", fontWeight: 600 }}>
+                Not included:
+              </strong>{" "}
+              {lines.length > 0
+                ? `${lines.join(", ")}. Whoever imports it adds their own.`
+                : "any API keys, secrets or uploaded files. Whoever imports it adds their own."}
+            </div>
 
             <div
               style={{
@@ -272,55 +414,97 @@ export function ShareModal({
               }}
             />
 
-            <div style={{ fontSize: 11.5, color: "var(--fg-dim)", marginBottom: 8 }}>
-              Or tell someone about it
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <a
-                href={tweetUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: liveOthers.length > 0 ? 12 : 0,
+              }}
+            >
+              <label
+                htmlFor="share-expiry"
+                style={{ fontSize: 11.5, color: "var(--fg-dim)" }}
+              >
+                New link expires
+              </label>
+              <select
+                id="share-expiry"
+                value={expiryDays}
+                onChange={(e) => setExpiryDays(Number(e.target.value))}
                 style={{
-                  flex: 1,
-                  height: 36,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 7,
+                  height: 30,
+                  padding: "0 8px",
+                  background: "var(--bg-elev-2)",
+                  border: "1px solid var(--border)",
                   borderRadius: "var(--r-2)",
-                  border: "1px solid var(--border-strong)",
-                  background: "transparent",
                   color: "var(--fg)",
-                  fontSize: 12.5,
-                  fontWeight: 500,
-                  textDecoration: "none",
-                  cursor: "pointer",
+                  fontSize: 12,
                 }}
               >
-                <IconX size={12} /> Post
-              </a>
-              <a
-                href={mailUrl}
-                style={{
-                  flex: 1,
-                  height: 36,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 7,
-                  borderRadius: "var(--r-2)",
-                  border: "1px solid var(--border-strong)",
-                  background: "transparent",
-                  color: "var(--fg)",
-                  fontSize: 12.5,
-                  fontWeight: 500,
-                  textDecoration: "none",
-                  cursor: "pointer",
-                }}
+                {EXPIRY_CHOICES.map((c) => (
+                  <option key={c.days} value={c.days}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleNewLink}
+                disabled={busy}
+                className="share-ghost-btn"
+                style={{ flex: "0 0 auto", padding: "0 12px" }}
               >
-                <IconMail size={13} /> Email
-              </a>
+                New link
+              </button>
             </div>
+
+            {liveOthers.length > 0 && (
+              <div>
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    color: "var(--fg-dim)",
+                    marginBottom: 6,
+                  }}
+                >
+                  Other live links
+                </div>
+                {liveOthers.map((s) => (
+                  <div
+                    key={s.token}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      padding: "6px 0",
+                      fontSize: 11.5,
+                      color: "var(--fg-muted)",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: "var(--font-mono)",
+                        fontVariantNumeric: "tabular-nums",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      …{s.token.slice(-8)} · {s.importCount ?? 0} imports
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleRevoke(s.token)}
+                      className="share-revoke-btn"
+                    >
+                      Revoke
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>
