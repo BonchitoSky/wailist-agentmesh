@@ -2,9 +2,16 @@
 import { useState } from "react";
 import { IconClose } from "@/components/ui";
 import { useModalDismissal } from "@/hooks/useModalDismissal";
-import { loadTemplateWorkflow } from "@/lib/templateWorkflow";
-import type { WorkflowEdge, WorkflowNode } from "@/lib/types";
+import { shares as sharesApi, workflows as workflowsApi } from "@/lib/api";
+import { classifyShareInput } from "@/lib/shareInput";
 import { decodeWorkflowShare } from "@/lib/workflowShare";
+
+// One box, three kinds of paste: a link, a bare token, or a code.
+//
+// Which one it is gets worked out in lib/shareInput.ts rather than here, and
+// the person pasting is never asked to say. They were handed one string by a
+// friend; being made to classify it first is exactly the friction that leaves
+// a feature unused.
 
 const IconPaste = ({ size = 13 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
@@ -25,9 +32,9 @@ const IconPaste = ({ size = 13 }: { size?: number }) => (
   </svg>
 );
 
-// Mounted only while open (the parent renders it conditionally on
-// importOpen, the same pattern AddToWorkflowDialog uses) -- so each open is
-// a fresh mount and a fresh slate, with no reset-on-open effect needed.
+// Mounted only while open (the parent renders it conditionally on importOpen,
+// the same pattern AddToWorkflowDialog uses) -- so each open is a fresh mount
+// and a fresh slate, with no reset-on-open effect needed.
 export function ImportModal({
   onClose,
   onImported,
@@ -35,7 +42,7 @@ export function ImportModal({
   onClose: () => void;
   onImported: (id: string) => void;
 }) {
-  const [code, setCode] = useState("");
+  const [input, setInput] = useState("");
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,7 +51,7 @@ export function ImportModal({
   const handlePasteFromClipboard = async () => {
     try {
       const text = await navigator.clipboard.readText();
-      setCode(text);
+      setInput(text);
       setError(null);
     } catch {
       setError(
@@ -53,24 +60,60 @@ export function ImportModal({
     }
   };
 
+  // A code goes through POST /workflows/import, not create-then-update. That
+  // endpoint is atomic and runs the graph through the server's sanitiser --
+  // the ordinary save path deliberately passes an "enc:"-prefixed value
+  // through untouched, which is right for the canvas round-tripping its own
+  // ciphertext and wrong for a stranger's paste.
+  const importCode = async (code: string): Promise<string> => {
+    const data = await decodeWorkflowShare(code);
+    const wf = await workflowsApi.importGraph({
+      name: data.name?.trim() || "Imported workflow",
+      nodes: data.nodes,
+      edges: data.edges,
+    });
+    return wf.id;
+  };
+
   const handleImport = async () => {
-    if (!code.trim() || importing) return;
+    if (!input.trim() || importing) return;
     setImporting(true);
     setError(null);
+
+    const parsed = classifyShareInput(input);
+    if (!parsed) {
+      setError("paste a link or a code first");
+      setImporting(false);
+      return;
+    }
+
     try {
-      const data = await decodeWorkflowShare(code);
-      const id = await loadTemplateWorkflow({
-        id: "",
-        name: data.name?.trim() || "Imported workflow",
-        nodes: data.nodes as WorkflowNode[],
-        edges: data.edges as WorkflowEdge[],
-      });
-      onImported(id);
+      if (parsed.kind === "code") {
+        onImported(await importCode(parsed.code));
+        return;
+      }
+      try {
+        const wf = await sharesApi.importInto(parsed.token);
+        onImported(wf.id);
+      } catch (tokenErr) {
+        // A bare base64url string is shaped like a token AND like a short
+        // legacy code -- see classifyShareInput. The lookup failing is what
+        // settles it, so the paste gets its second reading rather than an
+        // error about a link that was never a link. If the code reading fails
+        // too, the token error is the honest one to show: it is far and away
+        // the likelier thing somebody pasted.
+        if (input.trim() !== parsed.token) throw tokenErr;
+        try {
+          onImported(await importCode(parsed.token));
+        } catch {
+          throw tokenErr;
+        }
+      }
     } catch (e) {
       setError(
         e instanceof Error
           ? e.message
-          : "could not import that code -- make sure it's a full workflow share code",
+          : "could not import that -- check the link or code and try again",
       );
       setImporting(false);
     }
@@ -128,26 +171,22 @@ export function ImportModal({
             >
               Import workflow
             </h2>
-            <p style={{ margin: "3px 0 0", fontSize: 12.5, color: "var(--fg-muted)" }}>
-              Paste a code from someone&apos;s Share
+            <p
+              style={{
+                margin: "3px 0 0",
+                fontSize: 12.5,
+                color: "var(--fg-muted)",
+                maxWidth: "60ch",
+              }}
+            >
+              Paste a share link or a code
             </p>
           </div>
           <button
             type="button"
             aria-label="Close"
             onClick={onClose}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 30,
-              height: 30,
-              background: "transparent",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--r-2)",
-              color: "var(--fg-muted)",
-              cursor: "pointer",
-            }}
+            className="share-icon-btn"
           >
             <IconClose size={13} />
           </button>
@@ -155,15 +194,15 @@ export function ImportModal({
 
         <textarea
           autoFocus
-          value={code}
+          value={input}
           onChange={(e) => {
-            setCode(e.target.value);
+            setInput(e.target.value);
             setError(null);
           }}
-          placeholder="Paste the code here, or use Paste from clipboard below…"
+          placeholder="https://www.agent-mesh.app/s/… or am1.…"
           style={{
             width: "100%",
-            height: 110,
+            height: 100,
             resize: "none",
             fontFamily: "var(--font-mono)",
             fontSize: 11,
@@ -181,66 +220,35 @@ export function ImportModal({
         <button
           type="button"
           onClick={handlePasteFromClipboard}
-          style={{
-            width: "100%",
-            height: 34,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 7,
-            borderRadius: "var(--r-2)",
-            border: "1px solid var(--border-strong)",
-            background: "transparent",
-            color: "var(--fg)",
-            fontSize: 12.5,
-            fontWeight: 500,
-            cursor: "pointer",
-            marginBottom: 14,
-          }}
+          className="share-ghost-btn"
+          style={{ width: "100%", marginBottom: 14 }}
         >
           <IconPaste /> Paste from clipboard
         </button>
 
         {error && (
-          <div style={{ fontSize: 12, color: "var(--danger)", marginBottom: 12 }}>
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--danger)",
+              marginBottom: 12,
+              maxWidth: "60ch",
+            }}
+          >
             {error}
           </div>
         )}
 
         <div style={{ display: "flex", gap: 8 }}>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              flex: 1,
-              height: 38,
-              borderRadius: "var(--r-2)",
-              border: "1px solid var(--border-strong)",
-              background: "transparent",
-              color: "var(--fg-muted)",
-              fontSize: 13,
-              fontWeight: 500,
-              cursor: "pointer",
-            }}
-          >
+          <button type="button" onClick={onClose} className="share-ghost-btn">
             Cancel
           </button>
           <button
             type="button"
-            disabled={!code.trim() || importing}
+            disabled={!input.trim() || importing}
             onClick={handleImport}
-            style={{
-              flex: 1,
-              height: 38,
-              borderRadius: "var(--r-2)",
-              border: "1px solid var(--accent-line)",
-              background: "var(--accent)",
-              color: "var(--accent-fg)",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: !code.trim() || importing ? "not-allowed" : "pointer",
-              opacity: !code.trim() || importing ? 0.6 : 1,
-            }}
+            className="share-primary-btn"
+            style={{ flex: 1, width: "auto" }}
           >
             {importing ? "Importing…" : "Import"}
           </button>
