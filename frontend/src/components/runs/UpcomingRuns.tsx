@@ -7,6 +7,7 @@ import { schedules, UpcomingUnavailableError } from "@/lib/api";
 import type { UpcomingRun } from "@/lib/types";
 import { workflowHref } from "@/lib/routes";
 import { formatRunTime, formatUntil } from "@/lib/runFormat";
+import overviewStyles from "@/components/workflows/WorkflowOverview.module.css";
 
 // Schedules move slowly; a minute between refreshes keeps the list true
 // without polling like a running run does. The clock ticks faster so an
@@ -98,7 +99,7 @@ export function UpcomingRuns({
   if (unavailable) return null;
   if (presentation === "overview") {
     return (
-      <section className="upc upc--overview" aria-labelledby={headingId}>
+      <section className={`upc ${overviewStyles.upcoming}`} aria-labelledby={headingId}>
         <h2 id={headingId} className="upc__title">{title}</h2>
         {items === null ? (
           failed ? (
@@ -115,9 +116,9 @@ export function UpcomingRuns({
           <ul className="upc__list">
             {items.map((u) => (
               <li key={`${u.workflowId}@${u.at}`}>
-                <Link href={workflowHref(u.workflowId)} className="upc__overview-row" title={u.workflowName}>
-                  <span className="upc__overview-name">{u.workflowName}</span>
-                  <time className="upc__overview-time" dateTime={u.at}>
+                <Link href={workflowHref(u.workflowId)} className={overviewStyles.upcomingRow} title={u.workflowName}>
+                  <span className={overviewStyles.upcomingName}>{u.workflowName}</span>
+                  <time className={overviewStyles.upcomingTime} dateTime={u.at}>
                     {dayLabel(u.at, now)}, {formatRunTime(u.at)}
                   </time>
                 </Link>

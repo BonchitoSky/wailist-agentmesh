@@ -4,21 +4,22 @@ import { useRouter } from "next/navigation";
 import { IconWallet } from "@/components/ui";
 import { UpcomingRuns } from "@/components/runs/UpcomingRuns";
 import { useCredits } from "@/lib/credits/store";
+import styles from "./WorkflowOverview.module.css";
 
 export function WorkflowOverview() {
   const router = useRouter();
   const { balanceUSD, balanceKnown } = useCredits();
 
   return (
-    <div className="wf-overview">
-      <section className="wf-credit" aria-label="Credit balance">
-        <div className="wf-credit__heading">
-          <span className="wf-credit__label">
+    <div className={styles.overview}>
+      <section className={styles.credit} aria-label="Credit balance">
+        <div className={styles.creditHeading}>
+          <span className={styles.creditLabel}>
             <IconWallet size={13} /> Credit balance
           </span>
           <button
             type="button"
-            className="wf-credit__add"
+            className={styles.creditAdd}
             aria-label="Add credits"
             title="Add credits"
             onClick={() => router.push("/billing")}
@@ -28,10 +29,10 @@ export function WorkflowOverview() {
             </svg>
           </button>
         </div>
-        <p className="wf-credit__balance">
+        <p className={styles.creditBalance}>
           {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
         </p>
-        <p className="wf-credit__hint">
+        <p className={styles.creditHint}>
           {balanceKnown ? "Spent as your agents call paid tools and models." : "Loading balance…"}
         </p>
       </section>
