@@ -74,6 +74,12 @@ export function can(capability: Capability, readOnly: boolean): boolean {
 // The rules deliberately mirror backend/internal/api/readonly.go one for one.
 const WRITE_RULES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
   { method: "POST", pattern: /^\/workflows$/ },
+  // Importing creates a workflow, so both routes that do it sit beside POST
+  // /workflows. Creating and revoking a share LINK are deliberately absent:
+  // they publish or retract a copy and cannot change a graph, and handing
+  // somebody a link is a reasonable thing to do from a phone.
+  { method: "POST", pattern: /^\/workflows\/import$/ },
+  { method: "POST", pattern: /^\/shares\/[^/]+\/import$/ },
   { method: "PUT", pattern: /^\/workflows\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/workflows\/[^/]+$/ },
   { method: "POST", pattern: /^\/workflows\/[^/]+\/deploy$/ },
