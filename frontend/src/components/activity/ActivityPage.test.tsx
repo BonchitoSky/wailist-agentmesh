@@ -155,6 +155,108 @@ describe("ActivityPage", () => {
     ).toBeNull();
   });
 
+  // A run started somewhere else, such as on the website, while this screen
+  // is open and nothing on it is running.
+  it("picks up a run started elsewhere without a pull", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      api.recent
+        .mockResolvedValueOnce(page([run({ id: "r-1" })]))
+        .mockResolvedValue(
+          page([
+            run({
+              id: "r-2",
+              workflowName: "Started on the website",
+              triggeredBy: "manual",
+              status: "running",
+              finishedAt: undefined,
+            }),
+            run({ id: "r-1" }),
+          ]),
+        );
+      render(<ActivityPage />);
+      await screen.findByText("Morning digest");
+
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(await screen.findByText("Started on the website")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The first load is slow, a poll lands first, and the first load's older
+  // answer must not replace it.
+  it("drops a slow first load that a poll has overtaken", async () => {
+    const first = deferred<RunPage>();
+    api.recent
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValue(
+        page([run({ id: "r-1", workflowName: "Newer answer" })]),
+      );
+    render(<ActivityPage />);
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(await screen.findByText("Newer answer")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve(page([run({ id: "r-1", workflowName: "Older answer" })]));
+    });
+    expect(screen.getByText("Newer answer")).toBeTruthy();
+    expect(screen.queryByText("Older answer")).toBeNull();
+  });
+
+  // A failed first load shows an error; the next successful poll has to take
+  // it away, not leave it standing above rows that loaded fine.
+  it("clears the error when a later poll succeeds", async () => {
+    api.recent
+      .mockRejectedValueOnce(new Error("Could not reach the server"))
+      .mockResolvedValue(page([run({ id: "r-1" })]));
+    render(<ActivityPage />);
+    expect(await screen.findByText("Could not reach the server")).toBeTruthy();
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(await screen.findByText("Morning digest")).toBeTruthy();
+    expect(screen.queryByText("Could not reach the server")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("refreshes on coming back to the foreground", async () => {
+    api.recent
+      .mockResolvedValueOnce(page([run({ id: "r-1" })]))
+      .mockResolvedValue(
+        page([
+          run({ id: "r-2", workflowName: "Ran while away" }),
+          run({ id: "r-1" }),
+        ]),
+      );
+    render(<ActivityPage />);
+    await screen.findByText("Morning digest");
+
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(await screen.findByText("Ran while away")).toBeTruthy();
+  });
+
+  it("recovers once the server gains run history", async () => {
+    api.recent
+      .mockRejectedValueOnce(new api.RunsUnavailableError())
+      .mockResolvedValue(page([run({ id: "r-1" })]));
+    render(<ActivityPage />);
+    await screen.findByText("Run history is not available on this server yet.");
+
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(await screen.findByText("Morning digest")).toBeTruthy();
+  });
+
   // The sheet shows the row as it is now, not as it was when tapped.
   it("updates an open sheet when a refresh brings new figures", async () => {
     api.recent
@@ -174,7 +276,7 @@ describe("ActivityPage", () => {
     expect(screen.getByRole("dialog").dataset.spend).toBe("90000");
   });
 
-  it("polls spend while an open run is running, then stops", async () => {
+  it("polls spend while an open run is running, then switches to idle polling", async () => {
     vi.useFakeTimers();
     api.recent
       .mockResolvedValueOnce(
@@ -184,6 +286,9 @@ describe("ActivityPage", () => {
         page([run({ id: "r-1", status: "running", spendUsdMicros: 90_000 })]),
       )
       .mockResolvedValueOnce(
+        page([run({ id: "r-1", status: "success", spendUsdMicros: 120_000 })]),
+      )
+      .mockResolvedValue(
         page([run({ id: "r-1", status: "success", spendUsdMicros: 120_000 })]),
       );
 
@@ -199,8 +304,14 @@ describe("ActivityPage", () => {
     expect(screen.getByRole("dialog").dataset.spend).toBe("120000");
     expect(screen.getByRole("dialog").dataset.status).toBe("success");
 
-    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    await act(async () => vi.advanceTimersByTimeAsync(3_000));
     expect(api.recent).toHaveBeenCalledTimes(3);
+
+    await act(async () => vi.advanceTimersByTimeAsync(6_000));
+    expect(api.recent).toHaveBeenCalledTimes(3);
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(api.recent).toHaveBeenCalledTimes(4);
   });
 
   it("drops an older page that lands after a refresh", async () => {
@@ -247,6 +358,43 @@ describe("ActivityPage", () => {
     });
     expect(screen.getByText("Fresh run")).toBeTruthy();
     expect(screen.queryByText("Stale load")).toBeNull();
+  });
+
+  // The inverse of the two above: the slow request is the refresh, and the
+  // poll that started after it answers first.
+  it("drops a refresh that a later poll has already answered", async () => {
+    vi.useFakeTimers();
+    const slowRefresh = deferred<RunPage>();
+    api.recent
+      // The first load, with a second page to reach for.
+      .mockResolvedValueOnce(page([run({ id: "r-1" })], "c1"))
+      // "Show older runs".
+      .mockResolvedValueOnce(page([run({ id: "r-0", workflowName: "Older" })]))
+      // The pull, which does not answer until the end of the test.
+      .mockReturnValueOnce(slowRefresh.promise)
+      // The poll, started after the pull and answering before it.
+      .mockResolvedValueOnce(
+        page([run({ id: "r-9", workflowName: "Newer run" })]),
+      );
+    render(<ActivityPage />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "Show older runs" }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Pull to refresh" }));
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(screen.getByText("Newer run")).toBeTruthy();
+
+    await act(async () => {
+      slowRefresh.resolve(
+        page([run({ id: "r-1", workflowName: "Stale pull" })]),
+      );
+    });
+    expect(screen.queryByText("Stale pull")).toBeNull();
+    expect(screen.getByText("Newer run")).toBeTruthy();
+    // The page already loaded is still there too.
+    expect(screen.getByText("Older")).toBeTruthy();
+    vi.useRealTimers();
   });
 
   describe("while a run is going", () => {
