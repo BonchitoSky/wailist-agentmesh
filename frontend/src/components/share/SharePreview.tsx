@@ -4,6 +4,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Logo, Tag } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
+import { useReadOnly } from "@/hooks/useReadOnly";
+import { can } from "@/lib/readonly";
 import { shares } from "@/lib/api";
 import { shareHref, workflowHref } from "@/lib/routes";
 import type { ShareImportRequirements, WorkflowShare } from "@/lib/types";
@@ -74,6 +76,17 @@ function requirementLines(req: ShareImportRequirements): string[] {
 export function SharePreview({ token }: { token: string }) {
   const router = useRouter();
   const { signedIn, loading: authLoading } = useAuth();
+  // Importing creates a workflow, so it is authoring, and this app authors on
+  // a computer only -- the same policy that withholds New workflow and the
+  // canvas from a phone. Preview stays open to everyone, because reading what
+  // somebody sent you is not authoring and a link is mostly opened on a phone.
+  //
+  // Without this the page offered an Import button on a phone that could not
+  // work: assertWritable rejects POST /shares/{token}/import for any handheld
+  // or native client, so pressing it produced an error instead of a workflow.
+  // Saying so up front is the honest version of the same rule.
+  const readOnly = useReadOnly();
+  const canImport = can("workflow.create", readOnly);
 
   const [share, setShare] = useState<WorkflowShare | null>(null);
   const [requirements, setRequirements] =
@@ -356,29 +369,51 @@ export function SharePreview({ token }: { token: string }) {
               </p>
             )}
 
-            <button
-              type="button"
-              className="share-import-btn"
-              onClick={handleImport}
-              disabled={importing}
-            >
-              {importing
-                ? "Importing…"
-                : signedIn
-                  ? "Import to my workspace"
-                  : "Sign in to import"}
-            </button>
-            {!signedIn && !authLoading && (
-              <p
+            {canImport ? (
+              <>
+                <button
+                  type="button"
+                  className="share-import-btn"
+                  onClick={handleImport}
+                  disabled={importing}
+                >
+                  {importing
+                    ? "Importing…"
+                    : signedIn
+                      ? "Import to my workspace"
+                      : "Sign in to import"}
+                </button>
+                {!signedIn && !authLoading && (
+                  <p
+                    style={{
+                      margin: "10px 0 0",
+                      fontSize: 11.5,
+                      textAlign: "center",
+                      color: "var(--fg-dim)",
+                    }}
+                  >
+                    You&apos;ll come straight back here.
+                  </p>
+                )}
+              </>
+            ) : (
+              <div
                 style={{
-                  margin: "10px 0 0",
-                  fontSize: 11.5,
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--r-2)",
+                  padding: "13px 15px",
                   textAlign: "center",
-                  color: "var(--fg-dim)",
+                  fontSize: 12.5,
+                  lineHeight: 1.6,
+                  color: "var(--fg-muted)",
                 }}
               >
-                You&apos;ll come straight back here.
-              </p>
+                Open this link on a computer to import it.
+                <br />
+                <span style={{ color: "var(--fg-dim)", fontSize: 11.5 }}>
+                  Workflows are built and imported in the desktop app.
+                </span>
+              </div>
             )}
           </>
         )}
