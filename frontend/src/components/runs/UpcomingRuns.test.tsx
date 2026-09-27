@@ -57,6 +57,44 @@ afterEach(() => {
 });
 
 describe("UpcomingRuns", () => {
+  it("shows only the next two occurrences in the overview, including repeats", async () => {
+    const name = "A long workflow name that remains available when the visible text is truncated";
+    api.upcoming.mockResolvedValue([
+      run({ workflowName: name, at: at(HOUR) }),
+      run({ workflowName: name, at: at(2 * HOUR) }),
+      run({ workflowId: "wf-later", workflowName: "Later workflow", at: at(26 * HOUR) }),
+    ]);
+    render(<UpcomingRuns title="Upcoming runs" limit={2} presentation="overview" />);
+    const rows = await screen.findAllByRole("link");
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.getAttribute("title") === name)).toBe(true);
+    expect(rows.every((row) => row.getAttribute("href")?.includes("wf-brief"))).toBe(true);
+    expect(rows[0].textContent).toContain("Today");
+    expect(rows[0].querySelector("time")?.dateTime).toBe(at(HOUR));
+    expect(screen.queryByText("Later workflow")).toBeNull();
+    expect(api.upcoming).toHaveBeenCalledWith({ limit: 2, per: 3 });
+  });
+
+  it("keeps overview loading distinct from an empty schedule", async () => {
+    let resolve!: (runs: UpcomingRun[]) => void;
+    api.upcoming.mockReturnValue(new Promise<UpcomingRun[]>((r) => { resolve = r; }));
+    render(<UpcomingRuns limit={2} presentation="overview" />);
+    expect(screen.getByRole("status").textContent).toContain("Loading scheduled runs");
+    expect(screen.queryByText("Nothing scheduled.")).toBeNull();
+    await act(async () => resolve([]));
+    expect(screen.getByText("Nothing scheduled.")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("retries an overview load error without losing the section", async () => {
+    api.upcoming.mockRejectedValueOnce(new Error("500")).mockResolvedValue([run({})]);
+    render(<UpcomingRuns limit={2} presentation="overview" />);
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("link")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("lists what runs next, soonest first, grouped by day", async () => {
     render(<UpcomingRuns />);
     const rows = await screen.findAllByRole("link");

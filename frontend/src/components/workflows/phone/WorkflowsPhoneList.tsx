@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { IconSearch } from "@/components/ui";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useNow } from "@/hooks/useNow";
+import { WorkflowOverview } from "../WorkflowOverview";
 import type { Workflow } from "@/lib/types";
 import {
   filterWorkflows,
@@ -56,6 +57,7 @@ export function WorkflowsPhoneList({
   return (
     <main className="wfp-page">
       <WorkflowsPhoneHeader
+        showBalance={false}
         total={workflows.length}
         shown={visible.length}
         spend={totalSpend(workflows)}
@@ -67,6 +69,8 @@ export function WorkflowsPhoneList({
           {error}
         </p>
       )}
+
+      <WorkflowOverview />
 
       <div className="wfp-controls">
         <label className="wfp-search">
