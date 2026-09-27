@@ -507,6 +507,46 @@ body {
   }
 }
 
+/* The one action on a share link's public page. A class rather than inline
+   styles because it needs :hover, :active and a reduced-motion escape, which
+   a style prop cannot express -- the same reason .credit-topup above is one.
+   44px tall: this is the primary target on a page people open on a phone,
+   straight from a message. */
+.share-import-btn {
+  width: 100%;
+  height: 44px;
+  border-radius: var(--r-2);
+  border: 1px solid var(--accent-line);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.14s var(--ease),
+    transform 0.12s var(--ease);
+}
+@media (hover: hover) {
+  .share-import-btn:hover:not(:disabled) {
+    background: var(--accent-strong);
+  }
+}
+.share-import-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.share-import-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  .share-import-btn {
+    transition: none;
+  }
+  .share-import-btn:active:not(:disabled) {
+    transform: none;
+  }
+}
+
 /* Cell tooltip -- the exact-ALGO hover on the endpoints table. Replaces the
    native `title`, which was ~1s delayed, OS-styled and cursor-anchored, so it
    read as foreign next to the chart's own tooltip. Surface deliberately mirrors
