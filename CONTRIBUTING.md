@@ -206,6 +206,7 @@ SUM(users.tendril_credit_usd_micros) + (hours currently metering) <= Tendril poo
 | `GET` | `/auth/oauth/:provider/callback` | OAuth callback — sets cookie, redirects to frontend |
 | `POST` | `/waitlist` | Join waitlist — body: `{ email }` |
 | `POST` | `/run/:workflowId` | Public webhook trigger (only works on deployed workflows with a trigger node) |
+| `GET` | `/shares/:token` | Read a shared workflow snapshot. Public on purpose — a share link has to open for somebody with no account. Missing, revoked and expired all answer the same 404. Rate-limited per IP. |
 
 ### Protected endpoints (require auth cookie or `Authorization: Bearer <token>`)
 
@@ -217,6 +218,11 @@ SUM(users.tendril_credit_usd_micros) + (hours currently metering) <= Tendril poo
 | `GET` | `/workflows/:id` | Get a workflow (API keys masked in response) |
 | `PUT` | `/workflows/:id` | Update a workflow |
 | `DELETE` | `/workflows/:id` | Delete a workflow |
+| `POST` | `/workflows/import` | Create a workflow from a pasted graph — body: `{ name, nodes, edges }`. Atomic, and sanitised server-side; **not** the same as `POST /workflows` + `PUT`, which round-trips the canvas's own ciphertext |
+| `POST` | `/workflows/:id/share` | Freeze a sanitised snapshot and mint a share link — body: `{ expiresInDays }` (0 = never) |
+| `GET` | `/workflows/:id/shares` | List this workflow's share links, revoked and expired included |
+| `DELETE` | `/shares/:token` | Revoke a share link |
+| `POST` | `/shares/:token/import` | Copy a shared workflow into the caller's own workspace |
 | `POST` | `/workflows/:id/deploy` | Provision Algorand wallets for all agent nodes |
 | `GET` | `/workflows/:id/agents/:agentId/balance` | Get agent wallet ALGO balance |
 | `POST` | `/workflows/:id/agents/:agentId/fund` | Fund agent from testnet dispenser |
@@ -241,6 +247,16 @@ For SSE (`GET /runs/:runId/stream`), EventSource can't set headers, so the JWT c
 A workflow is a JSON graph of `WorkflowNode` objects and `WorkflowEdge` objects. Nodes have a `type` (`trigger`, `agent`, `tool402`, `action`), a `config` object, and `inputs`/`outputs` port definitions. Edges connect output ports to input ports.
 
 The full type is in `backend/internal/models/types.go` and mirrored in `frontend/src/lib/types.ts`.
+
+### Sharing a workflow
+
+A share is a **frozen, sanitised copy** of a graph, stored in `workflow_shares` and reachable at `/s/<token>`. Frozen rather than a live view of the workflow: a link serving the live row would publish every later edit retroactively to everyone already holding it, and revocation would mean nothing.
+
+`handlers.SanitizeGraphForShare` is what makes a snapshot safe, and it is an **allowlist** — it builds a fresh `WorkflowNode` and copies named fields onto it, so a field added to that struct is absent from a share until somebody deliberately adds it. A denylist is what failed before: `maskNodes` never grew a case for `CustomParams`, which is how uploaded file bytes ended up in share codes.
+
+`share_sanitize_test.go` reflects over `WorkflowNode` and **fails until every field is classified** as carried, transformed or dropped. If you add a field to that struct, that test is where you say whether it may travel.
+
+The sanitiser runs **inbound as well as outbound**. `encryptField` passes an `enc:`-prefixed value through untouched — correct for the canvas round-tripping its own ciphertext, and exactly why a stranger's pasted graph must not use the ordinary save path.
 
 ### agentToolIDs
 
@@ -316,6 +332,7 @@ Each run has a channel in the in-process SSE broker (`internal/sse`). The runner
 | `runs` | `id`, `workflow_id`, `status`, `input`, `output`, `created_at` |
 | `run_logs` | `id`, `run_id`, `node_id`, `level`, `message`, `created_at` |
 | `waitlist` | `id`, `email` (unique), `created_at` |
+| `workflow_shares` | `token` (PK), `workflow_id`, `user_id`, `name`, `graph` (JSONB, a **frozen sanitised copy** — never a pointer back to `workflows.graph`), `node_count`, `edge_count`, `import_count`, `expires_at`, `revoked_at`, `created_at` |
 
 ---
 
