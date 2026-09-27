@@ -162,10 +162,14 @@ func (d *Deps) CreateShare(w http.ResponseWriter, r *http.Request) {
 		WorkflowID: wf.ID,
 		UserID:     userID,
 		Name:       wf.Name,
-		Graph:      graph,
-		NodeCount:  len(graph.Nodes),
-		EdgeCount:  len(graph.Edges),
-		ExpiresAt:  expiresAt,
+		// Copied, not read through workflow_id, for the same frozen-snapshot
+		// reason as the graph: rewording the workflow later must not silently
+		// reword a link somebody has already passed on.
+		Description: wf.Description,
+		Graph:       graph,
+		NodeCount:   len(graph.Nodes),
+		EdgeCount:   len(graph.Edges),
+		ExpiresAt:   expiresAt,
 	})
 	if err != nil {
 		if errors.Is(err, db.ErrShareQuotaExceeded) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -121,9 +122,10 @@ func createShare(t *testing.T, d *handlers.Deps, workflowID, userID, body string
 
 func TestSharedSnapshotCarriesNothingThatBelongsToTheSharer(t *testing.T) {
 	d := testDeps(t)
-	wf := seedSharedWorkflow(t, d, "dev")
+	owner := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
 
-	share, red := createShare(t, d, wf.ID, "dev", `{}`)
+	share, red := createShare(t, d, wf.ID, owner, `{}`)
 
 	// The bluntest assertion available, and the one worth having: whatever
 	// the structure, none of these strings may appear anywhere in what a
@@ -171,8 +173,10 @@ func TestSharedSnapshotCarriesNothingThatBelongsToTheSharer(t *testing.T) {
 
 func TestImportingAShareGivesTheRecipientTheirOwnWebhookSecret(t *testing.T) {
 	d := testDeps(t)
-	wf := seedSharedWorkflow(t, d, "dev")
-	share, _ := createShare(t, d, wf.ID, "dev", `{}`)
+	owner := testUser(t, d)
+	recipient := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
+	share, _ := createShare(t, d, wf.ID, owner, `{}`)
 
 	sharerSaved, err := d.Store.GetWorkflow(context.Background(), wf.ID)
 	if err != nil {
@@ -183,7 +187,7 @@ func TestImportingAShareGivesTheRecipientTheirOwnWebhookSecret(t *testing.T) {
 		t.Fatal("the fixture should have a webhook secret to begin with")
 	}
 
-	imported := importShare(t, d, share.Token, "dev-recipient")
+	imported := importShare(t, d, share.Token, recipient)
 	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), imported.ID) })
 
 	recipientSaved, err := d.Store.GetWorkflow(context.Background(), imported.ID)
@@ -198,7 +202,7 @@ func TestImportingAShareGivesTheRecipientTheirOwnWebhookSecret(t *testing.T) {
 	if recipientSecret == sharerSecret {
 		t.Error("sharer and recipient must not end up on the same webhook secret")
 	}
-	if recipientSaved.UserID != "dev-recipient" {
+	if recipientSaved.UserID != recipient {
 		t.Errorf("the import belongs to the importer, got user %q", recipientSaved.UserID)
 	}
 	if recipientSaved.Status != models.WorkflowStatusDraft {
@@ -230,7 +234,7 @@ func TestPastedGraphCannotPlantACredential(t *testing.T) {
 		"edges": []models.WorkflowEdge{},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/workflows/import", bytes.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev"))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, testUser(t, d)))
 	w := httptest.NewRecorder()
 	d.ImportWorkflowGraph(w, req)
 	if w.Code != http.StatusCreated {
@@ -259,16 +263,18 @@ func TestPastedGraphCannotPlantACredential(t *testing.T) {
 
 func TestARevokedLinkIsIndistinguishableFromOneThatNeverExisted(t *testing.T) {
 	d := testDeps(t)
-	wf := seedSharedWorkflow(t, d, "dev")
+	owner := testUser(t, d)
+	stranger := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
 
-	live, _ := createShare(t, d, wf.ID, "dev", `{}`)
+	live, _ := createShare(t, d, wf.ID, owner, `{}`)
 	if code, _ := readShare(t, d, live.Token); code != http.StatusOK {
 		t.Fatalf("a fresh link should read 200, got %d", code)
 	}
 
-	revoked, _ := createShare(t, d, wf.ID, "dev", `{}`)
+	revoked, _ := createShare(t, d, wf.ID, owner, `{}`)
 	req := httptest.NewRequest(http.MethodDelete, "/shares/"+revoked.Token, nil)
-	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev"))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, owner))
 	req = withURLParam(req, "token", revoked.Token)
 	w := httptest.NewRecorder()
 	d.RevokeShare(w, req)
@@ -290,7 +296,7 @@ func TestARevokedLinkIsIndistinguishableFromOneThatNeverExisted(t *testing.T) {
 
 	// Revoking somebody else's link is the same 404, and does not work.
 	other := httptest.NewRequest(http.MethodDelete, "/shares/"+live.Token, nil)
-	other = other.WithContext(context.WithValue(other.Context(), handlers.CtxUserID, "dev-stranger"))
+	other = other.WithContext(context.WithValue(other.Context(), handlers.CtxUserID, stranger))
 	other = withURLParam(other, "token", live.Token)
 	ow := httptest.NewRecorder()
 	d.RevokeShare(ow, other)
@@ -304,7 +310,8 @@ func TestARevokedLinkIsIndistinguishableFromOneThatNeverExisted(t *testing.T) {
 
 func TestAnExpiredLinkReadsAsGone(t *testing.T) {
 	d := testDeps(t)
-	wf := seedSharedWorkflow(t, d, "dev")
+	owner := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
 	ctx := context.Background()
 
 	// A link the handler makes expires in whole days at the earliest, so the
@@ -315,7 +322,7 @@ func TestAnExpiredLinkReadsAsGone(t *testing.T) {
 	expired, err := d.Store.CreateWorkflowShare(ctx, models.WorkflowShare{
 		Token:      "expired-token-fixture-000001",
 		WorkflowID: wf.ID,
-		UserID:     "dev",
+		UserID:     owner,
 		Name:       wf.Name,
 		Graph:      models.WorkflowGraph{Nodes: []models.WorkflowNode{{ID: "n1", Type: models.NodeTypeTrigger}}},
 		NodeCount:  1,
@@ -336,7 +343,7 @@ func TestAnExpiredLinkReadsAsGone(t *testing.T) {
 	}
 
 	// The handler's half: a future expiry is stored, and the link still reads.
-	live, _ := createShare(t, d, wf.ID, "dev", `{"expiresInDays":7}`)
+	live, _ := createShare(t, d, wf.ID, owner, `{"expiresInDays":7}`)
 	if live.ExpiresAt == nil || !live.ExpiresAt.After(time.Now()) {
 		t.Fatalf("expiresInDays should have set a future expiry, got %v", live.ExpiresAt)
 	}
@@ -359,10 +366,11 @@ func TestAnExpiredLinkReadsAsGone(t *testing.T) {
 
 func TestOnlyTheOwnerCanShareAWorkflow(t *testing.T) {
 	d := testDeps(t)
-	wf := seedSharedWorkflow(t, d, "dev")
+	owner := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
 
 	req := httptest.NewRequest(http.MethodPost, "/workflows/"+wf.ID+"/share", strings.NewReader(`{}`))
-	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, "dev-stranger"))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, testUser(t, d)))
 	req = withURLParam(req, "id", wf.ID)
 	w := httptest.NewRecorder()
 	d.CreateShare(w, req)
@@ -373,10 +381,11 @@ func TestOnlyTheOwnerCanShareAWorkflow(t *testing.T) {
 
 func TestPublicReadHidesHowManyPeopleTookACopy(t *testing.T) {
 	d := testDeps(t)
-	wf := seedSharedWorkflow(t, d, "dev")
-	share, _ := createShare(t, d, wf.ID, "dev", `{}`)
+	owner := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
+	share, _ := createShare(t, d, wf.ID, owner, `{}`)
 
-	imported := importShare(t, d, share.Token, "dev-recipient")
+	imported := importShare(t, d, share.Token, testUser(t, d))
 	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), imported.ID) })
 
 	_, body := readShare(t, d, share.Token)
@@ -393,7 +402,7 @@ func TestPublicReadHidesHowManyPeopleTookACopy(t *testing.T) {
 
 	// The sharer's own listing is where that number belongs.
 	lreq := httptest.NewRequest(http.MethodGet, "/workflows/"+wf.ID+"/shares", nil)
-	lreq = lreq.WithContext(context.WithValue(lreq.Context(), handlers.CtxUserID, "dev"))
+	lreq = lreq.WithContext(context.WithValue(lreq.Context(), handlers.CtxUserID, owner))
 	lreq = withURLParam(lreq, "id", wf.ID)
 	lw := httptest.NewRecorder()
 	d.ListWorkflowShares(lw, lreq)
@@ -431,6 +440,28 @@ func TestPublicReadHidesHowManyPeopleTookACopy(t *testing.T) {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+// testUser creates a real row in users and returns its id.
+//
+// Not the literal "dev" that workflows_test.go uses. That works there only
+// because workflows.user_id has no foreign key -- it is a bare TEXT column
+// with DEFAULT 'dev' from migration 000001 -- whereas workflow_shares.user_id
+// REFERENCES users(id) ON DELETE CASCADE, so a share owned by an id with no
+// user behind it cannot be inserted at all. CI caught exactly that.
+//
+// Keeping the constraint and fixing the tests, rather than the other way
+// round: in production a workflow's owner always comes from the JWT's subject
+// and so is always a real users row, and the cascade is what retracts
+// somebody's published links when their account goes away.
+func testUser(t *testing.T, d *handlers.Deps) string {
+	t.Helper()
+	email := fmt.Sprintf("share-test-%d@example.invalid", time.Now().UnixNano())
+	user, err := d.Store.CreateUser(context.Background(), email, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return user.ID
+}
 
 func readShare(t *testing.T, d *handlers.Deps, token string) (int, string) {
 	t.Helper()
