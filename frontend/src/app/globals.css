@@ -806,16 +806,8 @@ body {
   }
 }
 
-/* The device check that hides these cannot answer until after hydration (see
-   hooks/useIsHandheld: the server has no device to inspect), so on a phone
-   browser the create controls paint for one frame and then disappear. The two
-   signals the hook reads, as a media query, keep them out of that frame. The
-   hook still owns the policy; this only stops the flash, and a touchscreen
-   laptop -- coarse pointer, but it hovers -- is untouched. */
-@media (pointer: coarse) and (hover: none) {
-  .wf-actions {
-    display: none;
-  }
+.wf-actions[data-readonly="true"] {
+  display: none;
 }
 .wf-controls {
   display: flex;
@@ -1831,6 +1823,23 @@ body[data-typing] .bottomnav {
 .rail-switch__seg:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* The Build/Run switch shares the rail header with the pane tabs, so it runs
+   tighter than they do -- both have to fit one row at INSPECTOR.min before
+   the header wraps. */
+.rail-switch--mode .rail-switch__seg {
+  padding: 0 7px;
+  min-height: 24px;
+}
+
+.rail-switch--mode .rail-switch__seg:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.rail-switch--mode .rail-switch__seg:disabled:hover {
+  color: var(--fg-dim);
 }
 
 @media (prefers-reduced-motion: reduce) {

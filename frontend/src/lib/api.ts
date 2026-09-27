@@ -1,6 +1,7 @@
 // TODO: Replace all stubs with real FastAPI calls when backend is ready.
 // Base URL will come from env: process.env.NEXT_PUBLIC_API_URL
 
+import type { BuildProgress } from "@/components/canvas/chat/buildProgress";
 import {
   Workflow,
   UsageRange,
@@ -398,6 +399,7 @@ export const workflows = {
   build: async (
     id: string,
     message: string,
+    buildId?: string,
   ): Promise<{ reply: string; workflow: Workflow }> => {
     assertWritable("POST", `/workflows/${id}/build`);
     if (BASE) {
@@ -405,10 +407,21 @@ export const workflows = {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        // buildId lets the chat poll buildProgress for this build's steps.
+        // timeZone is what the builder reads "every morning at 9" in.
+        body: JSON.stringify({
+          message,
+          ...(buildId ? { buildId } : {}),
+          ...(browserTimeZone() ? { timeZone: browserTimeZone() } : {}),
+        }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error ?? "build failed");
+      if (!res.ok) {
+        throw new BuildRequestError(
+          data.error ?? "build failed",
+          typeof data.error === "string",
+        );
+      }
       return data;
     }
     await delay(300);
@@ -423,6 +436,17 @@ export const workflows = {
     };
   },
 
+  // The steps a chat build has taken so far -- see chat/buildProgress.ts.
+  buildProgress: async (id: string, buildId: string): Promise<BuildProgress> => {
+    if (!BASE) return { steps: [] };
+    const res = await apiFetch(
+      `${BASE}/workflows/${id}/build/progress?buildId=${encodeURIComponent(buildId)}`,
+      { credentials: "include" },
+    );
+    if (!res.ok) throw new Error(`build progress ${res.status}`);
+    return res.json();
+  },
+
   // TODO: POST /workflows/:id/stop
   stop: async (id: string): Promise<void> => {
     if (BASE) {
@@ -433,6 +457,40 @@ export const workflows = {
       return;
     }
     await delay(100);
+  },
+
+  // The console chat transcript, stored server-side so the conversation
+  // follows the user across browsers and devices. The client owns the whole
+  // transcript and replaces it on every change.
+  chat: {
+    load: async (
+      id: string,
+      mode: "build" | "run",
+    ): Promise<{ sessionId: string; messages: unknown[] } | null> => {
+      if (!BASE) return null;
+      const res = await apiFetch(`${BASE}/workflows/${id}/chat?mode=${mode}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(`chat transcript ${res.status}`);
+      const data = await res.json().catch(() => null);
+      if (!data || !Array.isArray(data.messages)) return null;
+      return { sessionId: data.sessionId ?? "", messages: data.messages };
+    },
+    save: async (
+      id: string,
+      mode: "build" | "run",
+      session: { sessionId: string; messages: unknown[] },
+    ): Promise<void> => {
+      assertWritable("PUT", `/workflows/${id}/chat`);
+      if (!BASE) return;
+      const res = await apiFetch(`${BASE}/workflows/${id}/chat?mode=${mode}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(session),
+      });
+      if (!res.ok) throw new Error(`chat transcript save ${res.status}`);
+    },
   },
 
   // Persistent per-workflow key/value state, surviving across runs. Used
@@ -680,6 +738,33 @@ export interface RunLogRecord {
   output?: unknown;
   durationMs?: number;
   ts: string;
+}
+
+/**
+ * Which run-log statuses mean a step has finished and its result is final.
+ *
+ * Written as a Record over every status in RunLogRecord rather than as an
+ * inline `status === "success" || status === "failed"` test, so that adding a
+ * status to the union above fails to compile here instead of being silently
+ * dropped. That is not hypothetical: "degraded" was added to the union and to
+ * the live SSE path, while both readers of the stored rows kept their own
+ * two-value allowlist and discarded every degraded step -- so a run that lost
+ * a source was replayed from the database as a clean one.
+ */
+const SETTLED_LOG_STATUS: Record<RunLogRecord["status"], boolean> = {
+  pending: false,
+  running: false,
+  success: true,
+  failed: true,
+  degraded: true,
+};
+
+/**
+ * Whether a stored run-log row carries a final result. A row still marked
+ * pending or running is a step the engine had not finished writing.
+ */
+export function isSettledLogStatus(status: RunLogRecord["status"]): boolean {
+  return SETTLED_LOG_STATUS[status];
 }
 
 export interface DeadLetterRun {
@@ -1208,4 +1293,29 @@ export const usage = {
 // mock-mode delay rather than a second copy that can drift out of sync.
 export function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/** The browser's IANA timezone, or "" where the runtime cannot say. */
+export function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * A build request that did not succeed. `answered` is true when the backend
+ * itself replied with an error, which means the build is over. False means
+ * the reply never came from the backend at all (a proxy timeout, a dropped
+ * connection), and the build may well still be running.
+ */
+export class BuildRequestError extends Error {
+  constructor(
+    message: string,
+    readonly answered: boolean,
+  ) {
+    super(message);
+    this.name = "BuildRequestError";
+  }
 }

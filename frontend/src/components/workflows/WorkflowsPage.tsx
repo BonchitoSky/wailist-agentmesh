@@ -1,5 +1,12 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   Pill,
@@ -16,7 +23,7 @@ import { WorkflowListSkeleton } from "@/components/ui/Skeleton";
 import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
 import { useCredits } from "@/lib/credits/store";
-import { DEMO_WORKFLOW } from "@/lib/data";
+import { TENDRIL_WORKFLOW } from "@/lib/data";
 import { loadTemplateWorkflow } from "@/lib/templateWorkflow";
 import { can } from "@/lib/readonly";
 import { workflowHref } from "@/lib/routes";
@@ -33,23 +40,30 @@ import {
   type CadenceValue,
 } from "@/lib/cronCadence";
 
+const subscribeToHydration = () => () => {};
+
 export function WorkflowsPage() {
   const router = useRouter();
   const readOnly = useReadOnly();
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
   const [q, setQ] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [view, setView] = useState<"rows" | "grid">("rows");
   const [wfList, setWfList] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
-  const [creatingDemo, setCreatingDemo] = useState(false);
+  const [creatingTendril, setCreatingTendril] = useState(false);
   // Tagged by source so the banner always shows the most recent failure --
   // two separate error strings with a fixed `a || b` precedence would let
   // a stale error from one action permanently mask a newer one from the
   // other. A success only clears the error if it's the one that owns it,
   // so it never wipes an unrelated action's still-relevant error.
   const [pageError, setPageError] = useState<{
-    source: "list" | "demo" | "delete" | "schedule";
+    source: "list" | "tendril" | "delete" | "schedule";
     message: string;
   } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -128,28 +142,28 @@ export function WorkflowsPage() {
     }
   }, [creating, router]);
 
-  // Loads DEMO_WORKFLOW (lib/data.ts) into a brand-new workflow row every
-  // click -- a demo is just a starting point the user immediately edits, so
-  // there's no "the one shared demo" identity to preserve and a fresh copy
-  // each time is correct. loadTemplateWorkflow (lib/templateWorkflow.ts)
+  // Loads TENDRIL_WORKFLOW (lib/data.ts) into a brand-new workflow row every
+  // click -- a template is just a starting point the user immediately edits,
+  // so there's no "the one shared copy" identity to preserve and a fresh
+  // copy each time is correct. loadTemplateWorkflow (lib/templateWorkflow.ts)
   // owns the create()-then-update()-then-rollback-on-failure sequence,
   // shared with each partner ConsoleCard's "try a workflow" icon.
-  const handleLoadDemoWorkflow = useCallback(async () => {
-    if (creatingDemo) return;
-    setCreatingDemo(true);
-    setPageError((prev) => (prev?.source === "demo" ? null : prev));
+  const handleLoadTendrilWorkflow = useCallback(async () => {
+    if (creatingTendril) return;
+    setCreatingTendril(true);
+    setPageError((prev) => (prev?.source === "tendril" ? null : prev));
     try {
-      const id = await loadTemplateWorkflow(DEMO_WORKFLOW);
+      const id = await loadTemplateWorkflow(TENDRIL_WORKFLOW);
       router.push(workflowHref(id));
     } catch (e) {
       setPageError({
-        source: "demo",
+        source: "tendril",
         message:
           e instanceof Error ? e.message : "could not load demo workflow",
       });
-      setCreatingDemo(false);
+      setCreatingTendril(false);
     }
-  }, [creatingDemo, router]);
+  }, [creatingTendril, router]);
 
   // Deletion is permanent, so the row only calls this after its own in-menu
   // confirm step. The backend refuses (409) for workflows with Tendril lease
@@ -291,7 +305,12 @@ export function WorkflowsPage() {
                 Design, deploy, and monitor agent pipelines.
               </p>
             </div>
-            <div className="wf-actions">
+            <div
+              className="wf-actions"
+              data-readonly={readOnly}
+              // The server cannot classify the device; reserve space until it can.
+              style={{ visibility: hydrated ? undefined : "hidden" }}
+            >
               {can("workflow.create", readOnly) && (
                 <button style={ghostBtn} onClick={() => setImportOpen(true)}>
                   Import
@@ -299,19 +318,19 @@ export function WorkflowsPage() {
               )}
               {can("workflow.create", readOnly) && (
                 <button
-                  onClick={handleLoadDemoWorkflow}
-                  disabled={creatingDemo}
+                  onClick={handleLoadTendrilWorkflow}
+                  disabled={creatingTendril}
                   style={{
                     ...ghostBtn,
-                    opacity: creatingDemo ? 0.6 : 1,
+                    opacity: creatingTendril ? 0.6 : 1,
                     position: "relative",
                   }}
-                  title="Two Gemini 2.5 Flash agents + an HTTP tool + a Telegram step (no-ops until you add your own bot token/chat ID) + up to 3 real CANIX402 x402 calls (Algorand mainnet) -- only 1 of those 3 is guaranteed, the other 2 fire only if the agent's LLM chooses to call them (and can fire more than once). $2.07 guaranteed floor, ~$5.09 typical, no fixed ceiling."
+                  title="Rents a real Tendril machine for up to 15 minutes, probes its hardware, runs a multi-core benchmark on it, has a Gemini analyst write up the results, then releases the machine and refunds unused time. Tops up Tendril credit only when yours is short of the rent (at least $2 plus a $1.50 fee). If any step fails the machine is still released. $7.54 per run (rent gate $1.51, two jobs at $3.00 each, analyst $0.03) plus a few cents of metered machine time."
                 >
-                  {creatingDemo ? "Loading…" : "Load demo workflow"}
+                  {creatingTendril ? "Loading…" : "Run demo workflow"}
                   <span style={{ marginLeft: 6 }}>
                     <Pill tone="accent" mono>
-                      $2.07+/run
+                      $7.54+/run
                     </Pill>
                   </span>
                 </button>

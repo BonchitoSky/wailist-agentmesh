@@ -1,5 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef } from "react";
+import { IS_NATIVE } from "@/lib/nativeAuth";
+import { useIsHandheld } from "./useIsHandheld";
 
 // Lets the system Back gesture close an open sheet instead of leaving the page
 // underneath it.
@@ -20,6 +22,8 @@ const KEY = "__amSheet";
 // top bar menu, CheckoutModal): the entry is added when it opens and taken off
 // when it closes. A sheet its parent renders only while open can leave it out.
 export function useCloseOnBack(onClose: () => void, active = true): () => void {
+  const handheld = useIsHandheld();
+  const enabled = IS_NATIVE || handheld;
   const onCloseRef = useRef(onClose);
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -34,7 +38,8 @@ export function useCloseOnBack(onClose: () => void, active = true): () => void {
   const popScheduled = useRef(false);
 
   useEffect(() => {
-    if (!active) return;
+    // Desktop history must retain its Forward entries when a dialog opens.
+    if (!active || !enabled) return;
     popScheduled.current = false;
     const state = window.history.state as Record<string, unknown> | null;
     // Skipped when the entry is already there, which is the case when an
@@ -73,7 +78,7 @@ export function useCloseOnBack(onClose: () => void, active = true): () => void {
         window.history.back();
       }, 0);
     };
-  }, [active]);
+  }, [active, enabled]);
 
   return useCallback(() => {
     if (pushed.current) {
