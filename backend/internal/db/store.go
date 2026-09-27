@@ -519,7 +519,15 @@ func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Work
 		// `debit_ledger`. A problem aggregating them must not turn "show me
 		// my workflows" into a 500 -- log it and return the list with those
 		// fields left at their zero values.
+		//
+		// Those zero values are not facts, though, and they are not
+		// distinguishable from real ones on the wire, so each row says so.
+		// Otherwise a client renders an aggregation outage as "0 runs, $0
+		// spent", which is a number the reader has no reason to doubt.
 		log.Printf("db: list workflows for user %s: stats aggregation failed: %v", userID, err)
+		for i := range wfs {
+			wfs[i].StatsUnavailable = true
+		}
 	}
 	return wfs, nil
 }
@@ -545,8 +553,9 @@ func (s *Store) attachWorkflowStats(ctx context.Context, userID string, wfs []mo
 	since := time.Now().Add(-workflowStatsWindow)
 
 	runCounts := map[string]int{}
+	lastRuns := map[string]time.Time{}
 	rows, err := s.pool.Query(ctx, `
-		SELECT r.workflow_id, COUNT(*)
+		SELECT r.workflow_id, COUNT(*), MAX(r.started_at)
 		FROM runs r
 		JOIN workflows w ON w.id = r.workflow_id
 		WHERE w.user_id = $1 AND r.started_at >= $2
@@ -558,11 +567,13 @@ func (s *Store) attachWorkflowStats(ctx context.Context, userID string, wfs []mo
 	for rows.Next() {
 		var id string
 		var n int
-		if err := rows.Scan(&id, &n); err != nil {
+		var last time.Time
+		if err := rows.Scan(&id, &n, &last); err != nil {
 			rows.Close()
 			return err
 		}
 		runCounts[id] = n
+		lastRuns[id] = last
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -595,6 +606,9 @@ func (s *Store) attachWorkflowStats(ctx context.Context, userID string, wfs []mo
 
 	for i := range wfs {
 		wfs[i].Runs = runCounts[wfs[i].ID]
+		if last, ok := lastRuns[wfs[i].ID]; ok {
+			wfs[i].LastRunAt = &last
+		}
 		// Spend is a display string in USD. Left empty when nothing settled
 		// so the UI renders its "no data" dash rather than a misleading
 		// "$0.00" on a workflow that has simply never run.
