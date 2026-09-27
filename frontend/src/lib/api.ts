@@ -12,6 +12,7 @@ import {
   Settlement,
   CostEstimate,
   RunPage,
+  UpcomingRun,
   WorkflowNode,
   WorkflowEdge,
   WorkflowShare,
@@ -22,6 +23,7 @@ import { WORKFLOWS, SAMPLE_WORKFLOW, buildUsage } from "./data";
 import {
   fixtureRunDetail,
   fixtureRunPage,
+  fixtureUpcoming,
   recordStartedRun,
 } from "./runFixtures";
 import { fixtureWorkflow } from "./workflowFixtures";
@@ -969,6 +971,10 @@ export interface RunDetail {
   status: string;
   startedAt: string;
   finishedAt?: string;
+  // Everything debit_ledger has charged for this run so far; grows while the
+  // run is still "running". Optional because a server older than this field
+  // omits it, and RunSheet then falls back to the list row's figure.
+  spendUsdMicros?: number;
 }
 
 // Thrown when the backend has no run history routes yet. An older server
@@ -1013,6 +1019,48 @@ async function readRunPage(res: Response, fallback: string): Promise<RunPage> {
   if (res.status === 404 && error === null) throw new RunsUnavailableError();
   throw new Error(error ?? fallback);
 }
+
+// Thrown when the backend has no upcoming-runs route yet, told apart from a
+// real failure the same way RunsUnavailableError is: an older server answers
+// with chi's plain-text 404. Screens that show upcoming runs hide the section
+// rather than show an error.
+export class UpcomingUnavailableError extends Error {
+  constructor() {
+    super("Upcoming runs aren't available on this server yet.");
+    this.name = "UpcomingUnavailableError";
+  }
+}
+
+export const schedules = {
+  // What the scheduler will run next, soonest first: up to `per` occurrences
+  // of each schedule, `limit` in all (GET /schedules/upcoming). `workflowId`
+  // asks for that one workflow's schedule alone.
+  upcoming: async (
+    options: { limit?: number; per?: number; workflowId?: string } = {},
+  ): Promise<UpcomingRun[]> => {
+    if (BASE) {
+      const q = new URLSearchParams();
+      if (options.limit) q.set("limit", String(options.limit));
+      if (options.per) q.set("per", String(options.per));
+      if (options.workflowId) q.set("workflowId", options.workflowId);
+      const query = q.toString() ? `?${q}` : "";
+      const res = await apiFetch(`${BASE}/schedules/upcoming${query}`, {
+        credentials: "include",
+      });
+      const data = (await res.json().catch(() => null)) as {
+        upcoming?: UpcomingRun[];
+        error?: string;
+      } | null;
+      if (res.ok) return data?.upcoming ?? [];
+      if (res.status === 404 && typeof data?.error !== "string") {
+        throw new UpcomingUnavailableError();
+      }
+      throw new Error(data?.error ?? "failed to load upcoming runs");
+    }
+    await delay(150);
+    return fixtureUpcoming(options);
+  },
+};
 
 export const runs = {
   // The DB-backed source of truth for a run's logs — used as a reconciliation
@@ -1063,6 +1111,8 @@ export const runs = {
         status: "success",
         startedAt: iso(8200),
         finishedAt: iso(0),
+        // Matches the $0.065/call x402 weather step below.
+        spendUsdMicros: 65_000,
       },
       deadLetters: [],
       logs: [
@@ -1358,7 +1408,18 @@ export const payments = {
     usd_per_inr: number;
     providers: { id: PaymentMethod; enabled: boolean; currency: string }[];
   }> => {
-    if (!BASE) throw new Error("payments require a configured backend");
+    // Mock mode has no server to ask, and a screen that quotes nothing
+    // cannot demonstrate the top-up flow. A plausible fixture rate keeps
+    // the mock build usable; nothing is ever charged against it.
+    if (!BASE) {
+      return {
+        usd_per_inr: 0.010423,
+        providers: [
+          { id: "cashfree", enabled: true, currency: "INR" },
+          { id: "nowpayments", enabled: true, currency: "USD" },
+        ],
+      };
+    }
     const res = await apiFetch(`${BASE}/payments/providers`, {
       credentials: "include",
     });

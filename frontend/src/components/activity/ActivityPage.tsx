@@ -6,9 +6,13 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ghostBtn } from "@/components/ui/buttons";
 import { RunSheet } from "@/components/runs/RunSheet";
 import { RunStatusPill } from "@/components/runs/RunStatusPill";
+import { UpcomingRuns } from "@/components/runs/UpcomingRuns";
+import { useNow } from "@/hooks/useNow";
+import { usePolling } from "@/hooks/usePolling";
 import { runs as runsApi, RunsUnavailableError } from "@/lib/api";
 import type { RunPage, RunSummary } from "@/lib/types";
 import { groupRunsByDay } from "@/lib/runDays";
+import { mergeRuns, withDetail } from "@/lib/runMerge";
 import {
   formatDuration,
   formatRunTime,
@@ -21,7 +25,10 @@ import {
 // the workflow list.
 
 const PAGE_SIZE = 20;
-const OPEN_RUN_POLL_MS = 2_000;
+// How often the list refreshes while a listed run is still going, and while
+// nothing listed is, matching WorkflowSummary's own values.
+const POLL_MS = 3_000;
+const IDLE_POLL_MS = 10_000;
 
 export function ActivityPage() {
   const [runList, setRunList] = useState<RunSummary[]>([]);
@@ -49,63 +56,123 @@ export function ActivityPage() {
     setLoaded(true);
   }, []);
 
-  // Bumped by every load that starts the list over. A response from an
-  // earlier generation -- a slow first load, or an older page still in flight
-  // when a pull refreshed the list -- is dropped instead of overwriting the
-  // newer list and its cursor.
+  // A pull starts paging over, so pages from the previous list are discarded.
   const generation = useRef(0);
 
+  // First-page requests can overlap across initial load, pull-to-refresh and
+  // polling. Only a successful response advances the applied watermark, so a
+  // later silent failure does not suppress an older valid response.
+  const firstPageSeq = useRef(0);
+  const appliedFirstPageSeq = useRef(0);
+  const landFirstPage = useCallback(
+    (seq: number, page: RunPage) => {
+      if (seq <= appliedFirstPageSeq.current) return false;
+      appliedFirstPageSeq.current = seq;
+      applyFirstPage(page);
+      return true;
+    },
+    [applyFirstPage],
+  );
+  const landFirstPageError = useCallback(
+    (seq: number, e: unknown) => {
+      if (seq <= appliedFirstPageSeq.current) return;
+      applyError(e);
+    },
+    [applyError],
+  );
+
   const refresh = useCallback(() => {
-    const gen = ++generation.current;
+    generation.current += 1;
+    const seq = ++firstPageSeq.current;
     return runsApi.recent({ limit: PAGE_SIZE }).then(
       (page) => {
-        if (gen === generation.current) applyFirstPage(page);
+        landFirstPage(seq, page);
       },
       (e: unknown) => {
-        if (gen === generation.current) applyError(e);
+        landFirstPageError(seq, e);
       },
     );
-  }, [applyFirstPage, applyError]);
-
-  // An open sheet covers pull-to-refresh, but its running total still comes
-  // from the list row. Refresh the first page while that row is running and
-  // retain any older pages the user already loaded.
-  const pollOpenRun = useCallback(() => {
-    const gen = ++generation.current;
-    return runsApi.recent({ limit: PAGE_SIZE }).then(
-      (page) => {
-        if (gen !== generation.current) return;
-        setRunList((prev) => [
-          ...page.runs,
-          ...prev.filter((old) => !page.runs.some((run) => run.id === old.id)),
-        ]);
-        setUnavailable(false);
-        setError(null);
-      },
-      () => {
-        // Keep the last row visible. The next tick retries without putting a
-        // background-only error behind the open sheet.
-      },
-    );
-  }, []);
+  }, [landFirstPage, landFirstPageError]);
 
   // The first load. State is only set once the response lands, and not at all
   // if the screen has gone by then.
   useEffect(() => {
     let cancelled = false;
-    const gen = ++generation.current;
+    const seq = ++firstPageSeq.current;
     runsApi.recent({ limit: PAGE_SIZE }).then(
       (page) => {
-        if (!cancelled && gen === generation.current) applyFirstPage(page);
+        if (!cancelled) landFirstPage(seq, page);
       },
       (e: unknown) => {
-        if (!cancelled && gen === generation.current) applyError(e);
+        if (!cancelled) landFirstPageError(seq, e);
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [applyFirstPage, applyError]);
+  }, [landFirstPage, landFirstPageError]);
+
+  const anyRunning = runList.some((r) => r.status === "running");
+
+  // The newest list, for the poll below to read without restarting its timer.
+  const runListRef = useRef(runList);
+  useEffect(() => {
+    runListRef.current = runList;
+  });
+
+  // Keep refreshing while the screen is visible, and at once on coming back
+  // to it. Runs start in places this screen never hears about (the website,
+  // a schedule, a geofence), so an idle list is polled too, only more slowly
+  // than one with a run still going.
+  //
+  // Merged rather than replaced (mergeRuns, not applyFirstPage): a pull is a
+  // deliberate "start over from the top" gesture, but a silent background
+  // poll must not drop pages the user has already loaded with
+  // "Show older runs".
+  //
+  // usePolling runs one poll at a time, so a slow request cannot land after
+  // a newer one and put a finished run back to running. A poll that a pull
+  // started over is dropped for the same reason.
+  //
+  // Before the first load has landed -- or on a server that gained run
+  // history while the screen was open -- there is nothing listed to merge
+  // into, so the poll's page is taken as the first load, and the slower first
+  // request is then dropped rather than replacing newer figures.
+  const poll = useCallback(async () => {
+    const seq = ++firstPageSeq.current;
+    try {
+      const page = await runsApi.recent({ limit: PAGE_SIZE });
+      // A running row that twenty newer runs have pushed off page one would
+      // otherwise keep its old status and spend for good.
+      const onPage = new Set(page.runs.map((r) => r.id));
+      const stranded = runListRef.current.filter(
+        (r) => r.status === "running" && !onPage.has(r.id),
+      );
+      const updated = await Promise.all(
+        stranded.map((r) =>
+          runsApi.get(r.id).then(
+            (d) => withDetail(r, d.run),
+            () => r,
+          ),
+        ),
+      );
+      if (seq <= appliedFirstPageSeq.current) return;
+      appliedFirstPageSeq.current = seq;
+      if (unavailable || !loaded) {
+        applyFirstPage(page);
+      } else {
+        setRunList((prev) => mergeRuns([...page.runs, ...updated], prev));
+        // An accepted answer means the list is current again, so an error
+        // left by an earlier failure no longer describes anything.
+        setError(null);
+      }
+    } catch {
+      // The next tick tries again.
+    }
+  }, [unavailable, loaded, applyFirstPage]);
+  usePolling(poll, anyRunning ? POLL_MS : IDLE_POLL_MS);
+
+  const now = useNow(anyRunning);
 
   const loadMore = async () => {
     if (!nextCursor || loadingMore) return;
@@ -138,21 +205,6 @@ export function ActivityPage() {
     ? (runList.find((r) => r.id === selected.id) ?? selected)
     : null;
 
-  useEffect(() => {
-    if (selectedRun?.status !== "running") return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      await pollOpenRun();
-      if (!cancelled) timer = setTimeout(poll, OPEN_RUN_POLL_MS);
-    };
-    timer = setTimeout(poll, OPEN_RUN_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [selectedRun?.status, pollOpenRun]);
-
   return (
     <div
       className="am-viewport"
@@ -174,6 +226,12 @@ export function ActivityPage() {
           <p style={{ ...copy, marginTop: 4 }}>
             What your workflows ran, and what each run spent.
           </p>
+
+          {/* What will run next, above what already ran. Hidden when nothing
+              is scheduled, so an unscheduled account sees only its history. */}
+          <div style={{ marginTop: 20 }}>
+            <UpcomingRuns limit={5} hideWhenEmpty />
+          </div>
 
           <div style={{ marginTop: 20 }}>
             {unavailable ? (
@@ -234,7 +292,7 @@ export function ActivityPage() {
                               <span style={rowMeta}>
                                 {triggerLabel(r.triggeredBy)} ·{" "}
                                 {formatRunTime(r.startedAt)} ·{" "}
-                                {formatDuration(r.startedAt, r.finishedAt)}
+                                {formatDuration(r.startedAt, r.finishedAt, now)}
                               </span>
                             </span>
                           </button>

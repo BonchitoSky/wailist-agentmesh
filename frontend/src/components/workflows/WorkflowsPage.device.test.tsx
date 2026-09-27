@@ -74,9 +74,14 @@ describe("workflow actions follow the device policy", () => {
     const style = applyActionStyles();
     try {
       const view = render(<WorkflowsPage />);
-      await screen.findByText("no workflows yet, create one to get started");
-      const actions = view.container.querySelector(".wf-actions")!;
-      expect(getComputedStyle(actions).display).toBe(allowed ? "flex" : "none");
+      await screen.findByText(/^no workflows yet/i);
+      const actions = view.container.querySelector(".wf-actions");
+      if (allowed) {
+        expect(actions).not.toBeNull();
+        expect(getComputedStyle(actions!).display).toBe("flex");
+      } else {
+        expect(actions).toBeNull();
+      }
       for (const name of [/^Import$/, /^Run demo workflow/, /New workflow/]) {
         expect(screen.queryByRole("button", { name }) !== null).toBe(allowed);
       }
