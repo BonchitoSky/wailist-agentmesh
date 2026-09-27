@@ -6,9 +6,11 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { ghostBtn } from "@/components/ui/buttons";
 import { RunSheet } from "@/components/runs/RunSheet";
 import { RunStatusPill } from "@/components/runs/RunStatusPill";
+import { useNow } from "@/hooks/useNow";
 import { runs as runsApi, RunsUnavailableError } from "@/lib/api";
 import type { RunPage, RunSummary } from "@/lib/types";
 import { groupRunsByDay } from "@/lib/runDays";
+import { mergeRuns, withDetail } from "@/lib/runMerge";
 import {
   formatDuration,
   formatRunTime,
@@ -21,7 +23,9 @@ import {
 // the workflow list.
 
 const PAGE_SIZE = 20;
-const OPEN_RUN_POLL_MS = 2_000;
+// How often the list refreshes while a listed run is still going, matching
+// WorkflowSummary's own POLL_MS.
+const POLL_MS = 3_000;
 
 export function ActivityPage() {
   const [runList, setRunList] = useState<RunSummary[]>([]);
@@ -67,28 +71,6 @@ export function ActivityPage() {
     );
   }, [applyFirstPage, applyError]);
 
-  // An open sheet covers pull-to-refresh, but its running total still comes
-  // from the list row. Refresh the first page while that row is running and
-  // retain any older pages the user already loaded.
-  const pollOpenRun = useCallback(() => {
-    const gen = ++generation.current;
-    return runsApi.recent({ limit: PAGE_SIZE }).then(
-      (page) => {
-        if (gen !== generation.current) return;
-        setRunList((prev) => [
-          ...page.runs,
-          ...prev.filter((old) => !page.runs.some((run) => run.id === old.id)),
-        ]);
-        setUnavailable(false);
-        setError(null);
-      },
-      () => {
-        // Keep the last row visible. The next tick retries without putting a
-        // background-only error behind the open sheet.
-      },
-    );
-  }, []);
-
   // The first load. State is only set once the response lands, and not at all
   // if the screen has gone by then.
   useEffect(() => {
@@ -106,6 +88,63 @@ export function ActivityPage() {
       cancelled = true;
     };
   }, [applyFirstPage, applyError]);
+
+  const anyRunning = runList.some((r) => r.status === "running");
+
+  // The newest list, for the poll below to read without restarting its timer.
+  const runListRef = useRef(runList);
+  useEffect(() => {
+    runListRef.current = runList;
+  });
+
+  // Refresh while something is running and the screen is actually visible,
+  // the same rule WorkflowSummary uses. Without this a running run in the
+  // list stayed frozen until a manual pull-to-refresh.
+  //
+  // Merged rather than replaced (mergeRuns, not applyFirstPage): a pull is a
+  // deliberate "start over from the top" gesture, but a silent background
+  // poll must not drop pages the user has already loaded with
+  // "Show older runs".
+  //
+  // One poll at a time. A slow request overtaken by a newer one could land
+  // last and put a finished run back to running. A poll that a pull started
+  // over is dropped for the same reason.
+  useEffect(() => {
+    if (!anyRunning) return;
+    let polling = false;
+    const poll = async () => {
+      if (polling || document.visibilityState !== "visible") return;
+      polling = true;
+      const gen = generation.current;
+      try {
+        const page = await runsApi.recent({ limit: PAGE_SIZE });
+        // A running row that twenty newer runs have pushed off page one
+        // would otherwise keep its old status and spend for good.
+        const onPage = new Set(page.runs.map((r) => r.id));
+        const stranded = runListRef.current.filter(
+          (r) => r.status === "running" && !onPage.has(r.id),
+        );
+        const updated = await Promise.all(
+          stranded.map((r) =>
+            runsApi.get(r.id).then(
+              (d) => withDetail(r, d.run),
+              () => r,
+            ),
+          ),
+        );
+        if (gen !== generation.current) return;
+        setRunList((prev) => mergeRuns([...page.runs, ...updated], prev));
+      } catch {
+        // The next tick tries again.
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = setInterval(() => void poll(), POLL_MS);
+    return () => clearInterval(timer);
+  }, [anyRunning]);
+
+  const now = useNow(anyRunning);
 
   const loadMore = async () => {
     if (!nextCursor || loadingMore) return;
@@ -137,21 +176,6 @@ export function ActivityPage() {
   const selectedRun = selected
     ? (runList.find((r) => r.id === selected.id) ?? selected)
     : null;
-
-  useEffect(() => {
-    if (selectedRun?.status !== "running") return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      await pollOpenRun();
-      if (!cancelled) timer = setTimeout(poll, OPEN_RUN_POLL_MS);
-    };
-    timer = setTimeout(poll, OPEN_RUN_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [selectedRun?.status, pollOpenRun]);
 
   return (
     <div
@@ -234,7 +258,7 @@ export function ActivityPage() {
                               <span style={rowMeta}>
                                 {triggerLabel(r.triggeredBy)} ·{" "}
                                 {formatRunTime(r.startedAt)} ·{" "}
-                                {formatDuration(r.startedAt, r.finishedAt)}
+                                {formatDuration(r.startedAt, r.finishedAt, now)}
                               </span>
                             </span>
                           </button>
