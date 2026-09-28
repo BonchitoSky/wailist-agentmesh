@@ -453,6 +453,11 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     }
     setDeploying(true);
     try {
+      // Deploy reads the graph from the DB to build its agents, so it is one
+      // more caller that must let the autosave land first -- otherwise
+      // deploying within the debounce deploys the version before the last
+      // edit. Same reason the build path and Share await this.
+      await flushPendingSave();
       const res = await workflowsApi.deploy(workflow.id);
       setDeployed(true);
       setEstimateTick((t) => t + 1);
@@ -467,7 +472,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     } finally {
       setDeploying(false);
     }
-  }, [deployed, workflow, showToast]);
+  }, [deployed, workflow, showToast, flushPendingSave]);
 
   const hasChatTrigger = useMemo(
     () =>
@@ -493,7 +498,8 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
     [workflow],
   );
   const missingModel = useMemo(
-    () => (workflow ? agentMissingModel(workflow.nodes, workflow.edges) : false),
+    () =>
+      workflow ? agentMissingModel(workflow.nodes, workflow.edges) : false,
     [workflow],
   );
   const flowLoop = useMemo(
@@ -835,6 +841,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         running={running}
         onDeploy={onDeploy}
         onRun={onRun}
+        onBeforeShare={flushPendingSave}
         runBlocked={runBlocked}
         saveLabel={saveLabel}
         estimateTick={estimateTick}
@@ -999,7 +1006,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                             reason={blockedReason}
                             deploying={deploying}
                             onDeploy={onDeploy}
-                            onDismiss={() => setDismissedBlock(blockedReason.code)}
+                            onDismiss={() =>
+                              setDismissedBlock(blockedReason.code)
+                            }
                           />
                         ) : undefined
                       }
@@ -1070,7 +1079,9 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                           reason={blockedReason}
                           deploying={deploying}
                           onDeploy={onDeploy}
-                          onDismiss={() => setDismissedBlock(blockedReason.code)}
+                          onDismiss={() =>
+                            setDismissedBlock(blockedReason.code)
+                          }
                         />
                       ) : undefined
                     }
@@ -1198,6 +1209,7 @@ function CanvasTopbar({
   running,
   onDeploy,
   onRun,
+  onBeforeShare,
   runBlocked,
   saveLabel,
   estimateTick,
@@ -1209,6 +1221,11 @@ function CanvasTopbar({
   running: boolean;
   onDeploy: () => void;
   onRun: () => void;
+  /** Settles the autosave before the Share dialog opens. The dialog mints the
+   *  link from the workflow AS STORED, so anything still sitting in the
+   *  debounce would be missing from it -- which is exactly how a shared
+   *  workflow once arrived a connection short of the one on screen. */
+  onBeforeShare: () => Promise<void>;
   /** Why the Run button is disabled, or null when a run can proceed --
    *  computed once in CanvasPage (runBlockedMessage) so this component
    *  doesn't need its own copy of graphReady/canDeploy to derive it. */
@@ -1227,6 +1244,9 @@ function CanvasTopbar({
   const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
   const lowBalance = balanceKnown && balanceUSD < LOW_BALANCE_THRESHOLD_USD;
   const [shareOpen, setShareOpen] = useState(false);
+  // Held across the pre-share flush so a second press cannot open the dialog
+  // against a half-settled save.
+  const [preparingShare, setPreparingShare] = useState(false);
   const [estimate, setEstimate] = useState<CostEstimate | null>(null);
 
   useEffect(() => {
@@ -1385,9 +1405,21 @@ function CanvasTopbar({
         <>
           <button
             style={{ ...ghostBtnSm, color: "var(--fg)" }}
-            onClick={() => setShareOpen(true)}
+            disabled={preparingShare}
+            onClick={async () => {
+              // Await the save BEFORE the dialog mounts, not inside it: the
+              // link is minted from the mount effect, so a flush started
+              // alongside it would race the thing it is meant to prevent.
+              setPreparingShare(true);
+              try {
+                await onBeforeShare();
+              } finally {
+                setPreparingShare(false);
+              }
+              setShareOpen(true);
+            }}
           >
-            Share
+            {preparingShare ? "Saving…" : "Share"}
           </button>
           <button onClick={onDeploy} style={btnStyle}>
             {deployed ? "Re-deploy" : "Deploy"}
