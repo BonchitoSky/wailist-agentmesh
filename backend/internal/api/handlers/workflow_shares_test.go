@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -354,7 +355,7 @@ func TestAnExpiredLinkReadsAsGone(t *testing.T) {
 	// is that the read honours Live(), not the arithmetic that produced the
 	// timestamp -- and the handler's own end of that is covered below.
 	past := time.Now().UTC().Add(-time.Hour)
-	expired, err := d.Store.CreateWorkflowShare(ctx, models.WorkflowShare{
+	expired, _, err := d.Store.CreateWorkflowShare(ctx, models.WorkflowShare{
 		Token:      "expired-token-fixture-000001",
 		WorkflowID: wf.ID,
 		UserID:     owner,
@@ -362,7 +363,7 @@ func TestAnExpiredLinkReadsAsGone(t *testing.T) {
 		Graph:      models.WorkflowGraph{Nodes: []models.WorkflowNode{{ID: "n1", Type: models.NodeTypeTrigger}}},
 		NodeCount:  1,
 		ExpiresAt:  &past,
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,6 +456,62 @@ func TestAReusedLinkIsHandedBackOnlyWhileTheSnapshotMatches(t *testing.T) {
 	// already holding it was promised a frozen copy, not a moving one.
 	if statusCode, _ := readShare(t, d, first.Token); statusCode != http.StatusOK {
 		t.Error("creating a newer link must not disturb one already handed out")
+	}
+}
+
+// Requests arriving together still leave one link.
+//
+// Not hypothetical. React's development double-invoke fires the dialog's
+// effect twice, milliseconds apart, and an earlier version answered reuse
+// from a query the HANDLER ran before calling the store -- so between finding
+// nothing and inserting there sat a token mint and a whole transaction's
+// worth of round trips. Both calls looked, both found nothing, and a workflow
+// came away with two links to the same graph the first time it was ever
+// shared.
+//
+// What this test pins is that behaviour: a lookup that far outside the insert
+// it guards loses this race readily. The lookup now runs inside the insert's
+// own transaction, which shrinks the window to a fraction of a millisecond,
+// and an advisory lock on the workflow closes what is left. Be honest about
+// the limit: with the lookup already inside the transaction, this test passes
+// with the lock removed too -- the remaining window is too narrow to hit on
+// demand. The lock is reasoned correctness, not something measured here.
+func TestSharingTwiceAtOnceStillLeavesOneLink(t *testing.T) {
+	d := testDeps(t)
+	owner := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
+
+	const attempts = 8
+	tokens := make(chan string, attempts)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, share, _ := postShare(t, d, wf.ID, owner, `{"reuseIfUnchanged":true}`)
+			tokens <- share.Token
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(tokens)
+
+	distinct := map[string]bool{}
+	for tok := range tokens {
+		distinct[tok] = true
+	}
+	if len(distinct) != 1 {
+		t.Fatalf("%d concurrent shares produced %d different links, want 1", attempts, len(distinct))
+	}
+
+	shares, err := d.Store.ListWorkflowShares(context.Background(), wf.ID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shares) != 1 {
+		t.Errorf("the workflow ended up with %d rows, want 1", len(shares))
 	}
 }
 

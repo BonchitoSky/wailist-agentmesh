@@ -154,37 +154,11 @@ func (d *Deps) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reuse before minting. The snapshot is compared AFTER sanitising, so the
-	// question asked is the honest one -- "would a new link hold anything
-	// different from one you already have?" -- rather than "has the workflow
-	// row been touched", which moves for edits this snapshot never carries.
-	//
-	// Note that redactions below are computed from THIS sanitise either way,
-	// so a reused link still tells the sharer what is being left out. An
-	// earlier version answered reuse from the client, which had no redaction
-	// counts to hand and so silently dropped that sentence exactly when
-	// somebody was about to pass the link on.
-	if body.ReuseIfUnchanged {
-		existing, err := d.Store.FindLiveWorkflowShareBySnapshot(
-			ctx, wf.ID, userID, wf.Name, wf.Description, graph, expiresAt != nil,
-		)
-		switch {
-		case err == nil:
-			// 200, not 201: nothing was created.
-			respond.JSON(w, http.StatusOK, map[string]any{
-				"share":      existing,
-				"redactions": redactions,
-			})
-			return
-		case errors.Is(err, db.ErrShareNotFound):
-			// Nothing to reuse -- fall through and mint one.
-		default:
-			log.Printf("share workflow %s: find reusable: %v", id, err)
-			respond.Error(w, http.StatusInternalServerError, "could not create a share link")
-			return
-		}
-	}
-
+	// A token is minted whether or not it ends up being used: the store
+	// decides that, under a lock, and throws this away when it hands back a
+	// link the workflow already has. Wasting 16 bytes of entropy is cheaper
+	// than doing the lookup out here, where it could not be in the same
+	// transaction as the insert it guards.
 	token, err := randURLSafe(16)
 	if err != nil {
 		log.Printf("share workflow %s: token: %v", id, err)
@@ -192,7 +166,7 @@ func (d *Deps) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	share, err := d.Store.CreateWorkflowShare(ctx, models.WorkflowShare{
+	share, reused, err := d.Store.CreateWorkflowShare(ctx, models.WorkflowShare{
 		Token:      token,
 		WorkflowID: wf.ID,
 		UserID:     userID,
@@ -205,7 +179,7 @@ func (d *Deps) CreateShare(w http.ResponseWriter, r *http.Request) {
 		NodeCount:   len(graph.Nodes),
 		EdgeCount:   len(graph.Edges),
 		ExpiresAt:   expiresAt,
-	})
+	}, body.ReuseIfUnchanged)
 	if err != nil {
 		if errors.Is(err, db.ErrShareQuotaExceeded) {
 			respond.Error(w, http.StatusConflict, "You have too many share links. Revoke one before creating another.")
@@ -216,7 +190,16 @@ func (d *Deps) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respond.JSON(w, http.StatusCreated, map[string]any{
+	// 200 when an existing link came back, 201 when one was made. The
+	// redaction counts come from THIS sanitise either way, so a reused link
+	// still tells the sharer what is being left out -- the dialog used to
+	// decide reuse for itself, had no counts to show on that path, and went
+	// quiet at exactly the moment somebody was about to hand the link over.
+	status := http.StatusCreated
+	if reused {
+		status = http.StatusOK
+	}
+	respond.JSON(w, status, map[string]any{
 		"share": share,
 		// What was taken off the sharer's copy, so the dialog can say so
 		// before they hand the link over.

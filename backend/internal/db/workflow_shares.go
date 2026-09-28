@@ -70,18 +70,79 @@ func scanWorkflowShareRow(row rowScanner) (models.WorkflowShare, error) {
 // shares only -- revoked and expired rows are kept for the sharer's own
 // listing (see migration 000041) and must not consume the allowance, or
 // revoking a link would not free one up.
-func (s *Store) CreateWorkflowShare(ctx context.Context, share models.WorkflowShare) (models.WorkflowShare, error) {
+// reuseIfUnchanged asks for an existing live link back instead of a new one
+// when the snapshot is identical; the returned bool says whether that is what
+// happened, so the handler can answer 200 rather than 201.
+//
+// The lookup happens INSIDE this transaction, behind an advisory lock on the
+// workflow, rather than in a separate query the handler runs first. Opening
+// the Share dialog fires one request, but React's development double-invoke
+// fires two milliseconds apart -- and both found nothing, so both inserted,
+// leaving a workflow with two links to the same graph the first time it was
+// ever shared. A check that is not in the same transaction as the insert it
+// guards is not a check.
+func (s *Store) CreateWorkflowShare(ctx context.Context, share models.WorkflowShare, reuseIfUnchanged bool) (models.WorkflowShare, bool, error) {
 	graphJSON, err := json.Marshal(share.Graph)
 	if err != nil {
-		return models.WorkflowShare{}, err
+		return models.WorkflowShare{}, false, err
 	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return models.WorkflowShare{}, err
+		return models.WorkflowShare{}, false, err
 	}
 	defer tx.Rollback(ctx)
 
+	if reuseIfUnchanged {
+		// Serialises concurrent shares of the SAME workflow and nothing else.
+		// Held to the end of the transaction and released by commit or
+		// rollback, so there is nothing to unlock by hand.
+		if _, err := tx.Exec(ctx,
+			`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, share.WorkflowID); err != nil {
+			return models.WorkflowShare{}, false, err
+		}
+		// Reuse only for never-expiring links: a fresh expiry instant would
+		// never equal a stored one, so an expiring link always gets its own
+		// row rather than being quietly answered with a permanent one.
+		//
+		// The graph compared here is the already-sanitised one, which is the
+		// honest question -- "would a new link hold anything different?" --
+		// rather than "has the workflow row been touched", which moves for
+		// edits a share never carries. `graph = $5::jsonb` is a semantic
+		// compare: Postgres normalises jsonb, so key order does not matter.
+		// name and description are compared because they are snapshotted
+		// beside the graph, so a rename really does change what is seen.
+		if share.ExpiresAt == nil {
+			row := tx.QueryRow(ctx, `
+				SELECT `+workflowShareColumns+`
+				  FROM workflow_shares
+				 WHERE workflow_id = $1
+				   AND user_id = $2
+				   AND revoked_at IS NULL
+				   AND expires_at IS NULL
+				   AND name = $3
+				   AND description = $4
+				   AND graph = $5::jsonb
+				 ORDER BY created_at DESC
+				 LIMIT 1
+			`, share.WorkflowID, share.UserID, share.Name, share.Description, string(graphJSON))
+			existing, err := scanWorkflowShareRow(row)
+			switch {
+			case err == nil:
+				if err := tx.Commit(ctx); err != nil {
+					return models.WorkflowShare{}, false, err
+				}
+				return existing, true, nil
+			case errors.Is(err, pgx.ErrNoRows):
+				// Nothing to reuse; fall through and insert.
+			default:
+				return models.WorkflowShare{}, false, err
+			}
+		}
+	}
+
+	// Counted after the reuse check, so handing back a link somebody already
+	// has can never fail for being at the limit.
 	var live int
 	if err := tx.QueryRow(ctx, `
 		SELECT COUNT(*) FROM workflow_shares
@@ -89,10 +150,10 @@ func (s *Store) CreateWorkflowShare(ctx context.Context, share models.WorkflowSh
 		   AND revoked_at IS NULL
 		   AND (expires_at IS NULL OR expires_at > NOW())
 	`, share.UserID).Scan(&live); err != nil {
-		return models.WorkflowShare{}, err
+		return models.WorkflowShare{}, false, err
 	}
 	if live >= MaxActiveWorkflowShares {
-		return models.WorkflowShare{}, fmt.Errorf("%w: %d links, limit %d", ErrShareQuotaExceeded, live, MaxActiveWorkflowShares)
+		return models.WorkflowShare{}, false, fmt.Errorf("%w: %d links, limit %d", ErrShareQuotaExceeded, live, MaxActiveWorkflowShares)
 	}
 
 	row := tx.QueryRow(ctx, `
@@ -105,12 +166,12 @@ func (s *Store) CreateWorkflowShare(ctx context.Context, share models.WorkflowSh
 	)
 	out, err := scanWorkflowShareRow(row)
 	if err != nil {
-		return models.WorkflowShare{}, err
+		return models.WorkflowShare{}, false, err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return models.WorkflowShare{}, err
+		return models.WorkflowShare{}, false, err
 	}
-	return out, nil
+	return out, false, nil
 }
 
 // GetWorkflowShare reads one share by token, live or not.
@@ -122,73 +183,6 @@ func (s *Store) CreateWorkflowShare(ctx context.Context, share models.WorkflowSh
 func (s *Store) GetWorkflowShare(ctx context.Context, token string) (models.WorkflowShare, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT `+workflowShareColumns+` FROM workflow_shares WHERE token = $1`, token)
-	share, err := scanWorkflowShareRow(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return models.WorkflowShare{}, ErrShareNotFound
-		}
-		return models.WorkflowShare{}, err
-	}
-	return share, nil
-}
-
-// FindLiveWorkflowShareBySnapshot returns the newest live share of this
-// workflow whose snapshot is identical to the one passed in, or
-// ErrShareNotFound when there is none.
-//
-// This is what lets the Share dialog hand back the same link when nothing has
-// changed without ever handing back a STALE one. Opening the dialog four
-// times should not leave four links behind; opening it after an edit must not
-// give out a link to the version before that edit.
-//
-// Comparing on the graph rather than on a timestamp is deliberate. Two
-// workflows differing only in a field the sanitiser strips produce the SAME
-// publishable snapshot, so pasting an API key must not invalidate a link that
-// would come out byte-for-byte what it already was. The argument here is
-// therefore the already-sanitised graph, not the raw one.
-//
-// `graph = $5::jsonb` is a semantic compare, not a textual one: Postgres
-// normalises jsonb, so key order and whitespace from whatever marshalled it
-// are irrelevant. Array order still counts, which is correct -- node and edge
-// order is part of the document that was frozen.
-//
-// name and description are compared because they are snapshotted into the row
-// beside the graph, so a rename genuinely changes what the recipient sees.
-//
-// wantsExpiry closes the last hole: a request for an expiring link must never
-// be answered with an existing never-expiring one. Rather than match a fresh
-// expiry instant against a stored one -- which would never be equal -- reuse
-// is offered only for the no-expiry case, and anything asking for a deadline
-// mints its own row.
-func (s *Store) FindLiveWorkflowShareBySnapshot(
-	ctx context.Context,
-	workflowID, userID, name, description string,
-	graph models.WorkflowGraph,
-	wantsExpiry bool,
-) (models.WorkflowShare, error) {
-	if wantsExpiry {
-		return models.WorkflowShare{}, ErrShareNotFound
-	}
-	graphJSON, err := json.Marshal(graph)
-	if err != nil {
-		return models.WorkflowShare{}, fmt.Errorf("marshal graph: %w", err)
-	}
-	// The graph goes in as a string, not a []byte: pgx sends a byte slice as
-	// bytea, which will not cast to jsonb. CreateWorkflowShare passes it the
-	// same way.
-	row := s.pool.QueryRow(ctx, `
-		SELECT `+workflowShareColumns+`
-		  FROM workflow_shares
-		 WHERE workflow_id = $1
-		   AND user_id = $2
-		   AND revoked_at IS NULL
-		   AND expires_at IS NULL
-		   AND name = $3
-		   AND description = $4
-		   AND graph = $5::jsonb
-		 ORDER BY created_at DESC
-		 LIMIT 1
-	`, workflowID, userID, name, description, string(graphJSON))
 	share, err := scanWorkflowShareRow(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
