@@ -116,26 +116,33 @@ export function ShareModal({
 
   useModalDismissal(onClose);
 
-  // Reuse a live link rather than minting one on every open. Opening this
-  // dialog four times should not leave four links behind for somebody to
-  // wonder about later, and the per-account allowance is finite.
+  // One call, and the server decides whether this is a new link or one the
+  // workflow already has. Opening the dialog four times should not leave four
+  // links behind for somebody to wonder about later.
+  //
+  // This was list-then-maybe-reuse, decided here, and it was wrong twice over.
+  // It reused the newest live link without asking whether the workflow had
+  // changed since, so editing and reopening handed back a link to the
+  // PREVIOUS version with nothing on screen saying so. And that branch had no
+  // redaction counts to set, so the "not included ..." summary disappeared at
+  // exactly the moment somebody was about to hand the link over.
+  //
+  // Both follow from the same mistake: only the server holds the sanitised
+  // graph, so only the server can tell whether a link still describes this
+  // workflow. Asked properly, it answers with the counts either way.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const existing = await sharesApi.listFor(workflowId);
-        if (cancelled) return;
-        const live = existing.filter(isLive);
-        if (live.length > 0) {
-          setShare(live[0]);
-          setOthers(existing.filter((s) => s.token !== live[0].token));
-          return;
-        }
-        const created = await sharesApi.create(workflowId, 0);
+        const created = await sharesApi.create(workflowId, 0, true);
         if (cancelled) return;
         setShare(created.share);
         setRedactions(created.redactions);
-        setOthers(existing);
+        // The listing feeds the revoke list below and nothing else, so it is
+        // fetched after, with the link just obtained filtered out of it.
+        const existing = await sharesApi.listFor(workflowId);
+        if (cancelled) return;
+        setOthers(existing.filter((s) => s.token !== created.share.token));
       } catch (e) {
         if (!cancelled) {
           setError(

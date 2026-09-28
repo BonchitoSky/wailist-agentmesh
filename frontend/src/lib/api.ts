@@ -688,16 +688,23 @@ export const workflows = {
 // whole point of a link.
 export const shares = {
   // POST /workflows/:id/share — mint a link. expiresInDays 0 means never.
+  //
+  // reuseIfUnchanged asks the backend to hand back an existing live link when
+  // a new one would hold exactly the same snapshot, so opening the dialog
+  // repeatedly does not leave a trail of links behind. The comparison is on
+  // the sanitised graph, which is why it lives there and not here: a link to
+  // an OLDER version must never be reused, and the dialog cannot tell.
   create: async (
     workflowId: string,
     expiresInDays = 0,
+    reuseIfUnchanged = false,
   ): Promise<{ share: WorkflowShare; redactions: ShareRedactions }> => {
     if (BASE) {
       const res = await apiFetch(`${BASE}/workflows/${workflowId}/share`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expiresInDays }),
+        body: JSON.stringify({ expiresInDays, reuseIfUnchanged }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok)
