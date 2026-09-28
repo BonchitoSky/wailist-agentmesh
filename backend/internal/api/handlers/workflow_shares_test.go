@@ -58,6 +58,17 @@ func shareFixtureNodes() []models.WorkflowNode {
 	}
 }
 
+// shareFixtureEdges wires the fixture up: a flow through the agent, and the
+// attach edges that give it its model and its tool.
+func shareFixtureEdges() []models.WorkflowEdge {
+	return []models.WorkflowEdge{
+		{ID: "e1", From: "n_trigger", To: "n_agent", Kind: models.EdgeKindFlow},
+		{ID: "e2", From: "n_provider", To: "n_agent", Kind: models.EdgeKindAttach, ToPort: "model"},
+		{ID: "e3", From: "n_tool", To: "n_agent", Kind: models.EdgeKindAttach, ToPort: "tools"},
+		{ID: "e4", From: "n_agent", To: "n_email", Kind: models.EdgeKindFlow},
+	}
+}
+
 // seedSharedWorkflow creates a workflow owned by userID, saved through the
 // real UpdateWorkflow so the stored nodes are encrypted and webhook-secreted
 // exactly as a user's own save would leave them. Sharing a hand-written row
@@ -72,30 +83,54 @@ func seedSharedWorkflow(t *testing.T, d *handlers.Deps, userID string) models.Wo
 	}
 	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
 
-	body, _ := json.Marshal(map[string]any{
-		"name":  "Resume screener",
-		"nodes": shareFixtureNodes(),
-		"edges": []models.WorkflowEdge{
-			{ID: "e1", From: "n_trigger", To: "n_agent", Kind: models.EdgeKindFlow},
-			{ID: "e2", From: "n_provider", To: "n_agent", Kind: models.EdgeKindAttach, ToPort: "model"},
-			{ID: "e3", From: "n_tool", To: "n_agent", Kind: models.EdgeKindAttach, ToPort: "tools"},
-			{ID: "e4", From: "n_agent", To: "n_email", Kind: models.EdgeKindFlow},
-		},
-	})
-	req := httptest.NewRequest(http.MethodPut, "/workflows/"+wf.ID, bytes.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, userID))
-	req = withURLParam(req, "id", wf.ID)
-	w := httptest.NewRecorder()
-	d.UpdateWorkflow(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("seeding the workflow failed: %d %s", w.Code, w.Body.String())
-	}
+	saveSharedWorkflow(t, d, wf.ID, userID, shareFixtureEdges())
 
 	saved, err := d.Store.GetWorkflow(ctx, wf.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return saved
+}
+
+// saveSharedWorkflow writes the fixture nodes and the given edges through the
+// real UpdateWorkflow, which is also how a test changes the graph between two
+// share attempts.
+func saveSharedWorkflow(t *testing.T, d *handlers.Deps, workflowID, userID string, edges []models.WorkflowEdge) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{
+		"name":  "Resume screener",
+		"nodes": shareFixtureNodes(),
+		"edges": edges,
+	})
+	req := httptest.NewRequest(http.MethodPut, "/workflows/"+workflowID, bytes.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, userID))
+	req = withURLParam(req, "id", workflowID)
+	w := httptest.NewRecorder()
+	d.UpdateWorkflow(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("saving the workflow failed: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// postShare drives CreateShare and hands back the status alongside the body,
+// for the tests that care which of 200 (reused) and 201 (minted) came back.
+func postShare(t *testing.T, d *handlers.Deps, workflowID, userID, body string) (int, models.WorkflowShare, handlers.ShareRedactions) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/workflows/"+workflowID+"/share", strings.NewReader(body))
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, userID))
+	req = withURLParam(req, "id", workflowID)
+	w := httptest.NewRecorder()
+	d.CreateShare(w, req)
+	var out struct {
+		Share      models.WorkflowShare     `json:"share"`
+		Redactions handlers.ShareRedactions `json:"redactions"`
+	}
+	if w.Code == http.StatusOK || w.Code == http.StatusCreated {
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return w.Code, out.Share, out.Redactions
 }
 
 // createShare drives the handler and returns the decoded share, failing the
@@ -361,6 +396,100 @@ func TestAnExpiredLinkReadsAsGone(t *testing.T) {
 	}
 	if code, _ := readShare(t, d, live.Token); code != http.StatusOK {
 		t.Error("the sweep must not remove a link that has not expired yet")
+	}
+}
+
+// A link is the same link only while it still describes the same workflow.
+//
+// The regression test for the defect that prompted all of this. A share
+// snapshot is frozen when it is created, so a dialog that hands an existing
+// link straight back hands back a link to an OLDER graph -- which is how an
+// imported copy arrived one connection short of the original. Reuse has to be
+// conditional on the snapshot, and the condition belongs here rather than in
+// the dialog, which has no way to compare sanitised graphs.
+func TestAReusedLinkIsHandedBackOnlyWhileTheSnapshotMatches(t *testing.T) {
+	d := testDeps(t)
+	owner := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
+
+	code, first, redactions := postShare(t, d, wf.ID, owner, `{"reuseIfUnchanged":true}`)
+	if code != http.StatusCreated {
+		t.Fatalf("the first share = %d, want 201", code)
+	}
+
+	// Nothing has changed, so the same link comes back -- and 200, because
+	// nothing was created. Opening the dialog repeatedly must not leave a
+	// trail of links behind.
+	code, again, againRedactions := postShare(t, d, wf.ID, owner, `{"reuseIfUnchanged":true}`)
+	if code != http.StatusOK || again.Token != first.Token {
+		t.Fatalf("reopening gave %d %s, want 200 and the same token %s", code, again.Token, first.Token)
+	}
+	// The counts come back on the reuse path too. They are what the dialog
+	// prints as "not included: 2 API keys, your webhook secret ..." -- the
+	// one moment the sharer can still change their mind -- so a reused link
+	// going quiet about them would be its own small defect.
+	if againRedactions != redactions {
+		t.Errorf("a reused link reported %+v, want the same %+v", againRedactions, redactions)
+	}
+
+	// One more connection, and the existing link no longer describes this
+	// workflow. It must not be offered again.
+	extra := append(shareFixtureEdges(), models.WorkflowEdge{
+		ID: "e5", From: "n_trigger", To: "n_email", Kind: models.EdgeKindFlow,
+	})
+	saveSharedWorkflow(t, d, wf.ID, owner, extra)
+
+	code, third, _ := postShare(t, d, wf.ID, owner, `{"reuseIfUnchanged":true}`)
+	if code != http.StatusCreated {
+		t.Fatalf("sharing an edited workflow = %d, want 201 -- a new link", code)
+	}
+	if third.Token == first.Token {
+		t.Fatal("an edited workflow was given back the link to its previous version")
+	}
+	if third.EdgeCount != first.EdgeCount+1 {
+		t.Errorf("the new link holds %d edges, want %d -- the edit did not reach the snapshot",
+			third.EdgeCount, first.EdgeCount+1)
+	}
+
+	// The old link keeps working and keeps its own older snapshot: somebody
+	// already holding it was promised a frozen copy, not a moving one.
+	if statusCode, _ := readShare(t, d, first.Token); statusCode != http.StatusOK {
+		t.Error("creating a newer link must not disturb one already handed out")
+	}
+}
+
+// Reuse must never resurrect a link the sharer has already retracted, and
+// must never answer a request for an expiring link with a permanent one.
+func TestReuseSkipsRevokedLinksAndExpiryRequests(t *testing.T) {
+	d := testDeps(t)
+	owner := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
+
+	_, revoked, _ := postShare(t, d, wf.ID, owner, `{"reuseIfUnchanged":true}`)
+	req := httptest.NewRequest(http.MethodDelete, "/shares/"+revoked.Token, nil)
+	req = req.WithContext(context.WithValue(req.Context(), handlers.CtxUserID, owner))
+	req = withURLParam(req, "token", revoked.Token)
+	w := httptest.NewRecorder()
+	d.RevokeShare(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("RevokeShare = %d, want 204", w.Code)
+	}
+
+	code, fresh, _ := postShare(t, d, wf.ID, owner, `{"reuseIfUnchanged":true}`)
+	if code != http.StatusCreated || fresh.Token == revoked.Token {
+		t.Fatalf("sharing after a revoke gave %d %s -- the retracted link came back",
+			code, fresh.Token)
+	}
+
+	// An expiring link is a different promise from a permanent one, so asking
+	// for one mints its own row rather than reusing the link just made.
+	code, expiring, _ := postShare(t, d, wf.ID, owner, `{"reuseIfUnchanged":true,"expiresInDays":7}`)
+	if code != http.StatusCreated || expiring.Token == fresh.Token {
+		t.Fatalf("asking for a 7-day link gave %d %s -- a never-expiring link was reused",
+			code, expiring.Token)
+	}
+	if expiring.ExpiresAt == nil {
+		t.Error("the link asked to expire has no expiry")
 	}
 }
 

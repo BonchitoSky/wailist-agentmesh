@@ -132,6 +132,73 @@ func (s *Store) GetWorkflowShare(ctx context.Context, token string) (models.Work
 	return share, nil
 }
 
+// FindLiveWorkflowShareBySnapshot returns the newest live share of this
+// workflow whose snapshot is identical to the one passed in, or
+// ErrShareNotFound when there is none.
+//
+// This is what lets the Share dialog hand back the same link when nothing has
+// changed without ever handing back a STALE one. Opening the dialog four
+// times should not leave four links behind; opening it after an edit must not
+// give out a link to the version before that edit.
+//
+// Comparing on the graph rather than on a timestamp is deliberate. Two
+// workflows differing only in a field the sanitiser strips produce the SAME
+// publishable snapshot, so pasting an API key must not invalidate a link that
+// would come out byte-for-byte what it already was. The argument here is
+// therefore the already-sanitised graph, not the raw one.
+//
+// `graph = $5::jsonb` is a semantic compare, not a textual one: Postgres
+// normalises jsonb, so key order and whitespace from whatever marshalled it
+// are irrelevant. Array order still counts, which is correct -- node and edge
+// order is part of the document that was frozen.
+//
+// name and description are compared because they are snapshotted into the row
+// beside the graph, so a rename genuinely changes what the recipient sees.
+//
+// wantsExpiry closes the last hole: a request for an expiring link must never
+// be answered with an existing never-expiring one. Rather than match a fresh
+// expiry instant against a stored one -- which would never be equal -- reuse
+// is offered only for the no-expiry case, and anything asking for a deadline
+// mints its own row.
+func (s *Store) FindLiveWorkflowShareBySnapshot(
+	ctx context.Context,
+	workflowID, userID, name, description string,
+	graph models.WorkflowGraph,
+	wantsExpiry bool,
+) (models.WorkflowShare, error) {
+	if wantsExpiry {
+		return models.WorkflowShare{}, ErrShareNotFound
+	}
+	graphJSON, err := json.Marshal(graph)
+	if err != nil {
+		return models.WorkflowShare{}, fmt.Errorf("marshal graph: %w", err)
+	}
+	// The graph goes in as a string, not a []byte: pgx sends a byte slice as
+	// bytea, which will not cast to jsonb. CreateWorkflowShare passes it the
+	// same way.
+	row := s.pool.QueryRow(ctx, `
+		SELECT `+workflowShareColumns+`
+		  FROM workflow_shares
+		 WHERE workflow_id = $1
+		   AND user_id = $2
+		   AND revoked_at IS NULL
+		   AND expires_at IS NULL
+		   AND name = $3
+		   AND description = $4
+		   AND graph = $5::jsonb
+		 ORDER BY created_at DESC
+		 LIMIT 1
+	`, workflowID, userID, name, description, string(graphJSON))
+	share, err := scanWorkflowShareRow(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return models.WorkflowShare{}, ErrShareNotFound
+		}
+		return models.WorkflowShare{}, err
+	}
+	return share, nil
+}
+
 // ListWorkflowShares returns every share a user has made of one workflow,
 // newest first, including revoked and expired ones -- the sharer's own
 // "Manage links" view is the one place those still matter.

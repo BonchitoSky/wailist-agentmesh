@@ -127,6 +127,10 @@ func (d *Deps) CreateShare(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		// 0 or absent means the link never expires.
 		ExpiresInDays int `json:"expiresInDays"`
+		// Set by the Share dialog when it opens, which wants "a link to this,
+		// as it is now" rather than "another link". False (the default) keeps
+		// the plain mint-a-new-one behaviour that "New link" needs.
+		ReuseIfUnchanged bool `json:"reuseIfUnchanged"`
 	}
 	// An empty body is legitimate here -- "share this, no expiry" needs no
 	// fields -- so only a malformed one is an error.
@@ -148,6 +152,37 @@ func (d *Deps) CreateShare(w http.ResponseWriter, r *http.Request) {
 	if msg, ok := shareGraphFits(graph); !ok {
 		respond.Error(w, http.StatusRequestEntityTooLarge, msg)
 		return
+	}
+
+	// Reuse before minting. The snapshot is compared AFTER sanitising, so the
+	// question asked is the honest one -- "would a new link hold anything
+	// different from one you already have?" -- rather than "has the workflow
+	// row been touched", which moves for edits this snapshot never carries.
+	//
+	// Note that redactions below are computed from THIS sanitise either way,
+	// so a reused link still tells the sharer what is being left out. An
+	// earlier version answered reuse from the client, which had no redaction
+	// counts to hand and so silently dropped that sentence exactly when
+	// somebody was about to pass the link on.
+	if body.ReuseIfUnchanged {
+		existing, err := d.Store.FindLiveWorkflowShareBySnapshot(
+			ctx, wf.ID, userID, wf.Name, wf.Description, graph, expiresAt != nil,
+		)
+		switch {
+		case err == nil:
+			// 200, not 201: nothing was created.
+			respond.JSON(w, http.StatusOK, map[string]any{
+				"share":      existing,
+				"redactions": redactions,
+			})
+			return
+		case errors.Is(err, db.ErrShareNotFound):
+			// Nothing to reuse -- fall through and mint one.
+		default:
+			log.Printf("share workflow %s: find reusable: %v", id, err)
+			respond.Error(w, http.StatusInternalServerError, "could not create a share link")
+			return
+		}
 	}
 
 	token, err := randURLSafe(16)
