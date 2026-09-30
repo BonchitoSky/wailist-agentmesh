@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { IconClose } from "@/components/ui";
 import { useModalDismissal } from "@/hooks/useModalDismissal";
 import { shares as sharesApi } from "@/lib/api";
@@ -183,9 +183,21 @@ export function ShareModal({
     };
   }, [workflowId]);
 
+  // Cleared on unmount. The dialog can be closed inside the 1.5s window --
+  // copying a link and immediately pressing Escape is the normal way to use
+  // this -- and the timer would then fire against a component that is gone.
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
+
   const flash = (what: "link" | "code") => {
     setCopied(what);
-    setTimeout(() => setCopied(null), 1500);
+    if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setCopied(null), 1500);
   };
 
   const handleCopyLink = async () => {
@@ -360,11 +372,36 @@ export function ShareModal({
           </button>
         </div>
 
+        {/* "Copied!" is a label swap on a button, which a screen reader does
+            not announce -- so the one piece of feedback the whole dialog
+            gives was silent. This says it out loud without showing twice. */}
+        <span
+          aria-live="polite"
+          style={{
+            position: "absolute",
+            width: 1,
+            height: 1,
+            overflow: "hidden",
+            clip: "rect(0 0 0 0)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {copied === "link"
+            ? "Link copied to clipboard"
+            : copied === "code"
+              ? "Code copied to clipboard"
+              : ""}
+        </span>
+
         {loading && (
           <div
             style={{
-              padding: "24px 0",
-              textAlign: "center",
+              // Roughly what the loaded state occupies, so the dialog does
+              // not snap to a new height the moment the link arrives.
+              minHeight: 220,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
               fontSize: 12.5,
               color: "var(--fg-dim)",
             }}

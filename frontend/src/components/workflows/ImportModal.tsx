@@ -257,6 +257,16 @@ export function ImportModal({
               setInput(e.target.value);
               setError(null);
             }}
+            // Enter has to stay a newline -- a code that arrived wrapped is
+            // pasted as several lines, and swallowing Enter would make fixing
+            // one by hand impossible. Ctrl/Cmd+Enter is the usual way out of
+            // that, and without it the only route forward was the mouse.
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                void resolve();
+              }
+            }}
             placeholder="https://www.agent-mesh.app/s/… or am1.…"
             style={{
               width: "100%",
