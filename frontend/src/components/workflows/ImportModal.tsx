@@ -423,8 +423,18 @@ function ResolvedCard({ resolved }: { resolved: Resolved }) {
         {nodes} nodes · {edges} connections
       </p>
 
+      {/* A code gets neither heading. "Ready to run as-is" is a claim, and
+          for a code nothing has checked it: requirements are derived
+          server-side from a stored snapshot, and a code has no row anywhere
+          until it is imported. Saying it anyway would be the same false
+          promise this work removed from the link preview, reintroduced one
+          branch over. */}
       <p style={{ margin: "0 0 5px", fontSize: 12, fontWeight: 600 }}>
-        {lines.length > 0 ? "You'll need to add" : "Ready to run as-is"}
+        {resolved.kind === "code"
+          ? "What it may still need"
+          : lines.length > 0
+            ? "You'll need to add"
+            : "Ready to run as-is"}
       </p>
       {lines.length > 0 ? (
         <ul
@@ -453,7 +463,7 @@ function ResolvedCard({ resolved }: { resolved: Resolved }) {
         >
           {resolved.kind === "link"
             ? "Nothing to configure — this one runs on AgentMesh's own model keys."
-            : "The sender's keys, secrets and uploaded files were never part of this code."}
+            : "The sender's keys, secrets and uploaded files were never part of this code, so any model keys or connected accounts it uses will be yours to add. Open it after importing to see which."}
         </p>
       )}
     </div>
