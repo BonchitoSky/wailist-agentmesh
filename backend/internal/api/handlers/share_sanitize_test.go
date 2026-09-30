@@ -272,6 +272,37 @@ func TestSanitizeForShareRejectsAGraphThatCannotBeWired(t *testing.T) {
 	}
 }
 
+func TestSanitizeForShareDropsAnEdgeThatReusesAnotherEdgesID(t *testing.T) {
+	// The canvas keys its rendered edges by id, so two edges sharing one give
+	// the recipient a key collision: one of the pair does not draw, and the
+	// imported graph reads as wired differently from the one that was shared.
+	// Our own canvas cannot produce this; a pasted code can.
+	graph, _ := handlers.SanitizeGraphForShare(models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger},
+			{ID: "n2", Type: models.NodeTypeAgent},
+			{ID: "n3", Type: models.NodeTypeEnd},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "n1", To: "n2", Kind: models.EdgeKindFlow},
+			{ID: "e1", From: "n2", To: "n3", Kind: models.EdgeKindFlow},
+			// No id at all is left alone: the canvas has always tolerated
+			// those, and minting a key for one is not the sanitiser's job.
+			{From: "n1", To: "n3", Kind: models.EdgeKindFlow},
+		},
+	})
+
+	if len(graph.Edges) != 2 {
+		t.Fatalf("expected the duplicate id dropped and the id-less edge kept, got %+v", graph.Edges)
+	}
+	if graph.Edges[0].To != "n2" {
+		t.Error("the first edge with an id should win, not a later one reusing it")
+	}
+	if graph.Edges[1].ID != "" || graph.Edges[1].To != "n3" {
+		t.Errorf("the id-less edge should have survived, got %+v", graph.Edges[1])
+	}
+}
+
 func TestSanitizeForShareReportsNothingRemovedForACleanGraph(t *testing.T) {
 	graph, red := handlers.SanitizeGraphForShare(models.WorkflowGraph{
 		Nodes: []models.WorkflowNode{{ID: "n1", Type: models.NodeTypeTrigger, Template: "manual"}},

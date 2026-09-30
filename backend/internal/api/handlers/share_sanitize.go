@@ -112,9 +112,22 @@ func SanitizeGraphForShare(graph models.WorkflowGraph) (models.WorkflowGraph, Sh
 	}
 
 	edges := make([]models.WorkflowEdge, 0, len(graph.Edges))
+	seenEdges := make(map[string]bool, len(graph.Edges))
 	for _, e := range graph.Edges {
 		if !seen[e.From] || !seen[e.To] {
 			continue
+		}
+		// A repeated edge id goes the same way a repeated node id does. The
+		// canvas keys its rendered edges by id, so two edges sharing one give
+		// the recipient a key collision: one of the pair does not draw, and
+		// the graph reads as wired differently from the one that was shared.
+		// An id-less edge is left alone -- the canvas has always tolerated
+		// those, and minting a key for one is not this file's business.
+		if e.ID != "" {
+			if seenEdges[e.ID] {
+				continue
+			}
+			seenEdges[e.ID] = true
 		}
 		edges = append(edges, e)
 	}
