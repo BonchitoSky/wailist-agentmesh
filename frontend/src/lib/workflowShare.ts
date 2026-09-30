@@ -58,6 +58,10 @@ export const SHAREABLE_NODE_TYPES: readonly NodeType[] = [
 
 export interface WorkflowShareData {
   name?: string;
+  // Carried so a code says as much about the workflow as a link does. It was
+  // missing at first, which meant the offline half of sharing silently
+  // dropped the one sentence explaining what the thing is for.
+  description?: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
 }
@@ -73,7 +77,14 @@ export async function encodeWorkflowShare(
 export async function decodeWorkflowShare(
   code: string,
 ): Promise<WorkflowShareData> {
-  const trimmed = code.trim();
+  // ALL whitespace goes, not just the ends. A code is one long unbroken
+  // string, and the places it travels through break long strings for a
+  // living: mail clients hard-wrap at 78 columns, terminals wrap on paste,
+  // and a chat client will insert a newline mid-token without asking.
+  // Trimming only the ends left those newlines in the middle, where they
+  // reached atob and threw -- surfacing as "that doesn't look like a workflow
+  // code" for a code that was perfectly good until somebody emailed it.
+  const trimmed = code.replace(/\s+/g, "");
   // A legacy code (pre-versioning) is bare standard base64. Still accepted:
   // codes were handed out before this format existed, and refusing them would
   // break one somebody has already sent.
@@ -152,6 +163,10 @@ export function validateShareData(parsed: unknown): WorkflowShareData {
 
   return {
     name: typeof data.name === "string" ? data.name : undefined,
+    // Absent in every code minted before this field existed, so its type is
+    // checked rather than assumed -- same treatment as name.
+    description:
+      typeof data.description === "string" ? data.description : undefined,
     nodes: data.nodes as WorkflowNode[],
     edges: data.edges as WorkflowEdge[],
   };

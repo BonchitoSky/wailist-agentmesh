@@ -59,6 +59,41 @@ describe("classifyShareInput", () => {
     });
   });
 
+  it("finds the link inside whatever was pasted around it", () => {
+    // A link almost never arrives alone. It comes with the sentence somebody
+    // typed around it, in the angle brackets a mail client adds, or with the
+    // sentence's own full stop stuck to the end.
+    //
+    // The earlier version required the WHOLE paste to be a URL and captured
+    // everything to the end of the path, so the first two of these were read
+    // as a code and the rest looked up a token with punctuation on it.
+    for (const text of [
+      "Check this out: https://agent-mesh.app/s/k3Jm9xQpLr2sTvWyZa1b",
+      "https://agent-mesh.app/s/k3Jm9xQpLr2sTvWyZa1b is the one I meant",
+      "<https://agent-mesh.app/s/k3Jm9xQpLr2sTvWyZa1b>",
+      "https://agent-mesh.app/s/k3Jm9xQpLr2sTvWyZa1b.",
+      "(https://agent-mesh.app/s/k3Jm9xQpLr2sTvWyZa1b)",
+      "here you go —\nhttps://agent-mesh.app/s/k3Jm9xQpLr2sTvWyZa1b\nenjoy",
+    ]) {
+      expect(classifyShareInput(text)).toEqual({
+        kind: "token",
+        token: "k3Jm9xQpLr2sTvWyZa1b",
+      });
+    }
+  });
+
+  it("does not mistake a legacy code containing /s/ for a link", () => {
+    // Standard base64 -- what a legacy code is -- contains "/", so a long
+    // enough one eventually holds the characters "/s/" by chance. Scanning
+    // for "/s/" alone would read this as a link and look up a token that
+    // never existed, which is why a scheme or a dotted host is required in
+    // front of it. Base64 has neither.
+    const legacy = "H4sIAAAAAAAAA6tW/s/k3Jm9xQpLr2sTvWyZa1bMLSytlGqBQCz".repeat(
+      4,
+    );
+    expect(classifyShareInput(legacy)).toEqual({ kind: "code", code: legacy });
+  });
+
   it("returns null for nothing at all", () => {
     expect(classifyShareInput("")).toBeNull();
     expect(classifyShareInput("   \n ")).toBeNull();

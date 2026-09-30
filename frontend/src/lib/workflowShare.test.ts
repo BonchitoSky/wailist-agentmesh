@@ -62,6 +62,31 @@ describe("encodeWorkflowShare / decodeWorkflowShare", () => {
     expect(encodeURIComponent(code)).toBe(code);
   });
 
+  it("carries the description, so a code says as much as a link", async () => {
+    const decoded = await decodeWorkflowShare(
+      await encodeWorkflowShare({ ...graph, description: "Screens CVs." }),
+    );
+    expect(decoded.description).toBe("Screens CVs.");
+  });
+
+  it("decodes a code that something wrapped on its way here", async () => {
+    // A code is one long unbroken string, and the places it travels through
+    // break long strings for a living: mail clients hard-wrap at 78 columns,
+    // terminals wrap on paste, chat clients insert a newline mid-token.
+    // Trimming only the ends left those breaks in the middle, where they
+    // reached atob and threw -- so a perfectly good code came back as "that
+    // doesn't look like a workflow code" purely because it had been emailed.
+    const code = await encodeWorkflowShare(graph);
+    const wrapped = (code.match(/.{1,40}/g) ?? []).join("\r\n");
+    const spaced = ` ${code.slice(0, 20)} ${code.slice(20)}\t`;
+
+    for (const mangled of [wrapped, spaced]) {
+      const decoded = await decodeWorkflowShare(mangled);
+      expect(decoded.name).toBe("Resume screener");
+      expect(decoded.nodes).toHaveLength(2);
+    }
+  });
+
   it("still decodes a code made before the format was versioned", async () => {
     const old = await legacyCode({
       name: "From an older build",
