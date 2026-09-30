@@ -8,6 +8,7 @@ import { useReadOnly } from "@/hooks/useReadOnly";
 import { can } from "@/lib/readonly";
 import { shares } from "@/lib/api";
 import { requirementLines } from "@/lib/shareRequirements";
+import { ShareGraphSketch } from "./ShareGraphSketch";
 import { shareHref, workflowHref } from "@/lib/routes";
 import type { ShareImportRequirements, WorkflowShare } from "@/lib/types";
 
@@ -45,7 +46,17 @@ function expiryNote(expiresAt?: string): string | null {
   return days === 1 ? "Expires tomorrow" : `Expires in ${days} days`;
 }
 
-export function SharePreview({ token }: { token: string }) {
+export function SharePreview({
+  token,
+  initial,
+}: {
+  token: string;
+  /** Read on the server by the route above, so the page has content in its
+   *  HTML rather than after a round trip. Absent in mock mode, in the static
+   *  mobile export, and whenever that fetch failed -- in which case the
+   *  effect below does what it always did. */
+  initial?: { share: WorkflowShare; requirements: ShareImportRequirements };
+}) {
   const router = useRouter();
   const { signedIn, loading: authLoading } = useAuth();
   // Importing creates a workflow, so it is authoring, and this app authors on
@@ -60,14 +71,19 @@ export function SharePreview({ token }: { token: string }) {
   const readOnly = useReadOnly();
   const canImport = can("workflow.create", readOnly);
 
-  const [share, setShare] = useState<WorkflowShare | null>(null);
+  const [share, setShare] = useState<WorkflowShare | null>(
+    initial?.share ?? null,
+  );
   const [requirements, setRequirements] =
-    useState<ShareImportRequirements | null>(null);
+    useState<ShareImportRequirements | null>(initial?.requirements ?? null);
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const loading = !share && !error;
 
   useEffect(() => {
+    // Already rendered from the server's copy; fetching it again would be a
+    // second request for bytes that are on the page.
+    if (initial) return;
     let cancelled = false;
     (async () => {
       try {
@@ -89,7 +105,7 @@ export function SharePreview({ token }: { token: string }) {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, initial]);
 
   // Importing is always a press, never something that happens on arrival.
   //
@@ -252,6 +268,11 @@ export function SharePreview({ token }: { token: string }) {
               )}
             </div>
 
+            <ShareGraphSketch
+              nodes={share.graph.nodes}
+              edges={share.graph.edges}
+            />
+
             {share.graph.nodes.length > 0 && (
               <div
                 style={{
@@ -388,6 +409,31 @@ export function SharePreview({ token }: { token: string }) {
           </>
         )}
       </main>
+
+      {/* For the reader who has never heard of any of this.
+
+          Most people who open a share link arrive with no account and no idea
+          what AgentMesh is -- a friend sent them a URL. The page above talks
+          entirely about one workflow and assumes the rest, which leaves a
+          stranger with a card, a button, and no reason to press it. */}
+      <footer
+        style={{
+          marginTop: 28,
+          maxWidth: 560,
+          width: "100%",
+          textAlign: "center",
+          fontSize: 12.5,
+          lineHeight: 1.7,
+          color: "var(--fg-dim)",
+        }}
+      >
+        <span style={{ color: "var(--fg-muted)" }}>
+          AgentMesh builds and runs AI agent workflows.
+        </span>{" "}
+        <Link href="/" style={{ color: "var(--accent)" }}>
+          See what it does
+        </Link>
+      </footer>
     </div>
   );
 }
