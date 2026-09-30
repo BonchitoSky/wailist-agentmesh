@@ -268,16 +268,16 @@ func (s *Store) RecordWorkflowShareImport(ctx context.Context, token string) err
 // status is 'draft' and nothing else is set, which is what makes an imported
 // workflow land unscheduled, unfenced and undeployed: the schedule, geofence
 // and deploy columns are this row's own state, never the sharer's.
-func (s *Store) CreateWorkflowWithGraph(ctx context.Context, name, userID string, graph models.WorkflowGraph) (models.Workflow, error) {
+func (s *Store) CreateWorkflowWithGraph(ctx context.Context, name, description, userID string, graph models.WorkflowGraph) (models.Workflow, error) {
 	graphJSON, err := json.Marshal(graph)
 	if err != nil {
 		return models.Workflow{}, err
 	}
 	row := s.pool.QueryRow(ctx, `
-		INSERT INTO workflows (id, user_id, name, status, graph, is_system)
-		VALUES ($1, $2, $3, 'draft', $4::jsonb, false)
+		INSERT INTO workflows (id, user_id, name, description, status, graph, is_system)
+		VALUES ($1, $2, $3, $4, 'draft', $5::jsonb, false)
 		RETURNING `+workflowColumns,
-		uuid.New().String(), userID, name, string(graphJSON),
+		uuid.New().String(), userID, name, description, string(graphJSON),
 	)
 	return scanWorkflowRow(row)
 }

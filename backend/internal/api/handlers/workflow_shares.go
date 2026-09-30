@@ -53,6 +53,12 @@ const (
 	// An upper bound on the expiry a caller may ask for. "Never" stays the
 	// default; this only stops a nonsense value reaching the column.
 	maxShareExpiryDays = 365
+
+	// Mirrors the CHECK on workflow_shares.description. Only the import path
+	// needs it in Go: every other description reaching the column comes from
+	// a workflow the caller already owns, while a pasted code's is a
+	// stranger's string.
+	maxShareDescriptionChars = 2000
 )
 
 // ShareImportRequirements is what the RECIPIENT still has to supply, worked
@@ -151,6 +157,15 @@ func (d *Deps) CreateShare(w http.ResponseWriter, r *http.Request) {
 	graph, redactions := SanitizeGraphForShare(models.WorkflowGraph{Nodes: wf.Nodes, Edges: wf.Edges})
 	if msg, ok := shareGraphFits(graph); !ok {
 		respond.Error(w, http.StatusRequestEntityTooLarge, msg)
+		return
+	}
+	// An empty canvas is not something to hand anybody. ImportWorkflowGraph
+	// has always refused a graph with no nodes; this end had no such guard,
+	// so a brand-new workflow would mint a real, live link to nothing --
+	// which the recipient opens, is told is "ready to run as-is", and imports
+	// as an empty workflow.
+	if len(graph.Nodes) == 0 {
+		respond.Error(w, http.StatusBadRequest, "Add a node before sharing this workflow.")
 		return
 	}
 
@@ -333,7 +348,11 @@ func (d *Deps) ImportShare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	graph, _ := SanitizeGraphForShare(share.Graph)
-	wf, ok := d.createImportedWorkflow(w, ctx, userID, share.Name, graph)
+	// The description travels with the name. It is snapshotted beside the
+	// graph for exactly this, and the preview shows it to the recipient
+	// before they import -- dropping it here meant the one sentence saying
+	// what the workflow is for vanished at the moment they accepted it.
+	wf, ok := d.createImportedWorkflow(w, ctx, userID, share.Name, share.Description, graph)
 	if !ok {
 		return
 	}
@@ -367,9 +386,13 @@ func (d *Deps) ImportWorkflowGraph(w http.ResponseWriter, r *http.Request) {
 	userID, _ := ctx.Value(CtxUserID).(string)
 
 	var body struct {
-		Name  string                `json:"name"`
-		Nodes []models.WorkflowNode `json:"nodes"`
-		Edges []models.WorkflowEdge `json:"edges"`
+		Name string `json:"name"`
+		// Optional: a code minted before the field existed carries none, and
+		// an absent one simply leaves the imported workflow without a
+		// description rather than failing the import.
+		Description string                `json:"description"`
+		Nodes       []models.WorkflowNode `json:"nodes"`
+		Edges       []models.WorkflowEdge `json:"edges"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxImportBodyBytes)).Decode(&body); err != nil {
 		respond.Error(w, http.StatusBadRequest, "that does not look like a workflow")
@@ -400,7 +423,14 @@ func (d *Deps) ImportWorkflowGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wf, ok := d.createImportedWorkflow(w, ctx, userID, name, graph)
+	// Bounded for the same reason the column is: this arrives from outside
+	// the app, and the description is prose nobody needs a novel of.
+	description := strings.TrimSpace(body.Description)
+	if len(description) > maxShareDescriptionChars {
+		description = description[:maxShareDescriptionChars]
+	}
+
+	wf, ok := d.createImportedWorkflow(w, ctx, userID, name, description, graph)
 	if !ok {
 		return
 	}
@@ -411,7 +441,7 @@ func (d *Deps) ImportWorkflowGraph(w http.ResponseWriter, r *http.Request) {
 // the recipient's own webhook secrets, insert, and hand back the masked row.
 // Writes the error response itself and reports ok=false.
 func (d *Deps) createImportedWorkflow(
-	w http.ResponseWriter, ctx context.Context, userID, name string, graph models.WorkflowGraph,
+	w http.ResponseWriter, ctx context.Context, userID, name, description string, graph models.WorkflowGraph,
 ) (models.Workflow, bool) {
 	nodes := make([]models.WorkflowNode, len(graph.Nodes))
 	copy(nodes, graph.Nodes)
@@ -422,7 +452,7 @@ func (d *Deps) createImportedWorkflow(
 	// PublicTrigger requires a secret and fails closed.
 	nodes = ensureWebhookSecrets(nodes, d.EncryptionKey)
 
-	wf, err := d.Store.CreateWorkflowWithGraph(ctx, name, userID, models.WorkflowGraph{
+	wf, err := d.Store.CreateWorkflowWithGraph(ctx, name, description, userID, models.WorkflowGraph{
 		Nodes: nodes,
 		Edges: graph.Edges,
 	})

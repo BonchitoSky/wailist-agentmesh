@@ -655,6 +655,9 @@ export const workflows = {
   // cannot leave an empty workflow behind for the browser to clean up.
   importGraph: async (graph: {
     name: string;
+    // Optional: a code minted before this field existed carries no
+    // description, and the backend leaves it empty when it is absent.
+    description?: string;
     nodes: WorkflowNode[];
     edges: WorkflowEdge[];
   }): Promise<Workflow> => {

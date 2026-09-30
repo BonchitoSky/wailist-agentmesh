@@ -515,6 +515,67 @@ func TestSharingTwiceAtOnceStillLeavesOneLink(t *testing.T) {
 	}
 }
 
+// The description reaches the recipient's own copy.
+//
+// It is snapshotted beside the graph on purpose, and the preview shows it to
+// the recipient before they decide -- and then the import used to pass only
+// the name, so the one sentence saying what the workflow is for vanished at
+// the moment they accepted it.
+func TestImportKeepsTheDescriptionTheRecipientWasShown(t *testing.T) {
+	d := testDeps(t)
+	owner := testUser(t, d)
+	recipient := testUser(t, d)
+	wf := seedSharedWorkflow(t, d, owner)
+
+	description := "Screens inbound CVs and posts the shortlist to Slack."
+	if _, err := d.Store.UpdateWorkflowAndDescription(
+		context.Background(), wf.ID, wf.Name,
+		models.WorkflowGraph{Nodes: wf.Nodes, Edges: wf.Edges},
+		&description,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	share, _ := createShare(t, d, wf.ID, owner, `{}`)
+	if share.Description != description {
+		t.Fatalf("the snapshot carries %q, want the workflow's own description", share.Description)
+	}
+
+	imported := importShare(t, d, share.Token, recipient)
+	if imported.Description != description {
+		t.Errorf("the imported workflow has description %q, want %q", imported.Description, description)
+	}
+}
+
+// A link to an empty canvas is not worth handing anybody.
+//
+// The recipient opens it, is told it is "ready to run as-is", imports it, and
+// has an empty workflow. ImportWorkflowGraph has always refused a graph with
+// no nodes; this end had no such guard.
+func TestAnEmptyWorkflowCannotBeShared(t *testing.T) {
+	d := testDeps(t)
+	owner := testUser(t, d)
+
+	wf, err := d.Store.CreateWorkflow(context.Background(), "Nothing yet", owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Store.DeleteWorkflow(context.Background(), wf.ID) })
+
+	code, _, _ := postShare(t, d, wf.ID, owner, `{}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("sharing an empty workflow = %d, want 400", code)
+	}
+
+	shares, err := d.Store.ListWorkflowShares(context.Background(), wf.ID, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shares) != 0 {
+		t.Errorf("a refused share still left %d rows behind", len(shares))
+	}
+}
+
 // Reuse must never resurrect a link the sharer has already retracted, and
 // must never answer a request for an expiring link with a permanent one.
 func TestReuseSkipsRevokedLinksAndExpiryRequests(t *testing.T) {

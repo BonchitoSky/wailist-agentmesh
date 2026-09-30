@@ -181,6 +181,7 @@ export function ShareModal({
       const { share: full } = await sharesApi.read(share.token);
       const code = await encodeWorkflowShare({
         name: full.name,
+        description: full.description,
         nodes: full.graph.nodes,
         edges: full.graph.edges,
       });

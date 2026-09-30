@@ -69,6 +69,7 @@ export function ImportModal({
     const data = await decodeWorkflowShare(code);
     const wf = await workflowsApi.importGraph({
       name: data.name?.trim() || "Imported workflow",
+      description: data.description?.trim() || undefined,
       nodes: data.nodes,
       edges: data.edges,
     });
