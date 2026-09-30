@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,16 +80,41 @@ type ShareImportRequirements struct {
 	Files int `json:"files"`
 	// Google nodes, which need the recipient's own connected account.
 	ConnectedAccounts int `json:"connectedAccounts"`
+	// Connector providers the recipient has to reconnect, named and sorted --
+	// "slack", "jira". Named rather than counted because "reconnect Slack and
+	// Jira" is something a person can act on where "2 connectors" is not, and
+	// because the names are already plain in the graph they are about to
+	// import. Distinct: two Slack nodes are still one account to connect.
+	Connectors []string `json:"connectors"`
 }
 
 // Any reports whether the recipient has anything to do before running it.
 func (r ShareImportRequirements) Any() bool {
-	return r.APIKeys+r.Files+r.ConnectedAccounts > 0
+	return r.APIKeys+r.Files+r.ConnectedAccounts+len(r.Connectors) > 0
 }
 
 // RequirementsForImport inspects a sanitised graph and says what is missing.
-func RequirementsForImport(graph models.WorkflowGraph) ShareImportRequirements {
+//
+// A method rather than a free function because the connector half of the
+// answer needs the provider registry, which hangs off Deps.
+//
+// That registry is the source of truth here, deliberately. A connector's
+// credential lives in node.Secrets under connectorSecretKey(provider) --
+// "slackOAuthAccessToken" -- and the sanitiser drops Secrets wholesale, so by
+// the time this runs there is no trace of what was taken. What survives is
+// the node's Template, and for an action node the template name and the
+// provider name are the same string (see ExecuteAction's dispatch). Asking
+// the registry instead of keeping a list here means a connector added later
+// is covered on the day it is added.
+//
+// Without this the preview told somebody importing a Slack workflow that it
+// was "ready to run as-is". It was not: the token had been stripped, and
+// nothing on the page said so.
+func (d *Deps) RequirementsForImport(graph models.WorkflowGraph) ShareImportRequirements {
 	var req ShareImportRequirements
+	connectors := d.registerConnectorProviders()
+	needed := map[string]bool{}
+
 	for _, n := range graph.Nodes {
 		switch n.Type {
 		case models.NodeTypeProvider:
@@ -101,12 +127,24 @@ func RequirementsForImport(graph models.WorkflowGraph) ShareImportRequirements {
 		case models.NodeTypeGoogle:
 			req.ConnectedAccounts++
 		}
+		if n.Template != "" && !needed[n.Template] {
+			if _, ok := connectors[n.Template]; ok {
+				needed[n.Template] = true
+			}
+		}
 		for _, p := range n.CustomParams {
 			if p.Kind == "file" && p.Value == "" {
 				req.Files++
 			}
 		}
 	}
+
+	for name := range needed {
+		req.Connectors = append(req.Connectors, name)
+	}
+	// Sorted so the sentence the preview builds reads the same on every
+	// request; Go's map order would otherwise reshuffle it on each reload.
+	sort.Strings(req.Connectors)
 	return req
 }
 
@@ -305,7 +343,7 @@ func (d *Deps) GetShare(w http.ResponseWriter, r *http.Request) {
 		"share": share,
 		// What the recipient still has to supply, worked out from the graph
 		// in front of them.
-		"requirements": RequirementsForImport(share.Graph),
+		"requirements": d.RequirementsForImport(share.Graph),
 	})
 }
 

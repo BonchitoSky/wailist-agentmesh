@@ -63,6 +63,19 @@ function requirementLines(req: ShareImportRequirements): string[] {
         : `Your own Google account, for ${req.connectedAccounts} nodes`,
     );
   }
+  // Named, not counted. "Reconnect Slack and Jira" is something a person can
+  // go and do; "2 connectors" is a number they then have to hunt for. The
+  // sender's tokens were stripped, so every connector in the graph needs the
+  // recipient's own account -- and before this existed the page cheerfully
+  // told somebody importing a Slack workflow it was "ready to run as-is".
+  const connectors = req.connectors ?? [];
+  if (connectors.length > 0) {
+    lines.push(
+      `Your own ${listSentence(connectors.map(titleCase))} ${
+        connectors.length === 1 ? "account" : "accounts"
+      }, reconnected once`,
+    );
+  }
   if (req.files > 0) {
     lines.push(
       req.files === 1
@@ -71,6 +84,21 @@ function requirementLines(req: ShareImportRequirements): string[] {
     );
   }
   return lines;
+}
+
+// Provider names arrive as the graph spells them -- "slack", "gitlab" -- which
+// is a template id, not a brand. Capitalising the first letter is as far as
+// this goes on purpose: a table of proper spellings ("GitLab", "HubSpot")
+// would be one more list to keep in step with the connector registry, and
+// letting that go subtly stale reads worse than a plain capital.
+function titleCase(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function listSentence(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
 export function SharePreview({ token }: { token: string }) {

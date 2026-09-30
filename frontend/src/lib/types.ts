@@ -319,6 +319,11 @@ export interface ShareImportRequirements {
   apiKeys: number;
   files: number;
   connectedAccounts: number;
+  /** Connector providers to reconnect, named and sorted -- ["jira","slack"].
+   *  Optional because a response from a backend older than this field has
+   *  none, and a preview that renders nothing is better than one that trips
+   *  over undefined. */
+  connectors?: string[];
 }
 
 export interface PortCoord {

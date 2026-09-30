@@ -272,6 +272,53 @@ func TestSanitizeForShareRejectsAGraphThatCannotBeWired(t *testing.T) {
 	}
 }
 
+// A recipient importing a connector workflow is told to reconnect it.
+//
+// The connector's token lives in node.Secrets under
+// connectorSecretKey(provider), which the sanitiser drops wholesale -- so by
+// the time requirements are worked out there is no trace of what was taken.
+// The surviving signal is the node's Template, which for an action node IS
+// the provider name. Before this, the preview told somebody importing a Slack
+// workflow that it was "ready to run as-is", and it was not.
+func TestRequirementsNameTheConnectorsTheRecipientMustReconnect(t *testing.T) {
+	var d handlers.Deps
+
+	graph, _ := handlers.SanitizeGraphForShare(models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "n1", Type: models.NodeTypeTrigger, Template: "webhook"},
+			{
+				ID: "n2", Type: models.NodeTypeAction, Template: "slack",
+				Secrets: map[string]string{"slackOAuthAccessToken": "xoxb-fixture"},
+			},
+			// A second node on the same connector is still one account.
+			{
+				ID: "n3", Type: models.NodeTypeAction, Template: "slack",
+				Secrets: map[string]string{"slackOAuthAccessToken": "xoxb-fixture"},
+			},
+			{
+				ID: "n4", Type: models.NodeTypeAction, Template: "github",
+				Secrets: map[string]string{"githubOAuthAccessToken": "gho-fixture"},
+			},
+			// Not a connector: no account to reconnect, nothing to say.
+			{ID: "n5", Type: models.NodeTypeAction, Template: "email"},
+		},
+	})
+
+	req := d.RequirementsForImport(graph)
+	want := []string{"github", "slack"} // sorted, so the sentence is stable
+	if len(req.Connectors) != len(want) {
+		t.Fatalf("Connectors = %v, want %v", req.Connectors, want)
+	}
+	for i, name := range want {
+		if req.Connectors[i] != name {
+			t.Fatalf("Connectors = %v, want %v", req.Connectors, want)
+		}
+	}
+	if !req.Any() {
+		t.Error("a graph needing two accounts reconnected reports nothing to do")
+	}
+}
+
 func TestSanitizeForShareDropsAnEdgeThatReusesAnotherEdgesID(t *testing.T) {
 	// The canvas keys its rendered edges by id, so two edges sharing one give
 	// the recipient a key collision: one of the pair does not draw, and the
