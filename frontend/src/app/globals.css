@@ -577,6 +577,19 @@ body {
     color: var(--danger);
   }
 }
+/* Keyboard focus, which this family was missing entirely while every other
+   button family in this file had it. The share dialogs are reachable by Tab
+   like anything else, and without a ring there was no way to tell which
+   control was about to fire -- including the one that revokes a link. Same
+   accent outline and inset offset as .wfp-card and the rest. */
+.share-primary-btn:focus-visible,
+.share-ghost-btn:focus-visible,
+.share-icon-btn:focus-visible,
+.share-revoke-btn:focus-visible,
+.share-import-btn:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: -2px;
+}
 .share-primary-btn:active:not(:disabled),
 .share-ghost-btn:active:not(:disabled),
 .share-icon-btn:active,
