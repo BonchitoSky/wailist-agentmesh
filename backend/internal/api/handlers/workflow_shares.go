@@ -288,6 +288,30 @@ func (d *Deps) ListWorkflowShares(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"shares": shares})
 }
 
+// ListMyShares returns every link this user has out, across every workflow.
+//
+// The allowance MaxActiveWorkflowShares counts per user, not per workflow, so
+// without this a person at the limit was told to "revoke one" with nowhere to
+// see what they had -- the Share dialog only ever listed the links belonging
+// to the workflow it was opened from.
+func (d *Deps) ListMyShares(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID, _ := ctx.Value(CtxUserID).(string)
+
+	shares, err := d.Store.ListUserShares(ctx, userID)
+	if err != nil {
+		log.Printf("list shares for %s: %v", userID, err)
+		respond.Error(w, http.StatusInternalServerError, "could not load your share links")
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"shares": shares,
+		// So the screen can say "12 of 100" rather than leaving somebody to
+		// discover the ceiling by hitting it.
+		"limit": db.MaxActiveWorkflowShares,
+	})
+}
+
 // RevokeShare kills a link.
 //
 // 404 rather than 403 when the token belongs to somebody else, matching every

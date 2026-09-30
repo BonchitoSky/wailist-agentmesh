@@ -298,6 +298,14 @@ export interface WorkflowShare {
   createdAt: string;
 }
 
+/** One row of "every link I have out". `name` on the share is the snapshot's
+ *  own, frozen when the link was made; `workflowName` is what that workflow is
+ *  called now, which is what the sharer needs to find it again. */
+export interface UserShare extends WorkflowShare {
+  workflowId: string;
+  workflowName: string;
+}
+
 // What sanitising removed, shown to the SHARER before they hand the link over.
 // Counts, not values -- naming the removed key would be a smaller version of
 // the leak being prevented.

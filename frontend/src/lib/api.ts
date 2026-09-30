@@ -16,6 +16,7 @@ import {
   WorkflowNode,
   WorkflowEdge,
   WorkflowShare,
+  UserShare,
   ShareRedactions,
   ShareImportRequirements,
 } from "./types";
@@ -787,6 +788,21 @@ export const shares = {
     }
     await delay(150);
     return [];
+  },
+
+  // GET /shares — every link this user has out, across every workflow.
+  // The allowance is counted per user, so this is the only view that can
+  // answer "which of my links should I revoke?".
+  listMine: async (): Promise<{ shares: UserShare[]; limit: number }> => {
+    if (BASE) {
+      const res = await apiFetch(`${BASE}/shares`, { credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok)
+        throw new Error(data.error ?? "could not load your share links");
+      return { shares: data.shares ?? [], limit: data.limit ?? 0 };
+    }
+    await delay(150);
+    return { shares: [], limit: 100 };
   },
 
   // DELETE /shares/:token

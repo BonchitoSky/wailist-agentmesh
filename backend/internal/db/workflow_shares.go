@@ -224,6 +224,73 @@ func (s *Store) ListWorkflowShares(ctx context.Context, workflowID, userID strin
 	return out, rows.Err()
 }
 
+// UserShare is one row of "every link I have out" -- a different question
+// from "this workflow's links", and it needs one more column to answer:
+// WHICH workflow the link belongs to.
+//
+// The snapshot's own Name is frozen at share time, so a link made before a
+// rename still carries the old one. That is right for the recipient, who was
+// shown exactly that, and wrong for the sharer trying to find the workflow
+// again -- hence WorkflowName beside it.
+type UserShare struct {
+	models.WorkflowShare
+	// Shadows the embedded field, which is json:"-" so the PUBLIC read cannot
+	// leak a workflow id. Here the caller owns the row and needs the id to
+	// open it.
+	WorkflowID   string `json:"workflowId"`
+	WorkflowName string `json:"workflowName"`
+}
+
+// ListUserShares returns every share this user has made, newest first.
+//
+// The link allowance is counted across every workflow, but until this existed
+// the only place to see links was inside one workflow's dialog -- so somebody
+// at the limit was told to revoke something, with no screen anywhere that
+// would show them what they had.
+//
+// The join is inner, not left: workflow_shares.workflow_id is ON DELETE
+// CASCADE, so a row whose workflow is gone is gone too and there is no orphan
+// case to render.
+func (s *Store) ListUserShares(ctx context.Context, userID string) ([]UserShare, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT s.token, s.workflow_id, s.user_id, s.name, s.description, s.graph,
+		       s.node_count, s.edge_count, s.import_count,
+		       s.expires_at, s.revoked_at, s.created_at,
+		       w.name
+		  FROM workflow_shares s
+		  JOIN workflows w ON w.id = s.workflow_id
+		 WHERE s.user_id = $1
+		 ORDER BY s.created_at DESC
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	// Non-nil empty slice: this is serialised straight to JSON, and a user
+	// with no links should render as [] rather than null.
+	out := []UserShare{}
+	for rows.Next() {
+		var row UserShare
+		var graphJSON []byte
+		if err := rows.Scan(
+			&row.Token, &row.WorkflowID, &row.WorkflowShare.UserID,
+			&row.Name, &row.Description, &graphJSON,
+			&row.NodeCount, &row.EdgeCount, &row.ImportCount,
+			&row.ExpiresAt, &row.RevokedAt, &row.CreatedAt,
+			&row.WorkflowName,
+		); err != nil {
+			return nil, err
+		}
+		// graphJSON is read and dropped: this is a list of links, and a
+		// hundred rows have no use for a hundred graphs. The column is still
+		// selected because scanning by position is what every other reader in
+		// this file does, and skipping it here would be the odd one out.
+		_ = graphJSON
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // RevokeWorkflowShare kills a link, and reports via the bool whether THIS
 // call performed a genuine revocation rather than a no-op against a row some
 // other call already closed -- the same distinction MarkTendrilLeaseReleased

@@ -82,6 +82,10 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		// that list beside POST /workflows.
 		r.Post("/workflows/{id}/share", d.CreateShare)
 		r.Get("/workflows/{id}/shares", d.ListWorkflowShares)
+		// Every link this user has out, across every workflow. The allowance
+		// is per user, so this is the only view that can answer "which of my
+		// links should I revoke?".
+		r.Get("/shares", d.ListMyShares)
 		r.Delete("/shares/{token}", d.RevokeShare)
 		r.Post("/shares/{token}/import", d.ImportShare)
 		// The paste-a-code half of the same feature. Its own endpoint rather
