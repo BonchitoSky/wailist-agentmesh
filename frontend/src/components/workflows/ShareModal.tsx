@@ -76,6 +76,29 @@ const isLive = (s: WorkflowShare) =>
   !s.revokedAt &&
   (!s.expiresAt || new Date(s.expiresAt).getTime() > Date.now());
 
+// What a link's life says about it, in the words the sharer thinks in.
+//
+// A revoked or expired link stays on screen rather than disappearing. The
+// listing returns them deliberately, and "I revoked that one" is the answer
+// to "why did my friend say the link was dead" -- which a row that quietly
+// vanished cannot give.
+function lifeOf(s: WorkflowShare): { label: string; dead: boolean } {
+  if (s.revokedAt) return { label: "Revoked", dead: true };
+  if (!s.expiresAt) return { label: "Never expires", dead: false };
+  const ms = new Date(s.expiresAt).getTime() - Date.now();
+  if (Number.isNaN(ms)) return { label: "Never expires", dead: false };
+  if (ms <= 0) return { label: "Expired", dead: true };
+  const days = Math.ceil(ms / 86_400_000);
+  if (days === 1) return { label: "Expires tomorrow", dead: false };
+  return { label: `Expires in ${days} days`, dead: false };
+}
+
+function importsOf(s: WorkflowShare): string {
+  const n = s.importCount ?? 0;
+  if (n === 0) return "no imports yet";
+  return n === 1 ? "1 import" : `${n} imports`;
+}
+
 // Sentences, not a count table. "your API key" is what a person needs to hear;
 // "apiKeys: 1" is what the API happens to return.
 function redactionLines(r: ShareRedactions): string[] {
@@ -112,6 +135,10 @@ export function ShareModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<"link" | "code" | null>(null);
+  // The token whose Revoke button is currently asking "Revoke?". One at a
+  // time: arming a second row disarms the first, which is what a person
+  // expects and saves a per-row state.
+  const [confirming, setConfirming] = useState<string | null>(null);
   const loading = !share && !error;
 
   useModalDismissal(onClose);
@@ -210,11 +237,31 @@ export function ShareModal({
     }
   };
 
+  // Revoking asks first, inline, by turning the button into "Revoke?".
+  //
+  // It is instant and irreversible, and the link may already be in somebody
+  // else's inbox -- so a stray click on a 26px button should not be the whole
+  // interaction. Inline rather than a nested confirm dialog: a second modal
+  // over this one is heavier than the decision warrants, and the row itself
+  // is the thing being talked about.
   const handleRevoke = async (token: string) => {
+    if (confirming !== token) {
+      setConfirming(token);
+      return;
+    }
+    setConfirming(null);
     setError(null);
     try {
       await sharesApi.revoke(token);
-      setOthers((prev) => prev.filter((s) => s.token !== token));
+      // Marked revoked in place rather than dropped, so the sharer can see
+      // what they just did. lifeOf() greys it and the Revoke button goes.
+      const stamp = new Date().toISOString();
+      setOthers((prev) =>
+        prev.map((s) => (s.token === token ? { ...s, revokedAt: stamp } : s)),
+      );
+      setShare((cur) =>
+        cur && cur.token === token ? { ...cur, revokedAt: stamp } : cur,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "could not revoke that link");
     }
@@ -231,7 +278,13 @@ export function ShareModal({
   const mailUrl = `mailto:?subject=${encodeURIComponent(caption)}&body=${encodeURIComponent(`${caption}\n\n${url}`)}`;
 
   const lines = redactions ? redactionLines(redactions) : [];
-  const liveOthers = others.filter(isLive);
+  const currentLife = share
+    ? lifeOf(share)
+    : { label: "", dead: false as boolean };
+  // Every other link, dead ones included. They used to be filtered out, which
+  // threw away the only record of what had been handed out and then pulled
+  // back -- and the backend returns them precisely so this view can show them.
+  const otherLinks = others;
 
   return (
     <div
@@ -362,13 +415,48 @@ export function ShareModal({
                 marginBottom: 10,
               }}
             />
+            {/* What this particular link's life looks like, and how much use
+                it has had. Both were previously shown for every OTHER link
+                but never for the one on screen -- so the most interesting
+                question a sharer has ("has anyone actually used it?") was the
+                one the dialog would not answer. */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                marginBottom: 10,
+                fontSize: 11.5,
+                color: currentLife.dead ? "var(--warm)" : "var(--fg-dim)",
+              }}
+            >
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                {currentLife.label} · {importsOf(share)}
+              </span>
+              {isLive(share) && (
+                <button
+                  type="button"
+                  onClick={() => void handleRevoke(share.token)}
+                  className="share-revoke-btn"
+                >
+                  {confirming === share.token ? "Revoke?" : "Revoke"}
+                </button>
+              )}
+            </div>
+
             <button
               type="button"
               onClick={handleCopyLink}
+              disabled={currentLife.dead}
               className="share-primary-btn"
             >
               <IconCopy size={13} />{" "}
-              {copied === "link" ? "Copied!" : "Copy link"}
+              {currentLife.dead
+                ? "This link is dead"
+                : copied === "link"
+                  ? "Copied!"
+                  : "Copy link"}
             </button>
 
             <div style={{ display: "flex", gap: 8, margin: "10px 0 14px" }}>
@@ -386,12 +474,35 @@ export function ShareModal({
               <button
                 type="button"
                 onClick={handleCopyCode}
-                disabled={busy}
+                disabled={busy || currentLife.dead}
                 className="share-ghost-btn"
+                title="A code works without a link, but cannot be revoked"
               >
                 <IconCopy size={13} /> {copied === "code" ? "Copied!" : "Code"}
               </button>
             </div>
+
+            {/* Said out loud, because the rest of this dialog implies the
+                opposite. Everything else here can be pulled back -- there is
+                a Revoke on every link and an expiry select -- and a code sits
+                among them looking like one more way to send the same thing.
+                It is not: a code is the graph itself, so once it is out there
+                is nothing left to revoke. */}
+            {copied === "code" && (
+              <div
+                style={{
+                  margin: "0 0 12px",
+                  fontSize: 11.5,
+                  lineHeight: 1.6,
+                  color: "var(--warm)",
+                  maxWidth: "60ch",
+                }}
+              >
+                A code carries the workflow itself, so it keeps working even
+                after you revoke the link. Send a link if you might change your
+                mind.
+              </div>
+            )}
 
             <div
               style={{
@@ -427,14 +538,18 @@ export function ShareModal({
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
-                marginBottom: liveOthers.length > 0 ? 12 : 0,
+                marginBottom: otherLinks.length > 0 ? 12 : 0,
               }}
             >
+              {/* Worded so it cannot be read as applying to the link above.
+                  It sets the expiry of the link the button beside it MAKES --
+                  labelled "New link expires", people reasonably read it as
+                  putting an expiry on the one they had just copied. */}
               <label
                 htmlFor="share-expiry"
                 style={{ fontSize: 11.5, color: "var(--fg-dim)" }}
               >
-                New link expires
+                Make another, expiring in
               </label>
               <select
                 id="share-expiry"
@@ -463,11 +578,11 @@ export function ShareModal({
                 className="share-ghost-btn"
                 style={{ flex: "0 0 auto", padding: "0 12px" }}
               >
-                New link
+                Make it
               </button>
             </div>
 
-            {liveOthers.length > 0 && (
+            {otherLinks.length > 0 && (
               <div>
                 <div
                   style={{
@@ -476,9 +591,9 @@ export function ShareModal({
                     marginBottom: 6,
                   }}
                 >
-                  Other live links
+                  Other links to this workflow
                 </div>
-                {liveOthers.map((s) => (
+                {otherLinks.map((s) => (
                   <div
                     key={s.token}
                     style={{
@@ -498,17 +613,25 @@ export function ShareModal({
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
+                        // A dead link is kept, and shown as spent rather than
+                        // as an option.
+                        opacity: lifeOf(s).dead ? 0.55 : 1,
+                        textDecoration: lifeOf(s).dead
+                          ? "line-through"
+                          : undefined,
                       }}
                     >
-                      …{s.token.slice(-8)} · {s.importCount ?? 0} imports
+                      …{s.token.slice(-8)} · {importsOf(s)} · {lifeOf(s).label}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => void handleRevoke(s.token)}
-                      className="share-revoke-btn"
-                    >
-                      Revoke
-                    </button>
+                    {isLive(s) && (
+                      <button
+                        type="button"
+                        onClick={() => void handleRevoke(s.token)}
+                        className="share-revoke-btn"
+                      >
+                        {confirming === s.token ? "Revoke?" : "Revoke"}
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>

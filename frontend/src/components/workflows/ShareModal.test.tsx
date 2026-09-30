@@ -1,13 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 // The dialog is tested against a stubbed API, the way WorkflowsPage is. What
 // matters here is which calls it makes and what it says about them, not the
 // network.
-const state = vi.hoisted(() => ({ create: vi.fn(), listFor: vi.fn() }));
+const state = vi.hoisted(() => ({
+  create: vi.fn(),
+  listFor: vi.fn(),
+  revoke: vi.fn(),
+}));
 
 vi.mock("@/lib/api", () => ({
-  shares: { create: state.create, listFor: state.listFor },
+  shares: {
+    create: state.create,
+    listFor: state.listFor,
+    revoke: state.revoke,
+  },
 }));
 vi.mock("@/hooks/useModalDismissal", () => ({ useModalDismissal: () => {} }));
 
@@ -37,6 +45,7 @@ const REDACTIONS = {
 beforeEach(() => {
   state.create.mockResolvedValue({ share: SHARE, redactions: REDACTIONS });
   state.listFor.mockResolvedValue([SHARE]);
+  state.revoke.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -67,15 +76,45 @@ describe("ShareModal", () => {
     expect(summary.textContent).toMatch(/webhook secret/);
   });
 
-  it("keeps the link on offer out of the revoke list", async () => {
+  it("keeps the link on offer out of the list below it", async () => {
     state.listFor.mockResolvedValue([SHARE, { ...SHARE, token: "tok-older" }]);
 
     render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
     await screen.findByText(/Not included:/);
-    await screen.findByText(/Other live links/);
+    await screen.findByText(/Other links to this workflow/);
 
-    // Two links exist, but the one shown above is not also something to
-    // revoke underneath -- listed twice it reads as two different links.
-    expect(screen.getAllByRole("button", { name: "Revoke" })).toHaveLength(1);
+    // Two links exist, but the one shown above is not repeated underneath --
+    // listed twice it reads as two different links. Tokens render as their
+    // last 8 characters.
+    expect(await screen.findByText(/ok-older/)).toBeTruthy();
+    expect(screen.queryAllByText(/k-current/)).toHaveLength(0);
+  });
+
+  it("still shows a link that has been revoked", async () => {
+    // The backend returns revoked and expired links deliberately, and this
+    // view used to filter them out -- throwing away the only record of what
+    // had been handed out and then pulled back. "I revoked that one" is the
+    // answer to "your link is dead".
+    state.listFor.mockResolvedValue([
+      SHARE,
+      { ...SHARE, token: "tok-dead", revokedAt: new Date().toISOString() },
+    ]);
+
+    render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    const row = await screen.findByText(/ok-dead/);
+    expect(row.textContent).toMatch(/Revoked/);
+  });
+
+  it("asks before revoking, because a link cannot be un-revoked", async () => {
+    render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    const revoke = await screen.findByRole("button", { name: "Revoke" });
+
+    fireEvent.click(revoke);
+    // The first press only arms it.
+    expect(state.revoke).not.toHaveBeenCalled();
+    const armed = await screen.findByRole("button", { name: "Revoke?" });
+
+    fireEvent.click(armed);
+    expect(state.revoke).toHaveBeenCalledWith("tok-current");
   });
 });
