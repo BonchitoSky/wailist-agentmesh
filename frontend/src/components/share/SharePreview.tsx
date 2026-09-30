@@ -175,12 +175,10 @@ export function SharePreview({ token }: { token: string }) {
             textDecoration: "none",
           }}
         >
+          {/* Logo draws the mark AND the wordmark, which is how Topbar and the
+              sign-in screen use it. This page used to add a second
+              "AgentMesh" beside it, so the header read the name twice. */}
           <Logo size={20} />
-          <span
-            style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-0.01em" }}
-          >
-            AgentMesh
-          </span>
         </Link>
       </header>
 
