@@ -1401,7 +1401,11 @@ function CanvasTopbar({
         </span>
       </div>
 
-      {can("workflow.deploy", readOnly) && (
+      {/* Its own gate, not Deploy's. Sharing creates nothing and edits
+          nothing, so it has no business rising and falling with the right to
+          deploy -- the two shared one condition purely because they sit next
+          to each other in the toolbar. */}
+      {can("workflow.share", readOnly) && (
         <>
           <button
             style={{ ...ghostBtnSm, color: "var(--fg)" }}
@@ -1421,10 +1425,12 @@ function CanvasTopbar({
           >
             {preparingShare ? "Saving…" : "Share"}
           </button>
-          <button onClick={onDeploy} style={btnStyle}>
-            {deployed ? "Re-deploy" : "Deploy"}
-          </button>
         </>
+      )}
+      {can("workflow.deploy", readOnly) && (
+        <button onClick={onDeploy} style={btnStyle}>
+          {deployed ? "Re-deploy" : "Deploy"}
+        </button>
       )}
       {shareOpen && (
         <ShareModal
