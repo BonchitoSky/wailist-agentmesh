@@ -2626,6 +2626,13 @@ body[data-typing] .bottomnav {
   font-family: var(--font-mono);
   font-size: 11px;
 }
+.usgp-scope > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.usgp-scope > button {
+  flex: 0 0 auto;
+}
 /* Three ranges, not the four amounts .bilp-seg was written for. */
 .usgp-seg {
   grid-template-columns: repeat(3, 1fr);
