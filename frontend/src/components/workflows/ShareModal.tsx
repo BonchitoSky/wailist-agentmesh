@@ -141,7 +141,7 @@ export function ShareModal({
   const [confirming, setConfirming] = useState<string | null>(null);
   const loading = !share && !error;
 
-  useModalDismissal(onClose);
+  const dialogRef = useModalDismissal(onClose);
 
   // One call, and the server decides whether this is a new link or one the
   // workflow already has. Opening the dialog four times should not leave four
@@ -317,6 +317,7 @@ export function ShareModal({
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Share workflow"

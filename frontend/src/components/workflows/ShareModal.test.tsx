@@ -17,7 +17,11 @@ vi.mock("@/lib/api", () => ({
     revoke: state.revoke,
   },
 }));
-vi.mock("@/hooks/useModalDismissal", () => ({ useModalDismissal: () => {} }));
+vi.mock("@/hooks/useModalDismissal", () => ({
+  // Hands back a ref, the way the real hook does -- the dialog puts it on
+  // its panel.
+  useModalDismissal: () => ({ current: null }),
+}));
 
 import { ShareModal } from "./ShareModal";
 

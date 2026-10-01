@@ -67,7 +67,7 @@ export function ImportModal({
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useModalDismissal(onClose);
+  const dialogRef = useModalDismissal(onClose);
 
   const handlePasteFromClipboard = async () => {
     try {
@@ -193,6 +193,7 @@ export function ImportModal({
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Import workflow"

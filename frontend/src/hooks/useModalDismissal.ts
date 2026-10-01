@@ -1,17 +1,27 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useCloseOnBack } from "./useCloseOnBack";
 
-// Shared modal behavior: close on Escape, and lock body scroll while active
-// so whatever's behind the modal can't scroll. Previously hand-rolled
-// separately in CheckoutModal and AddToWorkflowDialog (the second copy's own
-// comment said "matching CheckoutModal") — a future fix (e.g. nested-dialog
-// scroll-unlock ordering) now only has to be applied here once.
+// Shared modal behavior: close on Escape, lock body scroll while active so
+// whatever's behind the modal can't scroll, and keep Tab inside the dialog.
+// Previously hand-rolled separately in CheckoutModal and AddToWorkflowDialog
+// (the second copy's own comment said "matching CheckoutModal") -- a future fix
+// (e.g. nested-dialog scroll-unlock ordering) now only has to be applied here
+// once.
 //
 // `active` defaults to true for a dialog that's only ever mounted while open
 // (e.g. AddToWorkflowDialog, rendered conditionally by its parent); pass it
 // explicitly for a component that stays mounted and toggles visibility
 // itself (e.g. CheckoutModal's `open` prop).
-export function useModalDismissal(onClose: () => void, active = true) {
+//
+// Returns a ref the caller puts on its panel -- the element carrying
+// role="dialog". See the focus effect below for why the hook has to be told
+// rather than work it out.
+export function useModalDismissal<T extends HTMLElement = HTMLDivElement>(
+  onClose: () => void,
+  active = true,
+) {
+  const dialogRef = useRef<T | null>(null);
+
   // The Android Back gesture closes the dialog instead of leaving the page
   // under it. The function useCloseOnBack returns is not needed here: every
   // dialog using this hook closes through its own onClose, and the hook takes
@@ -46,27 +56,23 @@ export function useModalDismissal(onClose: () => void, active = true) {
   // In the hook rather than in each dialog, for the reason this file already
   // gives: four dialogs use it, and a trap implemented four times is a trap
   // implemented wrong three times.
+  //
+  // The panel arrives as a ref because asking the document for it does not
+  // work. RunSheet (which traps focus itself), NotificationsSheet and the
+  // Topbar menu all render aria-modal without going through this hook, so
+  // "the first [aria-modal='true'] in the document" can be somebody else's
+  // element -- and trapping focus in the wrong one is worse than not trapping
+  // at all. An earlier version handled that by giving up whenever more than
+  // one was open, which was safe but left the keyboard user with exactly the
+  // behaviour this exists to remove. The caller knows which element is its
+  // own; nothing else does.
   useEffect(() => {
     if (!active) return;
+    const dialog = dialogRef.current;
     // Where focus was before the dialog opened -- the row menu item, the
     // toolbar button. Putting it back is what lets somebody carry on down the
     // list instead of being dropped at the top of the document.
     const previous = document.activeElement as HTMLElement | null;
-
-    // Exactly one, or none at all.
-    //
-    // Several components render aria-modal without going through this hook --
-    // RunSheet (which traps focus itself), NotificationsSheet, the Topbar
-    // menu. If one of those were open when a dialog using this hook opened,
-    // taking "the first aria-modal in the document" could trap focus inside
-    // the WRONG element, which is worse than not trapping at all. Skipping
-    // when the answer is ambiguous leaves those cases behaving exactly as
-    // they do today, and costs nothing: one dialog on screen is the
-    // overwhelmingly common case.
-    const openDialogs = document.querySelectorAll<HTMLElement>(
-      "[aria-modal='true']",
-    );
-    const dialog = openDialogs.length === 1 ? openDialogs[0] : null;
 
     // Focus the dialog itself rather than its first control: a dialog whose
     // first control is destructive should not open with that control armed
@@ -101,13 +107,25 @@ export function useModalDismissal(onClose: () => void, active = true) {
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
-      // Only when focus is still inside the dialog. One that closed BECAUSE
-      // the app navigated has already put focus where it wants it, and
-      // yanking it back to a button that no longer exists is worse than
-      // leaving it be.
-      if (previous?.isConnected && dialog?.contains(document.activeElement)) {
+      // Only when nothing else has claimed focus in the meantime.
+      //
+      // "Still inside the dialog" is the obvious test and it is the wrong one:
+      // three of the four dialogs close by being UNMOUNTED, and React runs this
+      // cleanup after it has already taken the panel out of the document --
+      // at which point focus has fallen to <body> and the panel contains
+      // nothing. Written that way the restore silently never happened for
+      // them, which is the whole point of keeping `previous` around.
+      //
+      // `previous.isConnected` is what keeps the original intent: a dialog
+      // that closed BECAUSE the app navigated leaves its opener detached, so
+      // focus is not yanked back to a button that no longer exists.
+      const on = document.activeElement;
+      const unclaimed = !on || on === document.body || dialog?.contains(on);
+      if (previous?.isConnected && unclaimed) {
         previous.focus({ preventScroll: true });
       }
     };
   }, [active]);
+
+  return dialogRef;
 }
