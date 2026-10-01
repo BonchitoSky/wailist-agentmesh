@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/agentmesh/backend/internal/engine/nodes"
@@ -130,11 +131,32 @@ func DryRun(ctx context.Context, graph models.WorkflowGraph, opts DryRunOptions)
 				res.Steps = append(res.Steps, step)
 				res.Unverified = true
 				return res
+			case err != nil && nodes.IsDegradable(n):
+				// A real run does not stop here: a read step's failure is
+				// handed downstream as an error payload and the run carries
+				// on (engine.Runner). Stopping would judge the workflow by
+				// behaviour it no longer has, and would never show the
+				// builder the answer the user will actually get.
+				//
+				// Still Failed, though. This runs while the workflow is being
+				// built, where a failing source is usually a wrong id, a wrong
+				// path or a dead API that the builder can fix -- and the test
+				// gate is what sends it back to fix them.
+				step.Status, step.Error = "failed", nodes.SanitizeRunError(err.Error())
+				res.Steps = append(res.Steps, step)
+				res.Failed = true
+				res.Degraded = true
+				rc.Set(n.ID, map[string]any{
+					"error":    nodes.SanitizeRunError(err.Error()),
+					"degraded": true,
+					"node":     n.Name,
+				})
+				continue
 			case err != nil:
 				step.Status, step.Error = "failed", nodes.SanitizeRunError(err.Error())
 				res.Steps = append(res.Steps, step)
 				res.Failed = true
-				return res // a run stops at its first failure, and so does this
+				return res // an action's failure ends a real run, and this one
 			}
 			// What a simulated step would have sent, worked out before its own
 			// placeholder output is Set: a body or message template reads
@@ -282,25 +304,23 @@ func dryRunNode(ctx context.Context, n models.WorkflowNode, attach models.Attach
 		// out rather than invoked.
 		safe := attach
 		safe.Tools = nil
+		var withheld []string
 		for _, t := range attach.Tools {
 			if ok, _ := nodes.DryRunExecutes(t); ok {
 				safe.Tools = append(safe.Tools, t)
+				continue
 			}
+			name := t.Name
+			if name == "" {
+				name = t.ID
+			}
+			withheld = append(withheld, name)
 		}
 		out, err := nodes.ExecuteAgent(ctx, n, safe, models.AgentWallet{}, nil, rc, nil, opts.PlatformKeys, nodes.X402RelayConfig{})
-		// A model call's 401 surfaces on the agent, but the key that was
-		// refused belongs to the attached provider. On BYOK that key is the
-		// user's own, pasted in the Inspector, so this is theirs to fix and
-		// not a workflow the builder should be sent to repair. A platform key
-		// is nobody's to paste, so it stays a plain failure.
-		if err != nil && nodes.IsAuthRejection(err.Error()) {
-			if p := attach.Provider; p != nil && p.KeyMode != "platform" {
-				return nil, "", unverifiable{nodes.CredentialRejectedOrMissing(*p)}
-			}
-		}
-		// Charged after the call, like a run (Runner.debitOrLog): the model
-		// has already been paid for by then, so a failed charge is logged
-		// rather than turned into a step failure.
+		// Charged as soon as the call returns, before anything classifies the
+		// result: the model has been paid for whatever we decide the output
+		// means, and the branches below return early. A failed charge is
+		// logged rather than turned into a step failure.
 		//
 		// Detached from ctx, with its own timeout, as the runner's ledger
 		// writes are (ledgerCompensationTimeout): ctx ends at the build's time
@@ -312,6 +332,27 @@ func dryRunNode(ctx context.Context, n models.WorkflowNode, attach models.Attach
 				log.Printf("dry run: charge agent %s (%d micros): %v", n.ID, platformFee, cerr)
 			}
 			cancel()
+		}
+		// A model call's 401 surfaces on the agent, but the key that was
+		// refused belongs to the attached provider. On BYOK that key is the
+		// user's own, pasted in the Inspector, so this is theirs to fix and
+		// not a workflow the builder should be sent to repair. A platform key
+		// is nobody's to paste, so it stays a plain failure.
+		if err != nil && nodes.IsAuthRejection(err.Error()) {
+			if p := attach.Provider; p != nil && p.KeyMode != "platform" {
+				return nil, "", unverifiable{nodes.CredentialRejectedOrMissing(*p)}
+			}
+		}
+		// A tool this run may not call is the test's limit, not the
+		// workflow's fault -- reported as a failure it sent the builder to
+		// repair a correct workflow. Only when the agent had nothing to say,
+		// though: a call that errored produces no output either, so without
+		// the err check a 429 or a bad model name was excused too.
+		if len(withheld) > 0 &&
+			((err == nil && nodes.IsEmptyOutput(out)) || errors.Is(err, nodes.ErrNoModelText)) {
+			return nil, "", unverifiable{fmt.Sprintf(
+				"a test run never calls %s, so this agent had nothing to work from and its answer cannot be checked",
+				strings.Join(withheld, ", "))}
 		}
 		return out, "", err
 	}

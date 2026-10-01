@@ -3,11 +3,13 @@ package nodes
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -236,16 +238,18 @@ func TestBuildGraphAddsNodeThenReturnsReply(t *testing.T) {
 // produced the most work. Replaces the old TestBuildGraphIterationCap, which
 // asserted that error.
 func TestBuildGraphOutOfIterationsKeepsWhatItBuilt(t *testing.T) {
-	// Always answer with another add_node call, so the loop can never
-	// terminate on its own and must hit the cap.
+	// Always another add_node, so the loop must hit the cap. Distinct each
+	// time -- an identical one is refused as a rebuild.
+	var round int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"candidates": []map[string]any{
 				{"content": map[string]any{"parts": []map[string]any{
 					{"functionCall": map[string]any{
 						"name": "add_node",
-						"args": map[string]any{"type": "tool", "template": "calc"},
+						"args": map[string]any{"type": "tool", "template": "calc", "name": fmt.Sprintf("Step %d", round)},
 					}},
 				}}},
 			},
@@ -760,10 +764,19 @@ func TestBuildGraphSearchesAndAddsX402Node(t *testing.T) {
 	SetGeminiBaseURL(srv.URL)
 	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
 
+	// add_x402_node probes the endpoint before wiring it in, so the entry
+	// has to point at something that answers a real payment challenge.
+	endpoint := httptest.NewServer(challenge402("5000"))
+	defer endpoint.Close()
+	SetURLValidatorForTest(func(string) error { return nil })
+	defer SetURLValidatorForTest(func(string) error { return nil })
+	entry := sampleX402()
+	entry.URL = endpoint.URL + "/v1/index"
+
 	res, err := BuildGraph(context.Background(), BuildRequest{
 		APIKey: "k", Message: "fetch NSE index prices",
 		X402Catalog: func(context.Context) ([]bazaar.Resource, error) {
-			return []bazaar.Resource{sampleX402()}, nil
+			return []bazaar.Resource{entry}, nil
 		},
 	})
 	if err != nil {
@@ -780,8 +793,51 @@ func TestBuildGraphSearchesAndAddsX402Node(t *testing.T) {
 			x402 = &res.Graph.Nodes[i]
 		}
 	}
-	if x402 == nil || x402.Endpoint != "https://stocks.example.com/v1/index" {
+	if x402 == nil || x402.Endpoint != entry.URL {
 		t.Fatalf("want a tool402 node on the catalog endpoint, got %+v", res.Graph.Nodes)
+	}
+}
+
+// The same build, against an endpoint that is no longer there: the node must
+// not reach the canvas, because adding it means a real payment for nothing.
+func TestBuildGraphWillNotAddADeadX402Endpoint(t *testing.T) {
+	turn := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		turn++
+		w.Header().Set("Content-Type", "application/json")
+		switch turn {
+		case 1:
+			io.WriteString(w, `{"candidates":[{"content":{"parts":[{"functionCall":{"name":"add_x402_node","args":{"id":"res-stocks-1"}}}]}}]}`)
+		default:
+			io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"That endpoint is gone."}]}}]}`)
+		}
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer dead.Close()
+	SetURLValidatorForTest(func(string) error { return nil })
+	defer SetURLValidatorForTest(func(string) error { return nil })
+	entry := sampleX402()
+	entry.URL = dead.URL + "/v1/index"
+
+	res, err := BuildGraph(context.Background(), BuildRequest{
+		APIKey: "k", Message: "fetch NSE index prices",
+		X402Catalog: func(context.Context) ([]bazaar.Resource, error) {
+			return []bazaar.Resource{entry}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, n := range res.Graph.Nodes {
+		if n.Type == models.NodeTypeTool402 {
+			t.Fatalf("a dead endpoint reached the canvas: %+v", n)
+		}
 	}
 }
 
@@ -872,6 +928,20 @@ func TestJSONPathToDotPath(t *testing.T) {
 		if got := toDotPath(in); got != want {
 			t.Errorf("toDotPath(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestThePromptSaysWhatToDoWithAnUnlistedToken(t *testing.T) {
+	// Checked on the standing instructions alone: the catalog section below
+	// them also mentions resolve_coin, in a template note, and must not be
+	// what makes this pass.
+	for _, want := range []string{"resolve_coin", "not listed"} {
+		if !strings.Contains(builderPromptTemplate, want) {
+			t.Errorf("the prompt never mentions %q", want)
+		}
+	}
+	if !strings.Contains(buildSystemPrompt, "not listed on CoinGecko") {
+		t.Error("the built prompt lost the unlisted-token instruction")
 	}
 }
 
@@ -971,6 +1041,16 @@ func TestFetchURLReportsStatusAndBody(t *testing.T) {
 	}
 	if got := fetchURL(context.Background(), "file:///etc/passwd"); !strings.Contains(got, "error") {
 		t.Fatalf("a non-http URL must be refused, got: %s", got)
+	}
+}
+
+func TestResolveCoinIsDeclaredToTheModel(t *testing.T) {
+	var names []string
+	for _, d := range graphToolDecls() {
+		names = append(names, d.Name)
+	}
+	if !slices.Contains(names, "resolve_coin") {
+		t.Fatalf("resolve_coin is not declared; tools are %v", names)
 	}
 }
 
@@ -1848,5 +1928,655 @@ func TestTestedAnswerNeverSubstitutesAnUnrelatedAgentReply(t *testing.T) {
 	r := DryRunResult{FinalSimulated: true, WouldSend: "", Answer: "BTC is 60000 dollars."}
 	if got := testedAnswer(r); got != "" {
 		t.Fatalf("a simulated step that would carry nothing has no answer, got %q", got)
+	}
+}
+
+// A system prompt is sent verbatim, so a {{ ... }} in one is never resolved
+// and the agent reads the braces.
+func TestAgentSystemPromptRejectsTemplateRefs(t *testing.T) {
+	for _, prompt := range []string{
+		"Report the price from {{ result }}",
+		"Summarise {{ node.n_1.data }} in one line",
+		"Use {{ input }} as the city",
+	} {
+		graph := &models.WorkflowGraph{}
+		_, err := addGraphNode(graph, map[string]any{
+			"type": "agent", "template": "agent",
+			"fields": map[string]any{"systemPrompt": prompt},
+		})
+		if err == nil {
+			t.Fatalf("systemPrompt %q was accepted; it would reach the model as literal braces", prompt)
+		}
+		if !strings.Contains(err.Error(), "systemPrompt") {
+			t.Errorf("error should name the setting, got %v", err)
+		}
+	}
+}
+
+func TestAgentSystemPromptWithoutRefsIsAccepted(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	if _, err := addGraphNode(graph, map[string]any{
+		"type": "agent", "template": "agent",
+		"fields": map[string]any{"systemPrompt": "State the price in USD in one sentence"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 5 of 16 live builds rebuilt the whole workflow on a later round -- 2-5
+// triggers, up to 30 nodes -- and every one failed or produced nothing.
+func TestAddNodeRefusesASecondTrigger(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	if _, err := addGraphNode(graph, map[string]any{"type": "trigger", "template": "manual"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := addGraphNode(graph, map[string]any{"type": "trigger", "template": "chat"})
+	if err == nil {
+		t.Fatal("a second trigger was accepted")
+	}
+	if !strings.Contains(err.Error(), "already has a trigger") {
+		t.Errorf("the error must say what to do instead, got %v", err)
+	}
+	if len(graph.Nodes) != 1 {
+		t.Errorf("the graph must be left alone, got %d nodes", len(graph.Nodes))
+	}
+}
+
+// The same rebuild: a second copy of a step it already added.
+func TestAddNodeRefusesAnIdenticalNode(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	args := map[string]any{
+		"type": "action", "template": "coingecko", "name": "Get Price",
+		"config": map[string]any{"cgIDs": "ethereum"},
+	}
+	first, err := addGraphNode(graph, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Fields(first)[2]
+	_, err = addGraphNode(graph, args)
+	if err == nil {
+		t.Fatal("an identical node was added twice")
+	}
+	if !strings.Contains(err.Error(), id) {
+		t.Errorf("the error must name the node that already exists (%s), got %v", id, err)
+	}
+	// A genuinely different node of the same template is still fine.
+	if _, err := addGraphNode(graph, map[string]any{
+		"type": "action", "template": "coingecko", "name": "Get Bitcoin",
+		"config": map[string]any{"cgIDs": "bitcoin"},
+	}); err != nil {
+		t.Fatalf("a different coingecko node must still be allowed: %v", err)
+	}
+}
+
+// Gemini can answer with no text part at all -- three times in one evening.
+// One build died on its first round and lost everything it had built.
+func TestBuildGraphRetriesAnEmptyModelResponse(t *testing.T) {
+	var round int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		w.Header().Set("Content-Type", "application/json")
+		if round == 1 {
+			// A candidate whose content has no text and no function call.
+			json.NewEncoder(w).Encode(map[string]any{
+				"candidates": []map[string]any{
+					{"finishReason": "MAX_TOKENS", "content": map[string]any{"role": "model"}},
+				},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{"content": map[string]any{"parts": []map[string]any{{"text": "Built it."}}}},
+			},
+		})
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	res, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "build something", Graph: models.WorkflowGraph{}})
+	if err != nil {
+		t.Fatalf("an empty response must be retried, not surfaced: %v", err)
+	}
+	if res.Reply != "Built it." {
+		t.Fatalf("want the retried reply, got %q", res.Reply)
+	}
+}
+
+// A live build added a tool402 node named after a Bazaar id with no
+// endpoint: configured-looking on the canvas, unrunnable in fact.
+func TestAddNodeRefusesATool402WithNoEndpoint(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	_, err := addGraphNode(graph, map[string]any{
+		"type": "tool402", "template": "agent402.tools", "name": "Crypto Price",
+	})
+	if err == nil {
+		t.Fatal("a tool402 node with no endpoint was accepted")
+	}
+	if !strings.Contains(err.Error(), "add_x402_node") {
+		t.Errorf("the error must point at the tool that fills one in, got %v", err)
+	}
+	if _, err := addGraphNode(graph, map[string]any{
+		"type": "tool402", "template": "prices", "name": "Prices",
+		"fields": map[string]any{"endpoint": "https://api.example.com/x402/prices", "method": "GET"},
+	}); err != nil {
+		t.Fatalf("a tool402 node with an endpoint must still be allowed: %v", err)
+	}
+}
+
+// A "%" anywhere in the graph -- a %20 in a url, "50%" in a description --
+// eats the findings if the graph is spliced into the format string.
+func TestRepairRoundSurvivesAPercentInTheGraph(t *testing.T) {
+	graph := models.WorkflowGraph{Nodes: []models.WorkflowNode{
+		{ID: "n1", Type: models.NodeTypeTool, Template: "http", URL: "https://api.x.com/s?q=a%20b&pct=50%"},
+	}}
+	msg := graphSnapshot(graph) + fmt.Sprintf("problems:\n- %s\n", "agent n1 has no model")
+	if strings.Contains(msg, "%!") || strings.Contains(msg, "MISSING") {
+		t.Fatalf("the graph was read as a format string: %s", msg)
+	}
+	if !strings.Contains(msg, "agent n1 has no model") {
+		t.Fatalf("the findings were lost: %s", msg)
+	}
+	if !strings.Contains(msg, "a%20b") {
+		t.Fatalf("the url was mangled: %s", msg)
+	}
+}
+
+// {{ state.x }} is resolved in a system prompt (runner.go ExpandState).
+func TestAgentSystemPromptAllowsStateRefs(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	if _, err := addGraphNode(graph, map[string]any{
+		"type": "agent", "template": "agent",
+		"fields": map[string]any{"systemPrompt": "Answer in {{ state.language }}, one sentence"},
+	}); err != nil {
+		t.Fatalf("a state reference is resolved at run time and must be allowed: %v", err)
+	}
+}
+
+// Two branches can each end in their own end node.
+func TestAddNodeAllowsASecondEndNode(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	if _, err := addGraphNode(graph, map[string]any{"type": "end", "template": "done", "name": "End"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := addGraphNode(graph, map[string]any{"type": "end", "template": "done", "name": "End"}); err != nil {
+		t.Fatalf("a second branch needs its own end node: %v", err)
+	}
+}
+
+// The guard must hold for agents, whose prompt is stored with the answer
+// guard appended.
+func TestAddNodeRefusesAnIdenticalAgent(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	args := map[string]any{
+		"type": "agent", "template": "agent", "name": "Explain",
+		"fields": map[string]any{"systemPrompt": "State the price in USD in one sentence"},
+	}
+	if _, err := addGraphNode(graph, args); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := addGraphNode(graph, args); err == nil {
+		t.Fatal("the same agent was added twice")
+	}
+}
+
+// A live build wrote JavaScript-style keys into setFields and the run died.
+func TestSetFieldsMustBeAJSONObject(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	_, err := addGraphNode(graph, map[string]any{
+		"type": "tool", "template": "set", "name": "Combine",
+		"config": map[string]any{"setFields": `{story: "{{ input }}", price: "{{ result }}"}`},
+	})
+	if err == nil {
+		t.Fatal("malformed setFields was accepted")
+	}
+	if !strings.Contains(err.Error(), "setFields") {
+		t.Errorf("the error must name the setting, got %v", err)
+	}
+	if _, err := addGraphNode(graph, map[string]any{
+		"type": "tool", "template": "set", "name": "Combine",
+		"config": map[string]any{"setFields": `{"story": "{{ input }}"}`},
+	}); err != nil {
+		t.Fatalf("valid JSON must be accepted: %v", err)
+	}
+}
+
+// An agent's output has no "result" field, so {{ node.<id>.result }} on one
+// is the mistake ".output" already guards -- one reached a user, as literal
+// braces in a Telegram message. On anything else it may be a real field:
+// Telegram's getUpdates and JSON-RPC endpoints both return one.
+func TestTemplateRefRejectsDotResultOnEngineShapedOutput(t *testing.T) {
+	graph := &models.WorkflowGraph{Nodes: []models.WorkflowNode{
+		{ID: "a1", Type: models.NodeTypeAgent, Template: "agent"},
+		{ID: "r1", Type: models.NodeTypeAction, Template: "rss"},
+		{ID: "n1", Type: models.NodeTypeAction, Template: "hackernews"},
+		{ID: "e1", Type: models.NodeTypeAction, Template: "elevenlabs"},
+		{ID: "h1", Type: models.NodeTypeTool, Template: "http"},
+		{ID: "x1", Type: models.NodeTypeTool402},
+		{ID: "t1", Type: models.NodeTypeAction, Template: "telegram_get_updates"},
+		{ID: "c1", Type: models.NodeTypeAction, Template: "coingecko"},
+	}}
+	// rss is the original incident: {title, count, items}, no result, and the
+	// braces went out in a Telegram message. elevenlabs is the same shape of
+	// mistake: {status, audioBase64}, no result either.
+	for _, id := range []string{"a1", "r1", "n1", "e1"} {
+		err := validateTemplateRefs(graph, map[string]string{"messageTemplate": "Says: {{node." + id + ".result}}"})
+		if err == nil {
+			t.Fatalf("{{ node.%s.result }} was accepted; it reaches the user as literal braces", id)
+		}
+		if !strings.Contains(err.Error(), "node."+id) {
+			t.Errorf("the error must show the form that works, got %v", err)
+		}
+	}
+	// A response handed back as it came may really have one. Telegram's
+	// getUpdates always does: {"ok": ..., "result": ...}.
+	for _, id := range []string{"h1", "x1", "t1", "c1"} {
+		if err := validateTemplateRefs(graph, map[string]string{"messageTemplate": "Got: {{node." + id + ".result}}"}); err != nil {
+			t.Errorf("node %s passes a remote response through: %v", id, err)
+		}
+	}
+}
+
+// A reset peer 77s into a live build returned an error, so the save was
+// never reached and every node built went with it.
+func TestBuildGraphKeepsItsWorkWhenTheConnectionDrops(t *testing.T) {
+	// The coin id has to be looked up before the node carrying it is accepted.
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"coins": []map[string]any{
+			{"id": "bitcoin", "symbol": "btc", "name": "Bitcoin", "market_cap_rank": 1},
+		}})
+	}))
+	defer cg.Close()
+	SetCoinGeckoAPIBaseForTest(cg.URL)
+	defer SetCoinGeckoAPIBaseForTest("")
+
+	var round int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		if round == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"candidates": []map[string]any{
+				{"content": map[string]any{"parts": []map[string]any{
+					{"functionCall": map[string]any{"name": "resolve_coin", "args": map[string]any{"query": "bitcoin"}}},
+				}}},
+			}})
+			return
+		}
+		if round == 2 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"candidates": []map[string]any{
+				{"content": map[string]any{"parts": []map[string]any{
+					{"functionCall": map[string]any{"name": "add_node", "args": map[string]any{
+						"type": "action", "template": "coingecko", "name": "Price",
+						"config": map[string]any{"cgIDs": "bitcoin"},
+					}}},
+				}}},
+			}})
+			return
+		}
+		// Every later round: the connection goes away mid-response.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("cannot hijack")
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	res, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "track bitcoin", Graph: models.WorkflowGraph{}})
+	if err != nil {
+		t.Fatalf("a dropped connection must not discard the build: %v", err)
+	}
+	if len(res.Graph.Nodes) != 1 {
+		t.Fatalf("want the node it managed to build, got %d", len(res.Graph.Nodes))
+	}
+	if strings.TrimSpace(res.Reply) == "" {
+		t.Error("the user needs to be told the build did not finish")
+	}
+}
+
+// "What I built so far is on the canvas" is only true if this build built
+// something. On an existing workflow, counting nodes made a quota error or a
+// dropped connection look like a partial success, with no failure shown.
+func TestBuildGraphReportsAFailureThatBuiltNothing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("cannot hijack")
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	existing := models.WorkflowGraph{Nodes: []models.WorkflowNode{
+		{ID: "n1", Type: models.NodeTypeTrigger, Template: "manual", Name: "Start"},
+		{ID: "n2", Type: models.NodeTypeAgent, Template: "agent", Name: "Agent"},
+	}}
+	_, err := BuildGraph(context.Background(), BuildRequest{
+		APIKey: "k", Message: "add an email step", Graph: existing,
+	})
+	if err == nil {
+		t.Fatal("a build that changed nothing must report the failure, not claim partial success")
+	}
+}
+
+func TestWithAnswerGuardIncludesDegradedClause(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+	}{
+		{"empty prompt", ""},
+		{"existing prompt", "You summarise crypto prices."},
+		{"already guarded once", withAnswerGuard("You summarise crypto prices.")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := withAnswerGuard(tt.prompt)
+			if !strings.Contains(got, agentAnswerGuard) {
+				t.Error("the answer guard is missing")
+			}
+			if !strings.Contains(got, degradedInputGuard) {
+				t.Error("the degraded-input guard is missing")
+			}
+			if n := strings.Count(got, degradedInputGuard); n != 1 {
+				t.Errorf("the degraded-input guard appears %d times, want 1", n)
+			}
+			if n := strings.Count(got, agentAnswerGuard); n != 1 {
+				t.Errorf("the answer guard appears %d times, want 1", n)
+			}
+		})
+	}
+}
+
+func TestAddNodeSetsRetriesOnReadNodes(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        map[string]any
+		wantRetries int
+		wantBackoff int
+	}{
+		{
+			name:        "http GET retries",
+			args:        map[string]any{"type": "tool", "template": "http", "name": "Fetch", "fields": map[string]any{"url": "https://example.com/api", "method": "GET"}},
+			wantRetries: 1,
+			wantBackoff: 500,
+		},
+		{
+			name:        "http POST does not",
+			args:        map[string]any{"type": "tool", "template": "http", "name": "Send", "fields": map[string]any{"url": "https://example.com/api", "method": "POST"}},
+			wantRetries: 0,
+			wantBackoff: 0,
+		},
+		{
+			name:        "a read connector retries",
+			args:        map[string]any{"type": "action", "template": "hackernews", "name": "Stories"},
+			wantRetries: 1,
+			wantBackoff: 500,
+		},
+		{
+			name:        "slack does not",
+			args:        map[string]any{"type": "action", "template": "slack", "name": "Notify"},
+			wantRetries: 0,
+			wantBackoff: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graph := &models.WorkflowGraph{}
+			if _, err := addGraphNode(graph, tt.args); err != nil {
+				t.Fatalf("add_node: %v", err)
+			}
+			n := graph.Nodes[len(graph.Nodes)-1]
+			if n.MaxRetries != tt.wantRetries {
+				t.Errorf("MaxRetries = %d, want %d", n.MaxRetries, tt.wantRetries)
+			}
+			if n.RetryBackoffMs != tt.wantBackoff {
+				t.Errorf("RetryBackoffMs = %d, want %d", n.RetryBackoffMs, tt.wantBackoff)
+			}
+		})
+	}
+}
+
+// A round cut off at maxOutputTokens may carry a function call whose
+// arguments were truncated mid-object. Acting on one writes a half-configured
+// node onto the user's canvas, so a truncated round is discarded whole and
+// asked again rather than mined for whatever survived.
+func TestBuildGraphIgnoresAFunctionCallFromATruncatedRound(t *testing.T) {
+	var round int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		w.Header().Set("Content-Type", "application/json")
+		if round == 1 {
+			// An add_node whose "fields" never closed: the name survived,
+			// the url did not.
+			json.NewEncoder(w).Encode(map[string]any{
+				"candidates": []map[string]any{{
+					"finishReason": "MAX_TOKENS",
+					"content": map[string]any{"role": "model", "parts": []map[string]any{{
+						"functionCall": map[string]any{
+							"name": "add_node",
+							"args": map[string]any{"type": "tool", "template": "http", "name": "Truncated"},
+						},
+					}}},
+				}},
+			})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{"content": map[string]any{"parts": []map[string]any{{"text": "Nothing to do."}}}},
+			},
+		})
+	}))
+	defer srv.Close()
+	SetGeminiBaseURL(srv.URL)
+	defer SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	res, err := BuildGraph(context.Background(), BuildRequest{APIKey: "k", Message: "add a step", Graph: models.WorkflowGraph{}})
+	if err != nil {
+		t.Fatalf("a truncated round must be retried, not surfaced: %v", err)
+	}
+	for _, n := range res.Graph.Nodes {
+		if n.Name == "Truncated" {
+			t.Fatal("acted on a function call from a response that was cut off mid-object")
+		}
+	}
+	if res.Reply != "Nothing to do." {
+		t.Errorf("want the retried reply, got %q", res.Reply)
+	}
+}
+
+// Whether a node is a read is not fixed when it is created: the same http
+// template GETs or POSTs depending on a field the model can change in a later
+// round. The retry policy has to follow.
+func TestUpdateNodeKeepsTheRetryPolicyInStepWithTheMethod(t *testing.T) {
+	tests := []struct {
+		name        string
+		addMethod   string
+		newMethod   string
+		wantRetries int
+	}{
+		{"GET turned into a POST loses the read retry", "GET", "POST", 0},
+		{"POST turned into a GET gains it", "POST", "GET", readRetryAttempts},
+		{"a GET left alone keeps it", "GET", "GET", readRetryAttempts},
+		{"a POST left alone still has none", "POST", "POST", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graph := &models.WorkflowGraph{}
+			out, err := addGraphNode(graph, map[string]any{
+				"type": "tool", "template": "http", "name": "Fetch",
+				"fields": map[string]any{"url": "https://api.example.com/v1/x", "method": tt.addMethod},
+			})
+			if err != nil {
+				t.Fatalf("add_node: %v (%s)", err, out)
+			}
+			id := graph.Nodes[0].ID
+			if _, err := updateGraphNode(graph, map[string]any{
+				"id": id, "fields": map[string]any{"method": tt.newMethod},
+			}); err != nil {
+				t.Fatalf("update_node: %v", err)
+			}
+			if got := graph.Nodes[0].MaxRetries; got != tt.wantRetries {
+				t.Errorf("MaxRetries = %d after %s -> %s, want %d", got, tt.addMethod, tt.newMethod, tt.wantRetries)
+			}
+		})
+	}
+}
+
+// A retry count the user chose in the Inspector is theirs. A chat message
+// about something else must not quietly overwrite it, in either direction.
+func TestUpdateNodeLeavesAHandSetRetryPolicyAlone(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	if _, err := addGraphNode(graph, map[string]any{
+		"type": "tool", "template": "http", "name": "Fetch",
+		"fields": map[string]any{"url": "https://api.example.com/v1/x", "method": "GET"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	id := graph.Nodes[0].ID
+	graph.Nodes[0].MaxRetries, graph.Nodes[0].RetryBackoffMs = 4, 2000
+
+	if _, err := updateGraphNode(graph, map[string]any{
+		"id": id, "fields": map[string]any{"method": "POST"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if graph.Nodes[0].MaxRetries != 4 || graph.Nodes[0].RetryBackoffMs != 2000 {
+		t.Errorf("overwrote a hand-set retry policy: got %d/%dms, want 4/2000ms",
+			graph.Nodes[0].MaxRetries, graph.Nodes[0].RetryBackoffMs)
+	}
+}
+
+// A degraded read fails the test run and still produces an answer, because
+// the run carries on past it exactly as a real run does. Reporting that as
+// "did not produce an answer" is untrue, and it suppressed the answer itself.
+func TestBuildGraphReportsADegradedTestRunAsPartialAndStillQuotesTheAnswer(t *testing.T) {
+	scriptedGemini(t, []string{callTestRun, text("Built it.")})
+	res, err := BuildGraph(context.Background(), BuildRequest{
+		APIKey: "k", Message: "btc price", Graph: wiredAgentGraph(),
+		TestRun: func(ctx context.Context, g models.WorkflowGraph, input string) DryRunResult {
+			return DryRunResult{
+				Failed:      true,
+				Degraded:    true,
+				FinalOutput: "I could not reach the price source, so I have no figure for you.",
+				Steps: []DryRunStep{
+					{Name: "CoinGecko Price", Status: "failed", Error: "http: GET 503"},
+				},
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(res.Reply, "did not produce an answer") {
+		t.Errorf("claimed the test produced no answer when it produced one:\n%s", res.Reply)
+	}
+	if !strings.Contains(res.Reply, "this answer is partial") {
+		t.Errorf("the reply does not say the answer is partial:\n%s", res.Reply)
+	}
+	if !strings.Contains(res.Reply, "CoinGecko Price") {
+		t.Errorf("the reply does not name the step that failed:\n%s", res.Reply)
+	}
+	if !strings.Contains(res.Reply, "I could not reach the price source") {
+		t.Errorf("the reply does not quote what the test actually produced:\n%s", res.Reply)
+	}
+}
+
+// A test run that really produced nothing still says so.
+func TestBuildGraphStillReportsATestRunThatProducedNothing(t *testing.T) {
+	scriptedGemini(t, []string{callTestRun, text("Built it.")})
+	res, err := BuildGraph(context.Background(), BuildRequest{
+		APIKey: "k", Message: "btc price", Graph: wiredAgentGraph(),
+		TestRun: func(ctx context.Context, g models.WorkflowGraph, input string) DryRunResult {
+			return DryRunResult{
+				Failed: true,
+				Steps:  []DryRunStep{{Name: "CoinGecko Price", Status: "failed", Error: "http: GET 503"}},
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(res.Reply, "did not produce an answer") {
+		t.Errorf("a test run with no answer must say so:\n%s", res.Reply)
+	}
+}
+
+// The partial note must be strippable from replayed history, like every other
+// test-run trailer: it restates a result for a graph that has since changed.
+func TestThePartialTrailerIsStrippedFromReplayedHistory(t *testing.T) {
+	reply := "Built it." + trailerTestPartial + `step "Price" failed (http: GET 503)._` +
+		trailerTestedAnswer + "I could not reach the price source."
+	if got := clipHistoryText("model", reply); got != "Built it." {
+		t.Errorf("clipHistoryText = %q, want %q", got, "Built it.")
+	}
+}
+
+// A real build called add_node with type="http" and type="json_extract",
+// putting a template name where the type goes. The old error listed the ten
+// valid types and never said which one owns "http", so the model guessed --
+// and the failed adds then produced edges against node ids it invented.
+func TestAddNodeSaysWhichTypeOwnsATemplateNameUsedAsAType(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodeType string
+		want     []string
+	}{
+		{"a tool template", "json_extract", []string{"type=tool", "template=json_extract"}},
+		// "http" is a template of BOTH tool and end, so both must be offered.
+		{"a template two types share", "http", []string{"type=tool", "type=end", "template=http"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graph := &models.WorkflowGraph{}
+			_, err := addGraphNode(graph, map[string]any{"type": tt.nodeType, "name": "X"})
+			if err == nil {
+				t.Fatalf("add_node accepted %q as a type", tt.nodeType)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error does not suggest %q, got: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// A name that is neither a type nor a template still gets the plain list.
+func TestAddNodeStillListsTypesForAnUnrecognisedType(t *testing.T) {
+	graph := &models.WorkflowGraph{}
+	_, err := addGraphNode(graph, map[string]any{"type": "banana", "name": "X"})
+	if err == nil {
+		t.Fatal("add_node accepted an unknown type")
+	}
+	if !strings.Contains(err.Error(), "valid types:") {
+		t.Errorf("want the list of valid types, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "template=") {
+		t.Errorf("suggested a template for a name that is not one: %v", err)
+	}
+}
+
+// The budget has to stay clear of the frontend proxy window, and the loop
+// only gets three quarters of it, so the usable figure is what matters. At
+// 100s the usable figure was 75s, and a build that searches twice and
+// test-runs once does not fit in it.
+func TestBuildTimeBudgetLeavesRoomForARealBuild(t *testing.T) {
+	const proxyWindow = 300 * time.Second // next.config.ts proxyTimeout
+	if defaultBuildTimeBudget >= proxyWindow {
+		t.Fatalf("budget %s is not inside the %s proxy window", defaultBuildTimeBudget, proxyWindow)
+	}
+	usable := defaultBuildTimeBudget * 3 / 4
+	if usable < 150*time.Second {
+		t.Errorf("a build really gets %s (three quarters of %s); a dozen rounds at ~6s each needs at least 150s", usable, defaultBuildTimeBudget)
 	}
 }
