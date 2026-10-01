@@ -753,7 +753,7 @@ body {
   --wf-card-cols: repeat(3, 1fr);
   --wf-cardmeta-cols: repeat(3, 1fr);
   --wf-row-cols: minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr)
-    minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px;
+    minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 200px;
 }
 .wf-header {
   display: flex;
