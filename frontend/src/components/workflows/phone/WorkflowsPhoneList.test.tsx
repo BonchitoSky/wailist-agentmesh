@@ -28,8 +28,9 @@ const LIST = [
 ];
 
 const rowNames = () =>
-  Array.from(document.querySelectorAll<HTMLAnchorElement>(".wfp-card__open"))
-    .map((a) => a.querySelector(".wfp-card__name")?.textContent);
+  Array.from(
+    document.querySelectorAll<HTMLAnchorElement>(".wfp-card__open"),
+  ).map((a) => a.querySelector(".wfp-card__name")?.textContent);
 
 afterEach(cleanup);
 

@@ -52,7 +52,9 @@ describe("WorkflowsPage", () => {
     state.readOnly = true;
     render(<WorkflowsPage />);
     expect(
-      await screen.findByRole("link", { name: /Customer Support Triage/ }),
+      await screen.findByRole("link", {
+        name: /Customer Support Triage, deployed/,
+      }),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /add credits/i })).toBeTruthy();
     expect(screen.queryByText(/Rows|Grid/)).toBeNull();

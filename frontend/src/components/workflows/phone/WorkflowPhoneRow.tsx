@@ -6,7 +6,7 @@ import { usageHrefForWorkflow } from "@/lib/usageScope";
 import { workflowAriaLabel, workflowMeta } from "@/lib/workflowMeta";
 
 // One workflow on the phone list: a card with a coloured rail down its left
-// edge and a single line of figures under the name. The whole card opens the
+// edge and a single line of figures under the name. The main area opens the
 // workflow, while the small Usage action opens its read-only spend view.
 // Spent covers the last 30 days, the window the list endpoint counts.
 //

@@ -88,9 +88,9 @@ describe("WorkflowPhoneRow", () => {
 
   it("names the status in words, because the rail is only colour", () => {
     const card = renderRow();
-    expect(within(card).getAllByRole("link")[0].getAttribute("aria-label")).toBe(
-      "Customer Support Triage, deployed. $4.22 spent, next in 12 min.",
-    );
+    expect(
+      within(card).getAllByRole("link")[0].getAttribute("aria-label"),
+    ).toBe("Customer Support Triage, deployed. $4.22 spent, next in 12 min.");
   });
 
   it("leaves out the logo, tags, updated time and Open or Zone", () => {
@@ -112,9 +112,9 @@ describe("WorkflowPhoneRow", () => {
     expect(card.textContent).toContain("draft");
     expect(card.textContent).toContain("never run");
     expect(card.textContent).not.toContain("$");
-    expect(within(card).getAllByRole("link")[0].getAttribute("aria-label")).toBe(
-      "Customer Support Triage, draft. Never run.",
-    );
+    expect(
+      within(card).getAllByRole("link")[0].getAttribute("aria-label"),
+    ).toBe("Customer Support Triage, draft. Never run.");
   });
 
   it("says nothing is queued for a deployed workflow with no schedule", () => {
