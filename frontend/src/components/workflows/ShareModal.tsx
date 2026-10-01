@@ -441,7 +441,11 @@ export function ShareModal({
           </div>
         )}
 
-        {error && (
+        {/* Only the failure that leaves nothing to show. Everything else
+            this dialog can fail at happens next to a control further down,
+            and is reported there -- see below. SharePreview splits its two
+            the same way. */}
+        {error && !share && (
           <div
             style={{
               fontSize: 12.5,
@@ -585,6 +589,24 @@ export function ShareModal({
               instead — it works where a link gets mangled, but it can&apos;t be
               revoked.
             </p>
+
+            {/* Revoking, preparing a code and minting a link all fail
+                here rather than at the top of the panel. The panel is ~300px
+                tall; a message about the button you just pressed, printed
+                above the link field, is a message you do not see. */}
+            {error && (
+              <p
+                style={{
+                  margin: "10px 0 0",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: "var(--danger)",
+                  maxWidth: "60ch",
+                }}
+              >
+                {error}
+              </p>
+            )}
 
             <div
               style={{
