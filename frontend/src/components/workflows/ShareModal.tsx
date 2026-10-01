@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { IconArrow, IconClose } from "@/components/ui";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { useModalDismissal } from "@/hooks/useModalDismissal";
 import { shares as sharesApi } from "@/lib/api";
 import { shareUrl } from "@/lib/routes";
@@ -391,27 +392,52 @@ export function ShareModal({
             whiteSpace: "nowrap",
           }}
         >
-          {copied === "link"
-            ? "Link copied to clipboard"
-            : copied === "code"
-              ? "Code copied to clipboard"
-              : ""}
+          {loading
+            ? "Preparing a share link"
+            : copied === "link"
+              ? "Link copied to clipboard"
+              : copied === "code"
+                ? "Code copied to clipboard"
+                : ""}
         </span>
 
+        {/* Shaped like the bands that are coming, rather than a line of
+            centred text, for the reason ui/Skeleton.tsx sets out: a line of
+            text occupies almost none of the room the real thing needs, so the
+            panel snapped to a new height the moment the link arrived --
+            under a cursor already on its way to the Copy button.
+
+            aria-hidden with the live region above doing the talking, which is
+            how WorkflowListSkeleton handles the same problem: a screen reader
+            hears "preparing a share link" once instead of eight rectangles. */}
         {loading && (
-          <div
-            style={{
-              // Roughly what the loaded state occupies, so the dialog does
-              // not snap to a new height the moment the link arrives.
-              minHeight: 220,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 12.5,
-              color: "var(--fg-dim)",
-            }}
-          >
-            Preparing a link…
+          <div aria-hidden="true">
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <Skeleton height={38} radius="var(--r-2)" style={{ flex: 1 }} />
+              <Skeleton width={104} height={38} radius="var(--r-2)" />
+            </div>
+            <Skeleton width="72%" height={11} style={{ marginBottom: 10 }} />
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                marginBottom: 14,
+              }}
+            >
+              <Skeleton width="40%" height={11} />
+              <Skeleton width={62} height={26} radius="var(--r-2)" />
+            </div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 9 }}>
+              <Skeleton height={36} radius="var(--r-2)" style={{ flex: 1 }} />
+              <Skeleton height={36} radius="var(--r-2)" style={{ flex: 1 }} />
+            </div>
+            <Skeleton width="88%" height={11} style={{ marginBottom: 7 }} />
+            <Skeleton width="46%" height={11} style={{ marginBottom: 37 }} />
+            <Skeleton width="92%" height={11} style={{ marginBottom: 8 }} />
+            <Skeleton width="58%" height={11} style={{ marginBottom: 22 }} />
+            <Skeleton width="28%" height={11} style={{ marginBottom: 11 }} />
           </div>
         )}
 
