@@ -67,6 +67,9 @@ func NewRouter(d *handlers.Deps) http.Handler {
 		r.Put("/workflows/{id}", d.UpdateWorkflow)
 		r.Delete("/workflows/{id}", d.DeleteWorkflow)
 
+		r.Get("/workflows/{id}/chat", d.GetChatSession)
+		r.Put("/workflows/{id}/chat", d.SaveChatSession)
+
 		r.Get("/workflows/{id}/variables", d.ListVariables)
 		r.Put("/workflows/{id}/variables/{key}", d.SetVariable)
 		r.Delete("/workflows/{id}/variables/{key}", d.DeleteVariable)
@@ -96,6 +99,11 @@ func NewRouter(d *handlers.Deps) http.Handler {
 
 		r.Post("/workflows/{id}/run", d.TriggerRun)
 		r.Post("/workflows/{id}/stop", d.StopWorkflow)
+		// Run history, newest first, a page at a time (#205).
+		r.Get("/workflows/{id}/runs", d.ListWorkflowRuns)
+		r.Get("/runs", d.ListRecentRuns)
+		// What the scheduler will run next, soonest first.
+		r.Get("/schedules/upcoming", d.ListUpcomingRuns)
 		r.Get("/runs/{runId}", d.GetRun)
 		r.Get("/runs/{runId}/stream", d.StreamRun)
 		r.Post("/runs/{runId}/resume", d.ResumeRun)

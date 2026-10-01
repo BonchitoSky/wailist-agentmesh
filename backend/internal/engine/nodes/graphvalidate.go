@@ -51,6 +51,29 @@ var flowTargets = map[models.NodeType]bool{
 	models.NodeTypeTendril: true, models.NodeTypeGoogle: true,
 }
 
+// graphNodeIDList renders every node on the graph as "id (Name)", for an
+// error that has to tell the model what it could have meant.
+//
+// Worth the bytes: a model that batches add_node calls and then add_edge
+// calls will, when one of the adds failed, emit edges against ids it made up
+// for nodes that never existed. Naming the id it missed says nothing it can
+// act on; naming the ids that DO exist lets it correct in one round instead
+// of guessing again, which is what a real build did four times running.
+func graphNodeIDList(graph *models.WorkflowGraph) string {
+	if len(graph.Nodes) == 0 {
+		return "the graph has no nodes yet"
+	}
+	out := make([]string, 0, len(graph.Nodes))
+	for _, n := range graph.Nodes {
+		if n.Name != "" {
+			out = append(out, fmt.Sprintf("%s (%s)", n.ID, n.Name))
+			continue
+		}
+		out = append(out, n.ID)
+	}
+	return "the graph has: " + strings.Join(out, ", ")
+}
+
 // validateEdge reports whether an edge is legal and returns the toPort to
 // store. The returned port is normalised, never empty: an omitted port is
 // filled in from the source type for an attach and is always "in" for a
@@ -58,14 +81,17 @@ var flowTargets = map[models.NodeType]bool{
 func validateEdge(graph *models.WorkflowGraph, from, to, kind, toPort string) (string, error) {
 	src, ok := findGraphNode(graph, from)
 	if !ok {
-		return "", fmt.Errorf("add_edge: node %q not found", from)
+		return "", fmt.Errorf("add_edge: node %q not found -- %s", from, graphNodeIDList(graph))
 	}
 	dst, ok := findGraphNode(graph, to)
 	if !ok {
-		return "", fmt.Errorf("add_edge: node %q not found", to)
+		return "", fmt.Errorf("add_edge: node %q not found -- %s", to, graphNodeIDList(graph))
 	}
 
 	if kind == string(models.EdgeKindAttach) {
+		if dup := existingEdge(graph, from, to, kind); dup != "" {
+			return "", fmt.Errorf("add_edge: %s is already connected to %s (edge %s) -- it is wired, leave it alone", from, to, dup)
+		}
 		if dst.Type != models.NodeTypeAgent {
 			return "", fmt.Errorf(
 				"add_edge: an attach edge must end at an agent node, but %q is a %s -- attach edges go provider/tool -> agent",
@@ -88,6 +114,9 @@ func validateEdge(graph *models.WorkflowGraph, from, to, kind, toPort string) (s
 		return want, nil
 	}
 
+	if dup := existingEdge(graph, from, to, kind); dup != "" {
+		return "", fmt.Errorf("add_edge: %s already flows into %s (edge %s) -- it is wired, leave it alone", from, to, dup)
+	}
 	if !flowSources[src.Type] {
 		if src.Type == models.NodeTypeProvider {
 			return "", fmt.Errorf(
@@ -104,12 +133,34 @@ func validateEdge(graph *models.WorkflowGraph, from, to, kind, toPort string) (s
 	if from == to {
 		return "", fmt.Errorf("add_edge: a node cannot flow into itself")
 	}
+	// An agent writes prose; a parser reading that has nothing to parse.
+	if src.Type == models.NodeTypeAgent && parserTemplates[dst.Template] {
+		return "", fmt.Errorf(
+			"add_edge: %q parses structured data, and %q is an agent, which writes prose -- put the parser between the data step and the agent instead, and let the agent have the last word",
+			to, from)
+	}
 	// Longer loops too: the engine topologically sorts the flow and fails
 	// every run of a graph that loops ("cycle detected in workflow graph").
 	if flowReaches(*graph, to, from) {
 		return "", fmt.Errorf("add_edge: connecting %q -> %q would create a loop, because %q already leads back to %q -- a workflow's flow cannot loop", from, to, to, from)
 	}
 	return "in", nil
+}
+
+// existingEdge returns the id of an edge already joining these two, or "".
+func existingEdge(graph *models.WorkflowGraph, from, to, kind string) string {
+	for _, e := range graph.Edges {
+		if e.From == from && e.To == to && string(e.Kind) == kind {
+			return e.ID
+		}
+	}
+	return ""
+}
+
+// parserTemplates read structured input and fail on anything else. markdown
+// is absent on purpose: the catalog calls it "Render agent output".
+var parserTemplates = map[string]bool{
+	"json_extract": true, "xml": true, "html_extract": true,
 }
 
 // flowReaches reports whether dst can be reached from src along flow edges.
@@ -274,6 +325,8 @@ func auditGraph(graph models.WorkflowGraph) []string {
 				n.ID, n.Type, n.Template))
 		}
 	}
+
+	findings = append(findings, racyInputFindings(graph)...)
 
 	sort.Strings(findings)
 	return findings

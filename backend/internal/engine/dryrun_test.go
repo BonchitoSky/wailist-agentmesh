@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -762,4 +763,179 @@ func TestDryRunCarryMatchesWhatTheRealConnectorSends(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An agent fed only by a paid tool has nothing to answer with in a test.
+// Reported as failed, it sent the builder to "fix" a correct workflow.
+func TestDryRunDoesNotBlameAnAgentForAWithheldPaidTool(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{"finishReason": "STOP", "content": map[string]any{"role": "model"}},
+			},
+		})
+	}))
+	defer srv.Close()
+	nodes.SetGeminiBaseURL(srv.URL)
+	defer nodes.SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "t", Type: models.NodeTypeTrigger, Template: "manual", Name: "Start"},
+			{ID: "a", Type: models.NodeTypeAgent, Template: "agent", Name: "Explain Price"},
+			{ID: "p", Type: models.NodeTypeProvider, Template: "gemini", Name: "Gemini", KeyMode: "platform"},
+			{ID: "x", Type: models.NodeTypeTool402, Name: "Paid Prices", Endpoint: "https://api.example.com/x402/prices"},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "t", To: "a", Kind: models.EdgeKindFlow, ToPort: "in"},
+			{ID: "e2", From: "p", To: "a", Kind: models.EdgeKindAttach, ToPort: "model"},
+			{ID: "e3", From: "x", To: "a", Kind: models.EdgeKindAttach, ToPort: "tools"},
+		},
+	}
+	res := DryRun(context.Background(), graph, DryRunOptions{
+		PlatformKeys: map[string]string{"gemini": "k"},
+	})
+	if res.Failed {
+		t.Errorf("the workflow is not at fault: %+v", res.Steps)
+	}
+	if !res.Unverified {
+		t.Error("an agent that could not call its paid tool must read as unverified")
+	}
+	var agent nodes.DryRunStep
+	for _, s := range res.Steps {
+		if s.NodeID == "a" {
+			agent = s
+		}
+	}
+	if agent.Status != "unverified" {
+		t.Errorf("agent step status = %q, want unverified (%s)", agent.Status, agent.Reason)
+	}
+	if !strings.Contains(agent.Reason, "Paid Prices") {
+		t.Errorf("the reason should name the tool that was withheld, got %q", agent.Reason)
+	}
+}
+
+// A withheld tool excuses an agent that had nothing to say -- not an agent
+// whose model call was refused. IsEmptyOutput is true on every error path,
+// so without the err check a 429, a bad model name or a rejected platform
+// key all came back "unverified" and the builder never repaired them.
+func TestDryRunStillBlamesARealAgentFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"error":{"message":"quota exceeded"}}`))
+	}))
+	defer srv.Close()
+	nodes.SetGeminiBaseURL(srv.URL)
+	defer nodes.SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "t", Type: models.NodeTypeTrigger, Template: "manual", Name: "Start"},
+			{ID: "a", Type: models.NodeTypeAgent, Template: "agent", Name: "Explain"},
+			{ID: "p", Type: models.NodeTypeProvider, Template: "gemini", Name: "Gemini", KeyMode: "platform"},
+			{ID: "x", Type: models.NodeTypeTool402, Name: "Paid Prices", Endpoint: "https://api.example.com/x402/prices"},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "t", To: "a", Kind: models.EdgeKindFlow, ToPort: "in"},
+			{ID: "e2", From: "p", To: "a", Kind: models.EdgeKindAttach, ToPort: "model"},
+			{ID: "e3", From: "x", To: "a", Kind: models.EdgeKindAttach, ToPort: "tools"},
+		},
+	}
+	res := DryRun(context.Background(), graph, DryRunOptions{
+		PlatformKeys: map[string]string{"gemini": "k"},
+	})
+	if !res.Failed {
+		t.Fatalf("a refused model call is the workflow's problem to fix: %+v", res.Steps)
+	}
+}
+
+// The model call is billed to the platform key the moment it returns, so it
+// must be charged however the result is later classified. A withheld tool
+// used to return before the charge, making every test run of such a
+// workflow free.
+func TestDryRunChargesAnEmptyAnswerWithAWithheldTool(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"candidates": []map[string]any{
+				{"content": map[string]any{"parts": []map[string]any{{"text": ""}}}},
+			},
+		})
+	}))
+	defer srv.Close()
+	nodes.SetGeminiBaseURL(srv.URL)
+	defer nodes.SetGeminiBaseURL("https://generativelanguage.googleapis.com")
+
+	graph := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			{ID: "t", Type: models.NodeTypeTrigger, Template: "manual", Name: "Start"},
+			{ID: "a", Type: models.NodeTypeAgent, Template: "agent", Name: "Explain"},
+			{ID: "p", Type: models.NodeTypeProvider, Template: "gemini", Name: "Gemini", KeyMode: "platform"},
+			{ID: "x", Type: models.NodeTypeTool402, Name: "Paid Prices", Endpoint: "https://api.example.com/x402/prices"},
+		},
+		Edges: []models.WorkflowEdge{
+			{ID: "e1", From: "t", To: "a", Kind: models.EdgeKindFlow, ToPort: "in"},
+			{ID: "e2", From: "p", To: "a", Kind: models.EdgeKindAttach, ToPort: "model"},
+			{ID: "e3", From: "x", To: "a", Kind: models.EdgeKindAttach, ToPort: "tools"},
+		},
+	}
+	var charged int64
+	res := DryRun(context.Background(), graph, DryRunOptions{
+		PlatformKeys: map[string]string{"gemini": "k"},
+		ChargeAgent: func(ctx context.Context, nodeID string, amount int64, model string) error {
+			charged += amount
+			return nil
+		},
+	})
+	if !res.Unverified {
+		t.Fatalf("the withheld tool still explains the empty answer: %+v", res.Steps)
+	}
+	if charged == 0 {
+		t.Error("the model call happened and was billed, so it must be charged")
+	}
+}
+
+// TestDryRunContinuesPastADegradableFailure: at run time a failed read step
+// degrades and the run carries on (nodes.IsDegradable), so a test run that
+// stopped at the first one would judge the workflow by behaviour a real run
+// no longer has -- and would never show the builder the answer the user
+// actually gets.
+//
+// It still counts as a fault. A test run happens while the workflow is being
+// built, where a failing source is usually a wrong id, a wrong path or a dead
+// API that the builder can fix; degrading silently there would ship exactly
+// the broken workflow the test gate exists to catch.
+func TestDryRunContinuesPastADegradableFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	g := models.WorkflowGraph{
+		Nodes: []models.WorkflowNode{
+			dn("t", models.NodeTypeTrigger, "manual"),
+			{ID: "h", Type: models.NodeTypeTool, Template: "http", Name: "h", URL: srv.URL, Method: "GET"},
+			dn("e", models.NodeTypeEnd, "done"),
+		},
+		Edges: []models.WorkflowEdge{flow("t", "h"), flow("h", "e")},
+	}
+	res := DryRun(context.Background(), g, DryRunOptions{})
+
+	if !res.Degraded {
+		t.Errorf("Degraded = false, want true: a read step failed and the run carried on")
+	}
+	if !res.Failed {
+		t.Errorf("Failed = false, want true: a failing source during a build is a fault to fix")
+	}
+	if s := stepOf(res, "h"); s.Status != "failed" {
+		t.Errorf("step status = %q, want %q", s.Status, "failed")
+	}
+	if s := stepOf(res, "e"); s.Status == "" {
+		t.Error("the test run stopped at the failed step instead of carrying on to the end")
+	}
+	// The other side of the contract -- a failure that still ends a test run
+	// -- is TestDryRunReportsAModelKeyRejectionAsAFailure above: a dry run
+	// simulates every real action, so an agent's is the failure left that can
+	// end one.
 }

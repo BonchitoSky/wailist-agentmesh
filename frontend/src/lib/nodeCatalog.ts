@@ -58,6 +58,17 @@ export interface CatalogTemplate {
   id: string;
   name: string;
   desc: string;
+  /**
+   * What kind of work the template does, which is what decides whether its
+   * failure may be degraded into an error payload the run continues with:
+   * - "read":    fetches from a source outside the workflow, which can be
+   *              down. Its failure may be degraded.
+   * - "compute": pure local computation, or a read of the workflow's own
+   *              saved state. Nothing outside can make it fail, so a failure
+   *              is a fault in the workflow and must fail the run.
+   * - "action":  sends, pays or writes. Its failure fails the run.
+   */
+  kind: "read" | "compute" | "action";
   /** A caveat the builder must respect, e.g. behaviour that is not implemented. */
   note?: string;
   /** Fields set automatically when the node is created, exactly as the palette does. */
@@ -129,13 +140,20 @@ const TOOL_FIELDS: Record<string, CatalogField[]> = {
       hint: "a math expression such as (2+3)*4 -- the calculator stores it in the url field",
     },
   ],
-  websearch: [],
+  websearch: [
+    {
+      key: "searchQuery",
+      where: "config",
+      label: "Search query",
+      hint: "what to search for when this node runs in the flow; {{ result }} inserts the previous step's output",
+    },
+  ],
   xml: [],
 };
 
 const TOOL_NOTES: Record<string, string> = {
   websearch:
-    "Answers with a live Google Search. Attached to an agent it searches whatever the agent asks; as a flow step it searches the previous step's output.",
+    "Answers with a live Google Search. Attached to an agent's tools port it searches whatever the agent asks and needs no settings. As a FLOW step it needs searchQuery, or it searches the previous step's output -- and a manual trigger produces no output, so a flow node fed by one with no searchQuery fails at run time.",
   xml: "Parses the previous step's XML output into JSON. No settings.",
 };
 
@@ -202,11 +220,19 @@ const EMAIL_FIELDS: CatalogField[] = [
 
 // Action notes, keyed by template.
 const ACTION_NOTES: Record<string, string> = {
+  algorand_account:
+    "Current state only: balance and ASA holdings for one address. It cannot answer transaction history: use algorand_transactions for that, never a paid x402 endpoint. algo is an exact decimal string in whole ALGO (quote it as-is) and algoMicro is the raw integer in microalgos; minBalance and minBalanceMicro are the same pair. Each holding's amount is already decimal-adjusted (a string such as \"1.5\" with its unitName): quote it as-is. amountBaseUnits is the raw integer in base units and must never be reported as a token amount. A holding with no amount could not be looked up; unresolvedAssets counts those. To describe an asset this account does NOT hold, use algorand_asset.",
+  algorand_transactions:
+    "Recent transaction history for one address, newest first, read from an Algorand indexer. This is the node for \"what did this address do\"; algorand_account cannot answer it. Each row carries type (pay, axfer, appl, ...), direction (out if this address sent it, in if it received it, other otherwise), sender, receiver, round, time as an RFC3339 string, and an amount. A pay row has algo (an exact decimal string in whole ALGO, quote it as-is) and algoMicro (the raw integer). An axfer row has amount (already decimal-adjusted, quote it as-is), amountBaseUnits (the raw integer, never report this as a token amount), assetId and unitName. A row with no amount could not have its asset looked up; unresolvedAssets counts those. Set algoTxLimit for how many (10 by default, 50 at most). algoTxType narrows to one type and must be the chain's own code -- pay, axfer, appl, acfg, afrz, keyreg, stpf or hb (a payment is \"pay\", not \"payment\") -- or blank for every type; anything else fails the step. The output's type field says which filter was applied.",
+  algorand_asset:
+    "Describes one ASA by id: name, unitName, decimals, total supply, creator and the manager/reserve/freeze/clawback addresses. algoAssetId is the asset's NUMBER, never its ticker -- 31566704 is USDC. Use this for \"what is this token\" about an asset nobody in the workflow holds; algorand_account only describes assets the account being read already holds. total is an exact decimal string and totalBaseUnits is the raw integer.",
   // A live build turned the user's "myrad" into "myriad" and then "myria" --
   // two other coins -- by web-searching for the id. CoinGecko's own search
   // resolves "myrad" to exactly one coin.
   coingecko:
-    "cgIDs are CoinGecko coin ids, not names or symbols. Look each one up with fetch_url https://api.coingecko.com/api/v3/search?query=<the name the user gave> and use the id of the result whose name or symbol matches what they said -- never a similar-sounding coin, and never web_search for an id.",
+    "cgIDs are CoinGecko coin ids, not names or symbols. Get each one from resolve_coin, which is the only source add_node accepts -- an id from fetch_url or web_search is refused. Use the id of the match whose name or symbol matches what the user said, never a similar-sounding coin. If resolve_coin finds nothing, that token is not listed: say so and stop. When CoinGecko is unavailable, well-known coins are priced from Coinbase or CoinPaprika instead, in the same shape plus source and note fields, and any coin that could not be priced is listed in unavailable: an agent reading this should name the source when source is present and say which coins are unavailable.",
+  coingecko_history:
+    "One coin only. cgID is a CoinGecko coin id and MUST come from resolve_coin -- a name or symbol will 404. Returns first, last, high, low and changePct already computed, plus the points; quote those fields rather than working them out from the points yourself. When CoinGecko is unavailable the history may come from Coinbase closing prices instead; source and note then say so.",
 };
 
 const TRIGGER_NOTES: Record<string, string> = {
@@ -224,6 +250,92 @@ const AGENT_NOTES: Record<string, string> = {
     "Runs exactly like a plain AI agent today -- the engine has no approval gate and never pauses for a human. Do not promise the user an approval step.",
 };
 
+/**
+ * How every template is classified, keyed "<type>/<id>" because ids repeat
+ * across types ("http" is both a tool and an end node, "get" is both a state
+ * op and a Drive one).
+ *
+ * tool/http is deliberately in neither set: it is classified at run time by
+ * its method, since the same template GETs or POSTs depending on its config.
+ */
+// Templates that are pure local computation, or that read only what this
+// workflow itself saved. Nothing outside the workflow can make one of these
+// fail, so a failure is a fault in the workflow -- a malformed expression, a
+// jsonPath that does not match -- and it fails the run rather than degrading.
+// Degrading them would turn an authoring bug into an answer that says "the
+// step failed" on this run and on every run after it, since the same input
+// produces the same failure forever.
+//
+// Every one of these executes entirely inside the process: none of the tool
+// cases in the engine's tool.go makes a network call, and state/get reads a
+// value this workflow stored.
+const COMPUTE_TEMPLATES = new Set<string>([
+  "tool/calc",
+  "tool/set",
+  "tool/json_extract",
+  "tool/crypto",
+  "tool/datetime",
+  "tool/xml",
+  "tool/template",
+  "tool/html_extract",
+  "tool/markdown",
+  "tool/quickchart",
+  // Reading a variable is safe, but it is this workflow's own value, not a
+  // live source -- so a miss is a wrong key, not an outage.
+  "state/get",
+]);
+
+// Templates that fetch from a source outside the workflow. These are the only
+// ones whose failure may be degraded: the source really can be unavailable,
+// and on the next run it may well be back.
+const READ_TEMPLATES = new Set<string>([
+  // The only tool that leaves the workflow. tool/http is decided by method
+  // instead -- see kindOf.
+  "tool/websearch",
+  // connectors that fetch rather than send. graphql stays an action: an
+  // endpoint can mutate and nothing in the node's config says whether this
+  // one does. elevenlabs stays an action: it generates billable audio.
+  "action/telegram_get_updates",
+  "action/calendly",
+  "action/openweathermap",
+  "action/algorand_account",
+  "action/algorand_transactions",
+  "action/algorand_asset",
+  "action/rss",
+  "action/hackernews",
+  "action/coingecko",
+  "action/coingecko_history",
+  // Google reads. gmail_send, gmail_reply, sheets_append and calendar_create
+  // are sends and stay actions.
+  "google/gmail_list",
+  "google/gmail_get",
+  "google/sheets_read",
+  "google/calendar_list",
+  "google/drive_list",
+  "google/drive_get",
+  "google/drive_download",
+]);
+
+/**
+ * kindOf answers the question the runner asks when a node fails: may this
+ * failure be degraded into an error payload the run continues with?
+ *
+ * Only a "read" may. "compute" is a template that cannot fail for any reason
+ * outside the workflow, so its failure is an authoring bug the user needs to
+ * see. Everything unlisted is "action", which fails the run -- the safe
+ * answer, and the one a template added later gets until someone classifies
+ * it deliberately.
+ *
+ * tool/http is decided by method at run time; "action" here is the safe
+ * catalog answer, and the backend overrides it for a GET.
+ */
+function kindOf(type: string, id: string): "read" | "compute" | "action" {
+  const key = `${type}/${id}`;
+  if (READ_TEMPLATES.has(key)) return "read";
+  if (COMPUTE_TEMPLATES.has(key)) return "compute";
+  return "action";
+}
+
 export function buildNodeCatalog(): NodeCatalog {
   const types: CatalogType[] = [
     {
@@ -233,6 +345,7 @@ export function buildNodeCatalog(): NodeCatalog {
         id: t.id,
         name: t.name,
         desc: t.desc,
+        kind: kindOf("trigger", t.id),
         note: TRIGGER_NOTES[t.id],
         fields: [],
       })),
@@ -244,6 +357,7 @@ export function buildNodeCatalog(): NodeCatalog {
         id: t.id,
         name: t.name,
         desc: t.desc,
+        kind: kindOf("agent", t.id),
         ...(AGENT_NOTES[t.id] ? { note: AGENT_NOTES[t.id] } : {}),
         fields: [
           { key: "systemPrompt", where: "field" as const, label: "System prompt", hint: "instructions the agent follows on every run" },
@@ -257,6 +371,7 @@ export function buildNodeCatalog(): NodeCatalog {
         id: t.id,
         name: t.name,
         desc: `${t.name} models`,
+        kind: kindOf("provider", t.id),
         note: "Runs on the platform key by default and needs nothing from the user. Its apiKey applies only if the user switches to their own key in the Inspector -- never tell them they must supply one.",
         presets: { model: t.model },
         fields: [
@@ -273,6 +388,7 @@ export function buildNodeCatalog(): NodeCatalog {
         id: t.id,
         name: t.name,
         desc: t.desc,
+        kind: kindOf("tool", t.id),
         ...(TOOL_NOTES[t.id] ? { note: TOOL_NOTES[t.id] } : {}),
         fields: TOOL_FIELDS[t.id] ?? fromConnectorTable(t.id),
       })),
@@ -287,6 +403,7 @@ export function buildNodeCatalog(): NodeCatalog {
           id: t.id,
           name: t.name,
           desc: t.desc,
+          kind: kindOf("action", t.id),
           ...(ACTION_NOTES[t.id] ? { note: ACTION_NOTES[t.id] } : {}),
           fields: t.id === "email" ? EMAIL_FIELDS : [...fromConnectorTable(t.id), MESSAGE_TEMPLATE],
           ...(auth ? { authDocUrl: auth.docUrl } : {}),
@@ -301,6 +418,7 @@ export function buildNodeCatalog(): NodeCatalog {
         id: t.id,
         name: t.name,
         desc: t.desc,
+        kind: kindOf("google", t.id),
         fields: [
           GOOGLE_ACCOUNT,
           ...(GOOGLE_FIELDS[t.id] ?? []),
@@ -315,6 +433,7 @@ export function buildNodeCatalog(): NodeCatalog {
         id: t.id,
         name: t.name,
         desc: t.desc,
+        kind: kindOf("state", t.id),
         presets: { stateOp: t.id },
         fields: [
           { key: "stateKey", where: "field" as const, label: "Key", hint: "persists across runs", placeholder: "lastRowId" },
@@ -333,10 +452,15 @@ export function buildNodeCatalog(): NodeCatalog {
         id: t.id,
         name: t.name,
         desc: t.desc,
+        kind: kindOf("tendril", t.id),
         presets: { tendrilAction: t.action, tendrilHours: "1", tendrilAmount: "10" },
         fields:
           t.action === "topup"
-            ? [{ key: "tendrilAmount", where: "field" as const, label: "Amount (USD)", placeholder: "10" }]
+            ? [
+                { key: "tendrilAmount", where: "field" as const, label: "Amount (USD)", placeholder: "10" },
+                { key: "tendrilMinBalance", where: "field" as const, label: "Only if credit below (USD)", hint: "blank tops up on every run" },
+                { key: "tendrilCoverHours", where: "field" as const, label: "Cover rent of (hours)", hint: "buys only the shortfall for the next rent, at least Amount; overrides Only if credit below" },
+              ]
             : t.action === "rent"
               ? [{ key: "tendrilHours", where: "field" as const, label: "Hours", placeholder: "1" }]
               : [],
@@ -349,6 +473,7 @@ export function buildNodeCatalog(): NodeCatalog {
         id: t.id,
         name: t.name,
         desc: t.desc,
+        kind: kindOf("end", t.id),
         // "Respond to Webhook" reads as if the webhook caller gets this
         // output back. It does not: the public trigger answers 202 {runId}
         // before the run even finishes (handlers/runs.go PublicTrigger).
