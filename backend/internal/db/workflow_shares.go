@@ -75,7 +75,7 @@ func scanWorkflowShareRow(row rowScanner) (models.WorkflowShare, error) {
 // happened, so the handler can answer 200 rather than 201.
 //
 // The lookup happens INSIDE this transaction, behind an advisory lock on the
-// workflow, rather than in a separate query the handler runs first. Opening
+// user, rather than in a separate query the handler runs first. Opening
 // the Share dialog fires one request, but React's development double-invoke
 // fires two milliseconds apart -- and both found nothing, so both inserted,
 // leaving a workflow with two links to the same graph the first time it was
@@ -93,14 +93,14 @@ func (s *Store) CreateWorkflowShare(ctx context.Context, share models.WorkflowSh
 	}
 	defer tx.Rollback(ctx)
 
+	// The quota spans workflows and applies even when reuse is disabled.
+	// Serialize the reuse check, count and insert under one per-user lock.
+	if _, err := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext('workflow_share_quota'), hashtext($1))`, share.UserID); err != nil {
+		return models.WorkflowShare{}, false, err
+	}
+
 	if reuseIfUnchanged {
-		// Serialises concurrent shares of the SAME workflow and nothing else.
-		// Held to the end of the transaction and released by commit or
-		// rollback, so there is nothing to unlock by hand.
-		if _, err := tx.Exec(ctx,
-			`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, share.WorkflowID); err != nil {
-			return models.WorkflowShare{}, false, err
-		}
 		// Reuse only for never-expiring links: a fresh expiry instant would
 		// never equal a stored one, so an expiring link always gets its own
 		// row rather than being quietly answered with a permanent one.
