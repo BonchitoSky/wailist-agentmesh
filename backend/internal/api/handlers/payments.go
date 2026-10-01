@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -16,6 +17,7 @@ import (
 	"github.com/agentmesh/backend/internal/alert"
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/payments"
+	"github.com/agentmesh/backend/internal/push"
 	"github.com/agentmesh/backend/internal/respond"
 )
 
@@ -134,19 +136,46 @@ func (d *Deps) GetCreditBalance(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"credit_usd_micros": balance})
 }
 
-// GetCreditHistory returns the caller's credit ledger (most recent first) so the
-// billing UI can show real, DB-backed purchases instead of browser-local mocks.
-func (d *Deps) GetCreditHistory(w http.ResponseWriter, r *http.Request) {
+// creditPurchasesDefaultLimit caps an unparameterised billing-history read.
+// Deep history is a rare ask; the page shows a reverse-chronological list and
+// a user looking for one old receipt is better served by a future date filter
+// than by every client paying to transfer a whole ledger on page load.
+const creditPurchasesDefaultLimit = 50
+
+// creditPurchasesMaxLimit bounds ?limit= so a caller cannot ask for an
+// unbounded scan of their own ledger.
+const creditPurchasesMaxLimit = 200
+
+// GetCreditPurchases returns the signed-in user's top-up history from
+// credit_ledger — the authoritative record, replacing the per-browser
+// localStorage copy the billing page used to keep (see
+// db.ListCreditTransactions for why that had to change).
+func (d *Deps) GetCreditPurchases(w http.ResponseWriter, r *http.Request) {
 	userID, _ := r.Context().Value(CtxUserID).(string)
 
-	history, err := d.Store.ListCreditHistory(r.Context(), userID)
+	limit := creditPurchasesDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		// Mirrors UsageSettlements' guard: a negative value parses fine but
+		// would reach the query (and make([]T, 0, v)) as a nonsense capacity.
+		if err != nil || v < 1 {
+			respond.Error(w, http.StatusBadRequest, "limit must be a positive number")
+			return
+		}
+		if v > creditPurchasesMaxLimit {
+			v = creditPurchasesMaxLimit
+		}
+		limit = v
+	}
+
+	txns, err := d.Store.ListCreditTransactions(r.Context(), userID, limit)
 	if err != nil {
-		log.Printf("credit history: %v", err)
+		log.Printf("credit purchases: %v", err)
 		respond.Error(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
-	respond.JSON(w, http.StatusOK, map[string]any{"history": history})
+	respond.JSON(w, http.StatusOK, txns)
 }
 
 // RedeemCoupon credits a signed-in user's balance for a known, unredeemed
@@ -222,6 +251,10 @@ func (d *Deps) VerifyCashfreePayment(w http.ResponseWriter, r *http.Request) {
 	}
 	if applied {
 		go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, via cashfree)", float64(creditedMicros)/1e6, body.OrderID))
+		// To whoever the ledger credited, not whoever is signed in here: the
+		// two differ when the account was switched before the checkout
+		// callback landed, and the owner is the one who was paid.
+		go d.notifyTopUpOwner("cashfree", body.OrderID, creditedMicros)
 	}
 
 	respond.JSON(w, http.StatusOK, map[string]any{
@@ -298,6 +331,7 @@ func (d *Deps) CashfreeWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if applied {
 			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s, via cashfree webhook)", float64(creditedMicros)/1e6, orderID, paymentID))
+			go d.notifyTopUpOwner("cashfree", orderID, creditedMicros)
 		}
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
@@ -408,6 +442,7 @@ func (d *Deps) NOWPaymentsWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		if applied {
 			go alert.Notify(context.Background(), alert.ChannelCredits, fmt.Sprintf("credited $%.2f (order %s, payment %s, via nowpayments)", float64(creditedMicros)/1e6, event.OrderID, paymentID))
+			go d.notifyTopUpOwner("nowpayments", event.OrderID, creditedMicros)
 		}
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 
@@ -431,4 +466,52 @@ func (d *Deps) NOWPaymentsWebhook(w http.ResponseWriter, r *http.Request) {
 	default:
 		respond.JSON(w, http.StatusOK, map[string]string{"status": "ignored"})
 	}
+}
+
+// notifyTopUpOwner pushes a top-up confirmation to the user a completed
+// order credited. The owner always comes from the ledger row, never from the
+// request: a webhook carries no session, and the client verify path's session
+// can belong to a different account than the one that paid. Call it with `go`,
+// like alert.Notify: a push must never delay the response.
+func (d *Deps) notifyTopUpOwner(provider, orderID string, creditedMicros int64) {
+	ctx := context.Background()
+	ownerID, err := d.Store.GetCreditTransactionUserID(ctx, provider, orderID)
+	if err != nil {
+		log.Printf("%s webhook: could not look up owner for push: %v", provider, err)
+		return
+	}
+	push.NotifyTopUpCompleted(ctx, d.Store, ownerID, creditedMicros)
+}
+
+// PaymentProviders reports which checkout providers this deployment can
+// actually take money through, and the rate needed to price the USD ones.
+//
+// The frontend used to hardcode availability, which meant a deployment whose
+// FX lookup was failing still offered a crypto top-up that could only fail at
+// invoice creation. Cashfree charges in INR and needs no rate; NOWPayments
+// quotes in USD, so it is only offerable when a rate is available.
+func (d *Deps) PaymentProviders(w http.ResponseWriter, r *http.Request) {
+	// The top-up UI is denominated in rupees while NOWPayments settles in USD,
+	// so the frontend has to convert. Serving the same rate the Cashfree path
+	// pins into its ledger row keeps the two from disagreeing -- the
+	// frontend's own fx.ts constant is a mock (a fixed 1/83) and would quote a
+	// price that drifts from what is actually charged.
+	//
+	// Cached, because this is hit on every billing page mount and a live fetch
+	// per request put a third-party host on the critical path of a page load.
+	rate, stale, err := payments.CachedINRToUSDRate(r.Context())
+	if err != nil {
+		log.Printf("payment providers: fx rate: %v", err)
+	} else if stale {
+		log.Printf("payment providers: serving a stale fx rate (%v) — refresh is failing", rate)
+	}
+	usdPriceable := err == nil && rate > 0
+
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"usd_per_inr": rate,
+		"providers": []map[string]any{
+			{"id": "cashfree", "enabled": true, "currency": "INR"},
+			{"id": "nowpayments", "enabled": usdPriceable, "currency": "USD"},
+		},
+	})
 }

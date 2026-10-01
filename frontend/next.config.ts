@@ -6,7 +6,21 @@ import type { NextConfig } from "next";
 // this proxy and the auth cookie stays on the frontend's own domain.
 const BACKEND_URL = process.env.BACKEND_URL ?? "";
 
+const MOBILE = process.env.MOBILE_BUILD === "1";
+
 const nextConfig: NextConfig = {
+  ...(MOBILE ? { output: "export" as const, distDir: "out-mobile" } : {}),
+  // Next's rewrites() proxy kills the upstream connection after 30s by
+  // default -- too short for the chat-driven workflow builder, whose
+  // meta-agent loop can take several sequential Gemini round trips per
+  // message. Give it more room.
+  experimental: {
+    // Vercel's function timeout is 300s on all plans; this was 120s from
+    // when it was 60-90s. The builder's own budget is set under this
+    // (nodes.defaultBuildTimeBudget) so a finished build still has somewhere
+    // to send its reply.
+    proxyTimeout: 300000,
+  },
   async rewrites() {
     if (!BACKEND_URL) return [];
     return [

@@ -5,6 +5,7 @@ import (
 
 	"github.com/agentmesh/backend/internal/db"
 	"github.com/agentmesh/backend/internal/engine"
+	"github.com/agentmesh/backend/internal/models"
 	"github.com/agentmesh/backend/internal/payments"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/tendril"
@@ -44,11 +45,15 @@ type USDCSigner interface {
 var _ USDCSigner = (*wallet.Service)(nil)
 
 type Deps struct {
-	Store   *db.Store
-	Broker  *sse.Broker
-	Wallet  *wallet.Service
-	Engine  *engine.Runner
-	BaseURL string
+	Store *db.Store
+	// WorkflowStatsLoader overrides the detail endpoint's stats read when set.
+	// Production uses Store; the seam lets handler tests exercise its failure
+	// response without damaging shared database tables.
+	WorkflowStatsLoader func(context.Context, string, *models.Workflow) error
+	Broker              *sse.Broker
+	Wallet              *wallet.Service
+	Engine              *engine.Runner
+	BaseURL             string
 	// RelayBaseURL is where THIS instance's own /x402/relay is reached from
 	// (see main.go's relayBaseURL — distinct from BaseURL, which also signs
 	// auth cookies). Needed by the Tendril console's direct-action endpoints
@@ -63,6 +68,12 @@ type Deps struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 
+	// BazaarBaseURL is GoPlausible's facilitator, whose public
+	// /discovery/resources catalog backs the Bazaar page. Overridable so tests
+	// can point at a fake upstream.
+	BazaarBaseURL string
+	bazaarCache   bazaarCache
+
 	Cashfree      CashfreeClient
 	CashfreeAppID string
 
@@ -76,11 +87,16 @@ type Deps struct {
 	// endpoints can build their own X402RelayConfig without going through a
 	// workflow run.
 	PlatformSpendWalletEncMnemonic string
-	FacilitatorClient              *x402.FacilitatorClient
-	USDCAssetID                    uint64
-	RelayNetwork                   string
-	RelayFeePayer                  string
-	USDCSigner                     USDCSigner
+	// PlatformGeminiAPIKey powers the chat-driven workflow builder's
+	// meta-agent (nodes.BuildGraph) -- independent of engine.Runner's own
+	// platform-key map (main.go's runner.SetPlatformKeys call) since Deps
+	// has no access to Runner's private fields.
+	PlatformGeminiAPIKey string
+	FacilitatorClient    *x402.FacilitatorClient
+	USDCAssetID          uint64
+	RelayNetwork         string
+	RelayFeePayer        string
+	USDCSigner           USDCSigner
 	// MaxRelayOutboundUSDMicros caps a single outbound relay payment
 	// (Wallet 2 -> target). The relay fetches a target's price quote twice
 	// per cycle (once for the public challenge preview, once again at
@@ -101,4 +117,36 @@ type Deps struct {
 	// here so the Tendril console's direct-action endpoints (topup/rent/run)
 	// can call nodes.ExecuteTendril without going through a workflow run.
 	TendrilSession *tendril.Session
+
+	SlackOAuthClientID          string
+	SlackOAuthClientSecret      string
+	GitHubConnectorClientID     string
+	GitHubConnectorClientSecret string
+	NotionClientID              string
+	NotionClientSecret          string
+	AirtableClientID            string
+	AirtableClientSecret        string
+	HubSpotClientID             string
+	HubSpotClientSecret         string
+	AsanaClientID               string
+	AsanaClientSecret           string
+	ClickUpClientID             string
+	ClickUpClientSecret         string
+	JiraClientID                string
+	JiraClientSecret            string
+	LinearClientID              string
+	LinearClientSecret          string
+	MailchimpClientID           string
+	MailchimpClientSecret       string
+	GitLabClientID              string
+	GitLabClientSecret          string
+	TodoistClientID             string
+	TodoistClientSecret         string
+}
+
+func (d *Deps) loadWorkflowStats(ctx context.Context, userID string, wf *models.Workflow) error {
+	if d.WorkflowStatsLoader != nil {
+		return d.WorkflowStatsLoader(ctx, userID, wf)
+	}
+	return d.Store.AttachWorkflowStats(ctx, userID, wf)
 }

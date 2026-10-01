@@ -16,6 +16,7 @@ import (
 	"github.com/agentmesh/backend/internal/engine"
 	"github.com/agentmesh/backend/internal/engine/nodes"
 	"github.com/agentmesh/backend/internal/payments"
+	"github.com/agentmesh/backend/internal/scheduler"
 	"github.com/agentmesh/backend/internal/sse"
 	"github.com/agentmesh/backend/internal/tendril"
 	"github.com/agentmesh/backend/internal/wallet"
@@ -141,6 +142,46 @@ func main() {
 		"groq":      os.Getenv("PLATFORM_GROQ_API_KEY"),
 		"mistral":   os.Getenv("PLATFORM_MISTRAL_API_KEY"),
 	})
+	// Both optional; see backend/.env.example. Blank WEB_SEARCH_MODEL keeps
+	// grounded search on gemini-2.5-flash.
+	nodes.SetWebSearchModel(os.Getenv("WEB_SEARCH_MODEL"))
+	// The same ALGOD_URL the wallet uses, so a deployment cannot end up
+	// reading one chain and paying on another. The indexer is a separate
+	// service with its own setting; left unset, its default follows
+	// ALGORAND_NETWORK so it names the same chain as everything else here.
+	nodes.SetAlgorandBases(
+		envOr("ALGOD_URL", "https://testnet-api.algonode.cloud"),
+		envOr("ALGORAND_INDEXER_URL", nodes.AlgorandIndexerDefault(envOr("ALGORAND_NETWORK", "testnet"))),
+	)
+	// Blank BUILDER_THINKING_BUDGET sends no thinking config, leaving builder
+	// thinking as it is today. Unlike envInt64Or, a value that does not parse
+	// stops startup: a typo that only logged a warning would leave the cap off
+	// while whoever set it believes it is on. A negative number stops startup
+	// for the same reason -- it is not a budget, and clamping one into 0 would
+	// silently turn thinking off instead.
+	//
+	// Zero IS accepted and is not the same as blank: Gemini reads
+	// thinkingBudget 0 as thinking off, which is the documented way to
+	// disable it.
+	if v := os.Getenv("BUILDER_THINKING_BUDGET"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("BUILDER_THINKING_BUDGET must be a whole number of tokens, got %q: %v", v, err)
+		}
+		if n < 0 {
+			log.Fatalf("BUILDER_THINKING_BUDGET must not be negative, got %d -- leave it blank to send no thinking config, or set 0 to turn thinking off", n)
+		}
+		nodes.SetBuilderThinkingBudget(n)
+		if n == 0 {
+			log.Printf("builder thinking: off (budget 0)")
+		} else {
+			log.Printf("builder thinking budget: %d tokens per round", n)
+		}
+	}
+	// Reuses the same Google app already configured for sign-in-with-Google
+	// (below) -- Gmail/Sheets/Calendar/Drive nodes fail closed with a clear
+	// error if unset, same pattern as SetTendril.
+	runner.SetGoogleOAuth(os.Getenv("GOOGLE_CLIENT_ID"), os.Getenv("GOOGLE_CLIENT_SECRET"))
 
 	var tendrilClient *tendril.Client
 	var tendrilSession *tendril.Session
@@ -161,6 +202,7 @@ func main() {
 
 	go expireStalePendingTransactionsLoop(ctx, store)
 	runner.StartLeaseReaper(ctx, nodes.ReaperInterval)
+	go scheduler.New(store, runner, broker, mustEnv("ENCRYPTION_KEY")).Run(ctx)
 
 	deps := &handlers.Deps{
 		Store:         store,
@@ -178,6 +220,10 @@ func main() {
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 
+		// Empty falls back to GoPlausible's facilitator (see
+		// defaultBazaarBaseURL) — set only to point at a mirror or a fake.
+		BazaarBaseURL: os.Getenv("BAZAAR_BASE_URL"),
+
 		Cashfree:      cashfreeClient,
 		CashfreeAppID: cashfreeClient.AppID,
 		NOWPayments:   nowPaymentsClient,
@@ -185,6 +231,7 @@ func main() {
 		PlatformWalletAddress:          platformWalletAddr,
 		PlatformWalletEncMnemonic:      platformWalletEncMnemonic,
 		PlatformSpendWalletEncMnemonic: platformSpendWalletEncMnemonic,
+		PlatformGeminiAPIKey:           os.Getenv("PLATFORM_GEMINI_API_KEY"),
 		FacilitatorClient:              facilitatorClient,
 		USDCAssetID:                    usdcAssetID,
 		RelayNetwork:                   relayNetwork,
@@ -193,7 +240,38 @@ func main() {
 		MaxRelayOutboundUSDMicros:      maxRelayOutboundUSDMicros,
 		TendrilClient:                  tendrilClient,
 		TendrilSession:                 tendrilSession,
+
+		SlackOAuthClientID:          os.Getenv("SLACK_OAUTH_CLIENT_ID"),
+		SlackOAuthClientSecret:      os.Getenv("SLACK_OAUTH_CLIENT_SECRET"),
+		GitHubConnectorClientID:     os.Getenv("GITHUB_CONNECTOR_CLIENT_ID"),
+		GitHubConnectorClientSecret: os.Getenv("GITHUB_CONNECTOR_CLIENT_SECRET"),
+		NotionClientID:              os.Getenv("NOTION_CLIENT_ID"),
+		NotionClientSecret:          os.Getenv("NOTION_CLIENT_SECRET"),
+		AirtableClientID:            os.Getenv("AIRTABLE_CLIENT_ID"),
+		AirtableClientSecret:        os.Getenv("AIRTABLE_CLIENT_SECRET"),
+		HubSpotClientID:             os.Getenv("HUBSPOT_CLIENT_ID"),
+		HubSpotClientSecret:         os.Getenv("HUBSPOT_CLIENT_SECRET"),
+		AsanaClientID:               os.Getenv("ASANA_CLIENT_ID"),
+		AsanaClientSecret:           os.Getenv("ASANA_CLIENT_SECRET"),
+		ClickUpClientID:             os.Getenv("CLICKUP_CLIENT_ID"),
+		ClickUpClientSecret:         os.Getenv("CLICKUP_CLIENT_SECRET"),
+		JiraClientID:                os.Getenv("JIRA_CLIENT_ID"),
+		JiraClientSecret:            os.Getenv("JIRA_CLIENT_SECRET"),
+		LinearClientID:              os.Getenv("LINEAR_CLIENT_ID"),
+		LinearClientSecret:          os.Getenv("LINEAR_CLIENT_SECRET"),
+		MailchimpClientID:           os.Getenv("MAILCHIMP_CLIENT_ID"),
+		MailchimpClientSecret:       os.Getenv("MAILCHIMP_CLIENT_SECRET"),
+		GitLabClientID:              os.Getenv("GITLAB_CLIENT_ID"),
+		GitLabClientSecret:          os.Getenv("GITLAB_CLIENT_SECRET"),
+		TodoistClientID:             os.Getenv("TODOIST_CLIENT_ID"),
+		TodoistClientSecret:         os.Getenv("TODOIST_CLIENT_SECRET"),
 	}
+
+	// Keeps the Bazaar catalog cache refreshed ahead of its own TTL, so a
+	// real request practically never blocks on the ~780-entry upstream crawl
+	// (up to 90s worst case) that would otherwise run inline the instant the
+	// cache goes stale.
+	deps.WarmBazaarCache(ctx)
 
 	r := api.NewRouter(deps)
 

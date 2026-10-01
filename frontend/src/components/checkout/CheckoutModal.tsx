@@ -1,15 +1,17 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { IconClose } from "@/components/ui";
+import { useModalDismissal } from "@/hooks/useModalDismissal";
 import { useCredits } from "@/lib/credits/store";
-import type { Purchase } from "@/lib/credits/types";
+import { creditsForTopup } from "@/lib/credits/fx";
 import type { PaymentMethod } from "./types";
 import { DEFAULT_PROVIDER } from "./paymentProviders";
 import { buildCreditCart, computeTotals } from "./mockData";
 import { CartItemRow } from "./CartItemRow";
 import { OrderSummary } from "./OrderSummary";
 import { PaymentInfoPanel } from "./PaymentInfoPanel";
+import { usePaymentProviders } from "./usePaymentProviders";
 
 // We intentionally avoid native <dialog showModal()> here because showModal()
 // places the element in the browser top layer, which sits above every z-index
@@ -29,7 +31,7 @@ const MODAL_CSS = `
 .checkout-panel {
   position: relative;
   display: flex; flex-direction: column;
-  max-height: 90vh; max-width: min(980px, calc(100vw - 48px));
+  max-height: 90vh; max-height: 90dvh; max-width: min(980px, calc(100vw - 48px));
   width: 100%;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-4);
@@ -70,39 +72,43 @@ export function CheckoutModal({
   const panelRef = useRef<HTMLDivElement>(null);
   const items = useMemo(() => buildCreditCart(amountINR), [amountINR]);
   const [method, setMethod] = useState<PaymentMethod>(DEFAULT_PROVIDER);
-  const { addPurchase, balanceUSD } = useCredits();
+  const { recordPurchase, balanceUSD } = useCredits();
   const router = useRouter();
-  const [confirmation, setConfirmation] = useState<Purchase | null>(null);
+  // Just the credited amount for the success screen, not a purchase record:
+  // credit_ledger is where the purchase lives, written by the backend when the
+  // payment was created and settled by the gateway's webhook. Keeping a local
+  // record here is what used to make history per-browser.
+  const [paid, setPaid] = useState(false);
+  // null means the amount is not known, NOT that nothing was paid -- the
+  // success screen is gated on `paid` for exactly that reason.
+  const [creditedUSD, setCreditedUSD] = useState<number | null>(null);
+
+  // Fetched once here and handed to both panels. Each used to mount its
+  // own copy of this hook, which meant two requests for the same rate and
+  // two chances for them to disagree about what the payer receives.
+  const {
+    providers,
+    usdPerINR,
+    loading: providersLoading,
+  } = usePaymentProviders();
 
   const totals = useMemo(() => computeTotals(items), [items]);
 
   const handlePaid = (creditsUSDOverride?: number) => {
-    setConfirmation(
-      addPurchase({ amountINR: totals.total, method, creditsUSDOverride }),
+    // creditsUSDOverride is the backend-verified credited amount. A provider
+    // that cannot report one yet (the NOWPayments stub) falls back to the FX
+    // estimate for this screen only -- the balance shown underneath comes from
+    // the server either way, so an estimate here can never become a number the
+    // user is billed against.
+    setCreditedUSD(
+      creditsUSDOverride ??
+        (usdPerINR > 0 ? creditsForTopup(totals.total, usdPerINR) : null),
     );
+    setPaid(true);
+    void recordPurchase();
   };
 
-  // Close on Escape key
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  // Lock body scroll while open
-  useEffect(() => {
-    if (open) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [open]);
+  useModalDismissal(onClose, open);
 
   if (!open) return null;
 
@@ -127,7 +133,7 @@ export function CheckoutModal({
           <div
             style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 24 }}
           >
-            {confirmation ? (
+            {paid ? (
               <div
                 style={{
                   display: "flex",
@@ -168,8 +174,9 @@ export function CheckoutModal({
                 <p
                   style={{ fontSize: 13, color: "var(--fg-muted)", margin: 0 }}
                 >
-                  ${confirmation.creditsUSD.toFixed(2)} credits added to your
-                  wallet.
+                  {creditedUSD === null
+                    ? "Your credits have been added to your wallet."
+                    : `$${creditedUSD.toFixed(2)} credits added to your wallet.`}
                 </p>
                 <div
                   style={{
@@ -299,7 +306,7 @@ export function CheckoutModal({
                       <CartItemRow key={item.id} item={item} />
                     ))}
                     <div style={{ marginTop: 8 }}>
-                      <OrderSummary totals={totals} />
+                      <OrderSummary totals={totals} usdPerINR={usdPerINR} />
                     </div>
                   </div>
 
@@ -321,6 +328,9 @@ export function CheckoutModal({
                       }}
                     >
                       <PaymentInfoPanel
+                        providers={providers}
+                        usdPerINR={usdPerINR}
+                        providersLoading={providersLoading}
                         method={method}
                         onMethodChange={setMethod}
                         amountINR={totals.total}

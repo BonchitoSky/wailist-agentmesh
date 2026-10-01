@@ -1,40 +1,124 @@
 "use client";
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import {
   Pill,
   Tag,
   IconSearch,
   IconGrid,
-  IconWallet,
   Card,
   ghostBtnSm,
 } from "@/components/ui";
 import { Topbar } from "@/components/Topbar";
+import { PullToRefresh } from "@/components/PullToRefresh";
+import { WorkflowListSkeleton } from "@/components/ui/Skeleton";
 import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
 import { useCredits } from "@/lib/credits/store";
-import { tendril } from "@/lib/tendril";
+import { TENDRIL_WORKFLOW } from "@/lib/data";
+import { loadTemplateWorkflow } from "@/lib/templateWorkflow";
+import { can } from "@/lib/readonly";
+import { workflowHref } from "@/lib/routes";
+import { filterWorkflows, type StatusFilter } from "@/lib/workflowList";
+import { ImportModal } from "./ImportModal";
+import { ShareModal } from "./ShareModal";
+import { WorkflowsPhoneList } from "./phone/WorkflowsPhoneList";
+import { WorkflowOverview } from "./WorkflowOverview";
+import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
+import { useReadOnly } from "@/hooks/useReadOnly";
+import {
+  cadenceToCron,
+  cronToCadence,
+  type Cadence,
+  type CadenceValue,
+} from "@/lib/cronCadence";
+
+const subscribeToHydration = () => () => {};
 
 export function WorkflowsPage() {
   const router = useRouter();
+  const readOnly = useReadOnly();
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false,
+  );
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState<StatusFilter>("all");
   const [view, setView] = useState<"rows" | "grid">("rows");
   const [wfList, setWfList] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [creatingTendril, setCreatingTendril] = useState(false);
-  const [deleteError, setDeleteError] = useState("");
-  const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
+  // Tagged by source so the banner always shows the most recent failure --
+  // two separate error strings with a fixed `a || b` precedence would let
+  // a stale error from one action permanently mask a newer one from the
+  // other. A success only clears the error if it's the one that owns it,
+  // so it never wipes an unrelated action's still-relevant error.
+  const [pageError, setPageError] = useState<{
+    source: "list" | "tendril" | "delete" | "schedule";
+    message: string;
+  } | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  // The workflow being shared -- also doubles as ShareModal's open flag
+  // (non-null = open), the same "id doubles as open state" shape RowMenu's
+  // own view state already uses.
+  const [shareWorkflowId, setShareWorkflowId] = useState<string | null>(null);
+  const { refreshBalance } = useCredits();
+
+  // Extracted from the mount effect so pull-to-refresh can run the same fetch
+  // rather than a second copy of it that could drift.
+  //
+  // The two callers want different recoveries from the same failure, which is
+  // the one thing sharing the function must not flatten. On mount there is
+  // nothing to lose, so an empty list is the honest result. On a refresh there
+  // is a list already on screen, and emptying it turns a dropped request on a
+  // phone network into "you have no workflows" -- worse than the refresh
+  // simply not happening, because the user pulled expecting the list to be
+  // updated, not removed.
+  //
+  // Either way the failure is now said out loud through the same tagged banner
+  // the delete and schedule paths use, rather than being silently rendered as
+  // an empty state. UsagePage's settlements fetch already keeps whatever
+  // loaded last for the same reason (UsagePage.tsx:322).
+  const reload = useCallback(
+    (opts?: { keepOnError?: boolean }) =>
+      workflowsApi
+        .list()
+        .then((rows) => {
+          setWfList(rows);
+          setPageError((prev) => (prev?.source === "list" ? null : prev));
+        })
+        .catch((e: unknown) => {
+          if (!opts?.keepOnError) setWfList([]);
+          setPageError({
+            source: "list",
+            message:
+              e instanceof Error ? e.message : "could not load your workflows",
+          });
+        })
+        .finally(() => setLoading(false)),
+    [],
+  );
 
   useEffect(() => {
-    workflowsApi
-      .list()
-      .then(setWfList)
-      .catch(() => setWfList([]))
-      .finally(() => setLoading(false));
-  }, []);
+    void reload();
+  }, [reload]);
+
+  // What the pull gesture runs. The balance goes with it: the two are read
+  // together on mount for the same reason, and a refresh that updated the list
+  // while leaving a stale figure above it would look like a bug.
+  const refreshAll = useCallback(
+    () => Promise.all([reload({ keepOnError: true }), refreshBalance()]),
+    [reload, refreshBalance],
+  );
 
   // Same authoritative balance the engine spends against, re-read on mount so
   // this page never shows a figure left over from before the last run.
@@ -42,41 +126,41 @@ export function WorkflowsPage() {
     void refreshBalance();
   }, [refreshBalance]);
 
-  const filtered = useMemo(() => {
-    return wfList.filter((wf) => {
-      const matchesQ =
-        !q ||
-        wf.name?.toLowerCase().includes(q.toLowerCase()) ||
-        wf.tags?.join(" ").includes(q.toLowerCase());
-      const matchesS = status === "all" || wf.status === status;
-      return matchesQ && matchesS;
-    });
-  }, [wfList, q, status]);
+  const filtered = useMemo(
+    () => filterWorkflows(wfList, { query: q, status }),
+    [wfList, q, status],
+  );
 
   const handleNewWorkflow = useCallback(async () => {
     if (creating) return;
     setCreating(true);
     try {
       const wf = await workflowsApi.create("Untitled workflow");
-      router.push(`/workflows/${wf.id}`);
+      router.push(workflowHref(wf.id));
     } catch {
       setCreating(false);
     }
   }, [creating, router]);
 
-  // No node graph here at all — this row is a shortcut into the direct
-  // Tendril console (WorkflowRoute matches on its id), not a workflow you
-  // build on canvas. tendril.console() finds-or-creates the ONE hidden
-  // workflow that backs every user's console, so repeated clicks always
-  // open the same row instead of workflowsApi.create minting a fresh
-  // duplicate one every time.
+  // Loads TENDRIL_WORKFLOW (lib/data.ts) into a brand-new workflow row every
+  // click -- a template is just a starting point the user immediately edits,
+  // so there's no "the one shared copy" identity to preserve and a fresh
+  // copy each time is correct. loadTemplateWorkflow (lib/templateWorkflow.ts)
+  // owns the create()-then-update()-then-rollback-on-failure sequence,
+  // shared with each partner ConsoleCard's "try a workflow" icon.
   const handleLoadTendrilWorkflow = useCallback(async () => {
     if (creatingTendril) return;
     setCreatingTendril(true);
+    setPageError((prev) => (prev?.source === "tendril" ? null : prev));
     try {
-      const workflowId = await tendril.console();
-      router.push(`/workflows/${workflowId}`);
-    } catch {
+      const id = await loadTemplateWorkflow(TENDRIL_WORKFLOW);
+      router.push(workflowHref(id));
+    } catch (e) {
+      setPageError({
+        source: "tendril",
+        message:
+          e instanceof Error ? e.message : "could not load demo workflow",
+      });
       setCreatingTendril(false);
     }
   }, [creatingTendril, router]);
@@ -85,21 +169,102 @@ export function WorkflowsPage() {
   // confirm step. The backend refuses (409) for workflows with Tendril lease
   // history; that message is shown rather than leaving the row silently intact.
   const handleDelete = useCallback(async (id: string) => {
-    setDeleteError("");
+    setPageError((prev) => (prev?.source === "delete" ? null : prev));
     try {
       await workflowsApi.remove(id);
       setWfList((prev) => prev.filter((w) => w.id !== id));
     } catch (e) {
-      setDeleteError(
-        e instanceof Error ? e.message : "could not delete workflow",
-      );
+      setPageError({
+        source: "delete",
+        message: e instanceof Error ? e.message : "could not delete workflow",
+      });
     }
   }, []);
 
+  // Schedule set/clear mirror handleDelete's pattern: optimistic local list
+  // update on success, tagged pageError on failure. Both re-throw so
+  // SchedulePopover's own inline error state (right next to the button the
+  // user just clicked) shows the same message rather than only the
+  // page-level banner.
+  const handleSetSchedule = useCallback(async (id: string, cron: string) => {
+    setPageError((prev) => (prev?.source === "schedule" ? null : prev));
+    try {
+      const { cron: savedCron, nextRunAt } = await workflowsApi.setSchedule(
+        id,
+        cron,
+      );
+      setWfList((prev) =>
+        prev.map((w) =>
+          w.id === id
+            ? { ...w, scheduleCron: savedCron, scheduleNextRunAt: nextRunAt }
+            : w,
+        ),
+      );
+    } catch (e) {
+      setPageError({
+        source: "schedule",
+        message: e instanceof Error ? e.message : "could not save schedule",
+      });
+      throw e;
+    }
+  }, []);
+
+  const handleClearSchedule = useCallback(async (id: string) => {
+    setPageError((prev) => (prev?.source === "schedule" ? null : prev));
+    try {
+      await workflowsApi.clearSchedule(id);
+      setWfList((prev) =>
+        prev.map((w) =>
+          w.id === id
+            ? { ...w, scheduleCron: undefined, scheduleNextRunAt: undefined }
+            : w,
+        ),
+      );
+    } catch (e) {
+      setPageError({
+        source: "schedule",
+        message: e instanceof Error ? e.message : "could not remove schedule",
+      });
+      throw e;
+    }
+  }, []);
+
+  // A phone gets its own thin list: no create, import, schedule or share
+  // actions (those are desktop-only), no view toggle, and the status tabs
+  // folded into the filter menu. It shares the fetch and the pull above.
+  if (readOnly) {
+    return (
+      <div
+        className="am-viewport"
+        style={{
+          height: "100dvh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          background: "var(--bg)",
+        }}
+      >
+        <Topbar />
+        <PullToRefresh
+          onRefresh={refreshAll}
+          style={{ flex: 1, minHeight: 0, background: "var(--bg)" }}
+        >
+          <WorkflowsPhoneList
+            workflows={wfList}
+            loading={loading}
+            error={pageError?.message ?? null}
+            onRetry={() => void reload({ keepOnError: true })}
+          />
+        </PullToRefresh>
+      </div>
+    );
+  }
+
   return (
     <div
+      className="am-viewport"
       style={{
-        height: "100vh",
+        height: "100dvh",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -108,30 +273,28 @@ export function WorkflowsPage() {
     >
       <Topbar />
 
-      {/* Main */}
-      <div style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}>
+      {/* Main. PullToRefresh owns the scrolling, because the gesture has to
+          know the scroll position to tell a pull from an ordinary drag. On
+          desktop it is a plain overflow container and adds no listeners. */}
+      <PullToRefresh
+        onRefresh={refreshAll}
+        style={{ flex: 1, minHeight: 0, background: "var(--bg)" }}
+      >
         <div
           style={{
             maxWidth: 1280,
             margin: "0 auto",
-            padding: "36px 24px 80px",
+            padding: "var(--wf-page-pad)",
           }}
         >
           {/* Header */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "flex-end",
-              justifyContent: "space-between",
-              marginBottom: 28,
-            }}
-          >
+          <div className="wf-header" style={{ marginBottom: 28 }}>
             <div>
               <Tag>your workspace</Tag>
               <h1
                 style={{
                   margin: "12px 0 4px",
-                  fontSize: 36,
+                  fontSize: "var(--wf-h1)",
                   fontWeight: 500,
                   letterSpacing: "-0.025em",
                 }}
@@ -142,99 +305,51 @@ export function WorkflowsPage() {
                 Design, deploy, and monitor agent pipelines.
               </p>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button style={ghostBtn}>Import</button>
-              <button
-                onClick={handleLoadTendrilWorkflow}
-                disabled={creatingTendril}
-                style={{
-                  ...ghostBtn,
-                  opacity: creatingTendril ? 0.6 : 1,
-                  position: "relative",
-                }}
-                title="Rent a real Linux machine by the hour. SSH from the console. Official — built with Tendril."
-              >
-                {creatingTendril ? "Loading…" : "Load Tendril workflow"}
-                <span
+            <div
+              className="wf-actions"
+              data-readonly={readOnly}
+              // The server cannot classify the device; reserve space until it can.
+              style={{ visibility: hydrated ? undefined : "hidden" }}
+            >
+              {can("workflow.create", readOnly) && (
+                <button style={ghostBtn} onClick={() => setImportOpen(true)}>
+                  Import
+                </button>
+              )}
+              {can("workflow.create", readOnly) && (
+                <button
+                  onClick={handleLoadTendrilWorkflow}
+                  disabled={creatingTendril}
                   style={{
-                    marginLeft: 6,
-                    fontSize: 9,
-                    fontFamily: "var(--font-mono)",
-                    color: "#E879F9",
-                    border: "1px solid #E879F9",
-                    borderRadius: 999,
-                    padding: "1px 5px",
-                    textTransform: "uppercase",
-                    letterSpacing: "0.04em",
+                    ...ghostBtn,
+                    opacity: creatingTendril ? 0.6 : 1,
+                    position: "relative",
                   }}
+                  title="Rents a real Tendril machine for up to 15 minutes, probes its hardware, runs a multi-core benchmark on it, has a Gemini analyst write up the results, then releases the machine and refunds unused time. Tops up Tendril credit only when yours is short of the rent (at least $2 plus a $1.50 fee). If any step fails the machine is still released. $7.54 per run (rent gate $1.51, two jobs at $3.00 each, analyst $0.03) plus a few cents of metered machine time."
                 >
-                  Official
-                </span>
-              </button>
-              <button
-                onClick={handleNewWorkflow}
-                disabled={creating}
-                style={{ ...primaryBtn, opacity: creating ? 0.6 : 1 }}
-              >
-                {creating ? "Creating…" : "+ New workflow"}
-              </button>
+                  {creatingTendril ? "Loading…" : "Run demo workflow"}
+                  <span style={{ marginLeft: 6 }}>
+                    <Pill tone="accent" mono>
+                      $7.54+/run
+                    </Pill>
+                  </span>
+                </button>
+              )}
+              {can("workflow.create", readOnly) && (
+                <button
+                  onClick={handleNewWorkflow}
+                  disabled={creating}
+                  style={{ ...primaryBtn, opacity: creating ? 0.6 : 1 }}
+                >
+                  {creating ? "Creating…" : "+ New workflow"}
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Credit balance — the one number that actually gates whether a run
-              can happen here. Replaces the old KPI row, whose cards were all
-              unwired placeholders. */}
-          <Card
-            style={{
-              marginBottom: 24,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 16,
-            }}
-          >
-            <div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 7,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 10,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.08em",
-                  color: "var(--fg-dim)",
-                }}
-              >
-                <IconWallet size={13} /> Credit balance
-              </div>
-              <div
-                style={{
-                  marginTop: 8,
-                  fontSize: 28,
-                  fontWeight: 500,
-                  letterSpacing: "-0.02em",
-                  fontFamily: "var(--font-mono)",
-                  fontVariantNumeric: "tabular-nums",
-                  color: "var(--fg)",
-                }}
-              >
-                {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
-              </div>
-              <div
-                style={{ marginTop: 4, fontSize: 11, color: "var(--fg-muted)" }}
-              >
-                {balanceKnown
-                  ? "Spent as your agents call paid tools and models."
-                  : "Loading balance…"}
-              </div>
-            </div>
-            <button onClick={() => router.push("/billing")} style={ghostBtn}>
-              Add credits
-            </button>
-          </Card>
+          <WorkflowOverview />
 
-          {deleteError && (
+          {pageError && (
             <div
               style={{
                 marginBottom: 16,
@@ -246,20 +361,13 @@ export function WorkflowsPage() {
                 fontSize: 12.5,
               }}
             >
-              {deleteError}
+              {pageError.message}
             </div>
           )}
 
           {/* Controls */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              marginBottom: 12,
-            }}
-          >
-            <div style={{ position: "relative", flex: 1, maxWidth: 360 }}>
+          <div className="wf-controls" style={{ marginBottom: 12 }}>
+            <div className="wf-search" style={{ position: "relative" }}>
               <span
                 style={{
                   position: "absolute",
@@ -299,9 +407,10 @@ export function WorkflowsPage() {
                 border: "1px solid var(--border)",
               }}
             >
-              {["all", "active", "paused", "draft"].map((s) => (
+              {(["all", "active", "paused", "draft"] as const).map((s) => (
                 <button
                   key={s}
+                  className="wf-filter"
                   onClick={() => setStatus(s)}
                   style={{
                     border: "none",
@@ -333,6 +442,7 @@ export function WorkflowsPage() {
               }}
             >
               <button
+                className="wf-view-toggle"
                 onClick={() => setView("rows")}
                 style={{
                   ...ghostBtnSm,
@@ -345,6 +455,7 @@ export function WorkflowsPage() {
                 ☰ Rows
               </button>
               <button
+                className="wf-view-toggle"
                 onClick={() => setView("grid")}
                 style={{
                   ...ghostBtnSm,
@@ -364,27 +475,23 @@ export function WorkflowsPage() {
 
           {/* List */}
           {loading ? (
-            <div
-              style={{
-                padding: 48,
-                textAlign: "center",
-                color: "var(--fg-dim)",
-                fontFamily: "var(--font-mono)",
-                fontSize: 12,
-              }}
-            >
-              loading workflows…
-            </div>
+            <WorkflowListSkeleton />
           ) : view === "rows" ? (
             <WorkflowRows
               items={filtered}
-              onOpen={(id) => router.push(`/workflows/${id}`)}
+              onOpen={(id) => router.push(workflowHref(id))}
+              onGeofence={(id) =>
+                router.push(workflowHref(id, { geofence: true }))
+              }
               onDelete={handleDelete}
+              onSetSchedule={handleSetSchedule}
+              onClearSchedule={handleClearSchedule}
+              onShare={setShareWorkflowId}
             />
           ) : (
             <WorkflowGrid
               items={filtered}
-              onOpen={(id) => router.push(`/workflows/${id}`)}
+              onOpen={(id) => router.push(workflowHref(id))}
             />
           )}
 
@@ -406,7 +513,22 @@ export function WorkflowsPage() {
             </div>
           )}
         </div>
-      </div>
+      </PullToRefresh>
+      {importOpen && (
+        <ImportModal
+          onClose={() => setImportOpen(false)}
+          onImported={(id) => {
+            setImportOpen(false);
+            router.push(workflowHref(id));
+          }}
+        />
+      )}
+      {shareWorkflowId && (
+        <ShareModal
+          workflowId={shareWorkflowId}
+          onClose={() => setShareWorkflowId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -414,11 +536,18 @@ export function WorkflowsPage() {
 function StatusBadge({ status }: { status?: string }) {
   const map: Record<
     string,
-    { tone: "ok" | "warm" | "default"; label: string }
+    { tone: "ok" | "warm" | "default" | "danger"; label: string }
   > = {
     active: { tone: "ok", label: "Active" },
     paused: { tone: "warm", label: "Paused" },
     draft: { tone: "default", label: "Draft" },
+    // The real backend enum (models.WorkflowStatus) is draft/deployed/error --
+    // "active"/"paused" above predate that and don't match anything the
+    // backend actually stores. These two were missing entirely, so every
+    // real deployed (or errored) workflow silently fell through to the
+    // "draft" default and showed the wrong badge.
+    deployed: { tone: "ok", label: "Deployed" },
+    error: { tone: "danger", label: "Error" },
   };
   const s = map[status ?? "draft"] ?? map.draft;
   return (
@@ -483,9 +612,38 @@ function WorkflowIcon({ name }: { name: string }) {
 // a second click ("Delete permanently?") in place rather than firing on the
 // first — and rather than a browser confirm() dialog, which the rest of the app
 // doesn't use.
-function RowMenu({ onDelete }: { onDelete: () => void }) {
+function RowMenu({
+  workflowId,
+  onDelete,
+  onShare,
+  deployed,
+  scheduleCron,
+  onSetSchedule,
+  onClearSchedule,
+}: {
+  workflowId: string;
+  onDelete: () => void;
+  onShare: () => void;
+  deployed: boolean;
+  scheduleCron?: string;
+  onSetSchedule: (cron: string) => Promise<void>;
+  onClearSchedule: () => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [view, setView] = useState<"menu" | "schedule">("menu");
+  // workflowsApi.list() doesn't return scheduleCron/scheduleNextRunAt (only
+  // the single-workflow GET does), so the row's props are always stale --
+  // fetched fresh every time the Schedule item is opened, rather than
+  // trusted from the list hydration.
+  const [freshSchedule, setFreshSchedule] = useState<{
+    cron?: string;
+    nextRunAt?: string;
+  } | null>(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleFetchError, setScheduleFetchError] = useState<string | null>(
+    null,
+  );
   // The rows list scrolls horizontally (overflow-x: auto), which clips absolutely
   // positioned children in both axes — so the menu is position:fixed, anchored to
   // the button's viewport rect, and closes on scroll/resize rather than drifting.
@@ -494,11 +652,71 @@ function RowMenu({ onDelete }: { onDelete: () => void }) {
   );
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  // Guards the schedule fetch below against a stale response landing after
+  // the popover was closed/reopened (or this row was deleted) before it
+  // resolved -- resetSchedule bumps this so a resolved-but-stale request's
+  // setState calls are dropped rather than clobbering newer state or firing
+  // after unmount.
+  const scheduleFetchIdRef = useRef(0);
+
+  const resetSchedule = useCallback(() => {
+    scheduleFetchIdRef.current += 1;
+    setFreshSchedule(null);
+    setScheduleLoading(false);
+    setScheduleFetchError(null);
+  }, []);
+
+  // Shared by the "Schedule" menu item and the error state's Retry button
+  // below: the row's own scheduleCron/scheduleNextRunAt props come from
+  // workflowsApi.list(), which the backend never populates, so this is the
+  // only way to ever actually get the real schedule.
+  const fetchSchedule = useCallback(() => {
+    setFreshSchedule(null);
+    setScheduleFetchError(null);
+    setScheduleLoading(true);
+    // Bumped (not just read) on every open, not only by resetSchedule/
+    // unmount: the "back" button returns to the menu view without calling
+    // resetSchedule, so two Schedule opens in the same popover session
+    // (open -> back -> open again) would otherwise capture the SAME
+    // fetchId and a stale first response could still clobber the second
+    // fetch's state. Bumping here guarantees every open gets an id no
+    // earlier in-flight request can match.
+    const fetchId = ++scheduleFetchIdRef.current;
+    workflowsApi
+      .get(workflowId)
+      .then((wf) => {
+        if (scheduleFetchIdRef.current !== fetchId) return;
+        setFreshSchedule({
+          cron: wf.scheduleCron,
+          nextRunAt: wf.scheduleNextRunAt,
+        });
+      })
+      .catch((e) => {
+        if (scheduleFetchIdRef.current !== fetchId) return;
+        setScheduleFetchError(
+          e instanceof Error ? e.message : "could not load schedule",
+        );
+      })
+      .finally(() => {
+        if (scheduleFetchIdRef.current !== fetchId) return;
+        setScheduleLoading(false);
+      });
+  }, [workflowId]);
+
+  // Invalidate any in-flight fetch on unmount too (e.g. this row's workflow
+  // was deleted while its schedule request was still pending).
+  useEffect(() => {
+    return () => {
+      scheduleFetchIdRef.current += 1;
+    };
+  }, []);
 
   const close = useCallback(() => {
     setOpen(false);
     setConfirming(false);
-  }, []);
+    setView("menu");
+    resetSchedule();
+  }, [resetSchedule]);
 
   // Close on any click outside, so an open menu can't be left hanging over a
   // row the user has moved on from.
@@ -553,6 +771,8 @@ function RowMenu({ onDelete }: { onDelete: () => void }) {
             });
           }
           setConfirming(false);
+          setView("menu");
+          resetSchedule();
           setOpen(true);
         }}
       >
@@ -574,63 +794,216 @@ function RowMenu({ onDelete }: { onDelete: () => void }) {
             boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
           }}
         >
-          <button
-            role="menuitem"
-            onClick={() => {
-              if (!confirming) {
-                setConfirming(true);
-                return;
-              }
-              close();
-              onDelete();
-            }}
-            style={{
-              display: "block",
-              width: "100%",
-              textAlign: "left",
-              padding: "8px 10px",
-              border: "none",
-              borderRadius: 5,
-              background: confirming
-                ? "var(--danger-soft, transparent)"
-                : "transparent",
-              color: "var(--danger)",
-              fontSize: 12.5,
-              fontWeight: confirming ? 600 : 500,
-              fontFamily: "var(--font-sans)",
-              cursor: "pointer",
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.background = "var(--bg-elev-3)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.background = confirming
-                ? "var(--danger-soft, transparent)"
-                : "transparent")
-            }
-          >
-            {confirming ? "Delete permanently?" : "Delete workflow"}
-          </button>
-          {confirming && (
-            <button
-              role="menuitem"
-              onClick={() => setConfirming(false)}
-              style={{
-                display: "block",
-                width: "100%",
-                textAlign: "left",
-                padding: "8px 10px",
-                border: "none",
-                borderRadius: 5,
-                background: "transparent",
-                color: "var(--fg-muted)",
-                fontSize: 12.5,
-                fontFamily: "var(--font-sans)",
-                cursor: "pointer",
+          {view === "menu" && (
+            <>
+              <button
+                role="menuitem"
+                disabled={!deployed}
+                title={deployed ? undefined : "Deploy this workflow first"}
+                onClick={() => {
+                  if (!deployed) return;
+                  setView("schedule");
+                  fetchSchedule();
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  border: "none",
+                  borderRadius: 5,
+                  background: "transparent",
+                  color: deployed ? "var(--fg)" : "var(--fg-dim)",
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  fontFamily: "var(--font-sans)",
+                  cursor: deployed ? "pointer" : "not-allowed",
+                }}
+                onMouseEnter={(e) => {
+                  if (deployed)
+                    e.currentTarget.style.background = "var(--bg-elev-3)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                {scheduleCron ? "Edit schedule" : "Schedule"}
+              </button>
+              <button
+                role="menuitem"
+                onClick={() => {
+                  close();
+                  onShare();
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  border: "none",
+                  borderRadius: 5,
+                  background: "transparent",
+                  color: "var(--fg)",
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  fontFamily: "var(--font-sans)",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "var(--bg-elev-3)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "transparent";
+                }}
+              >
+                Share
+              </button>
+              <div
+                style={{
+                  height: 1,
+                  background: "var(--border)",
+                  margin: "4px 0",
+                }}
+              />
+              <button
+                role="menuitem"
+                onClick={() => {
+                  if (!confirming) {
+                    setConfirming(true);
+                    return;
+                  }
+                  close();
+                  onDelete();
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "8px 10px",
+                  border: "none",
+                  borderRadius: 5,
+                  background: confirming
+                    ? "var(--danger-soft, transparent)"
+                    : "transparent",
+                  color: "var(--danger)",
+                  fontSize: 12.5,
+                  fontWeight: confirming ? 600 : 500,
+                  fontFamily: "var(--font-sans)",
+                  cursor: "pointer",
+                }}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.background = "var(--bg-elev-3)")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.background = confirming
+                    ? "var(--danger-soft, transparent)"
+                    : "transparent")
+                }
+              >
+                {confirming ? "Delete permanently?" : "Delete workflow"}
+              </button>
+              {confirming && (
+                <button
+                  role="menuitem"
+                  onClick={() => setConfirming(false)}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 10px",
+                    border: "none",
+                    borderRadius: 5,
+                    background: "transparent",
+                    color: "var(--fg-muted)",
+                    fontSize: 12.5,
+                    fontFamily: "var(--font-sans)",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
+            </>
+          )}
+          {view === "schedule" && scheduleLoading && (
+            <div style={{ padding: 10, width: 220 }}>
+              <button
+                onClick={() => setView("menu")}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--fg-muted)",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  padding: 0,
+                  marginBottom: 8,
+                }}
+              >
+                ← back
+              </button>
+              <div style={{ fontSize: 11, color: "var(--fg-dim)" }}>
+                Loading…
+              </div>
+            </div>
+          )}
+          {view === "schedule" && !scheduleLoading && scheduleFetchError && (
+            // The row's own scheduleCron/scheduleNextRunAt props come from
+            // workflowsApi.list(), which the backend never populates --
+            // falling back to them on a fetch error would always show "no
+            // schedule" for a workflow that actually has one, and Save
+            // would then silently overwrite the real schedule with the
+            // popover's defaults. Surface the error and let the user retry
+            // instead of rendering a form seeded with data we know is wrong.
+            <div style={{ padding: 10, width: 220 }}>
+              <button
+                onClick={() => setView("menu")}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "var(--fg-muted)",
+                  cursor: "pointer",
+                  fontSize: 11,
+                  padding: 0,
+                  marginBottom: 8,
+                }}
+              >
+                ← back
+              </button>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--danger)",
+                  marginBottom: 8,
+                }}
+              >
+                Couldn&apos;t load the schedule: {scheduleFetchError}
+              </div>
+              <button
+                onClick={fetchSchedule}
+                style={{
+                  ...ghostBtnSm,
+                  width: "100%",
+                  justifyContent: "center",
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          {view === "schedule" && !scheduleLoading && !scheduleFetchError && (
+            <SchedulePopover
+              scheduleCron={freshSchedule?.cron}
+              scheduleNextRunAt={freshSchedule?.nextRunAt}
+              onBack={() => setView("menu")}
+              onSave={async (cron) => {
+                await onSetSchedule(cron);
+                close();
               }}
-            >
-              Cancel
-            </button>
+              onRemove={async () => {
+                await onClearSchedule();
+                close();
+              }}
+            />
           )}
         </div>
       )}
@@ -638,22 +1011,264 @@ function RowMenu({ onDelete }: { onDelete: () => void }) {
   );
 }
 
+// SchedulePopover renders inside RowMenu's existing anchored floating
+// panel (view === "schedule") rather than opening a second popover, so
+// there's one open/close/outside-click state machine, not two.
+function SchedulePopover({
+  scheduleCron,
+  scheduleNextRunAt,
+  onBack,
+  onSave,
+  onRemove,
+}: {
+  scheduleCron?: string;
+  scheduleNextRunAt?: string;
+  onBack: () => void;
+  onSave: (cron: string) => Promise<void>;
+  onRemove: () => Promise<void>;
+}) {
+  const initial = useMemo<CadenceValue>(
+    () =>
+      (scheduleCron ? cronToCadence(scheduleCron) : null) ?? {
+        cadence: "daily",
+        time: "09:00",
+        dayOfWeek: 1,
+        dayOfMonth: 1,
+      },
+    [scheduleCron],
+  );
+  const [cadence, setCadence] = useState<Cadence>(initial.cadence);
+  const [time, setTime] = useState(initial.time);
+  const [dayOfWeek, setDayOfWeek] = useState(initial.dayOfWeek ?? 1);
+  const [dayOfMonth, setDayOfMonth] = useState(initial.dayOfMonth ?? 1);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Click-to-arm, click-again-to-confirm -- same pattern as RowMenu's
+  // delete-workflow button, since Remove here is just as irreversible
+  // (deletes the live cron schedule) and shouldn't fire on a single
+  // misclick the way it did before.
+  const [removeConfirming, setRemoveConfirming] = useState(false);
+
+  const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const selectStyle: React.CSSProperties = {
+    width: "100%",
+    padding: "5px 6px",
+    marginBottom: 8,
+    fontSize: 12,
+    fontFamily: "var(--font-mono)",
+    background: "var(--bg-elev-1)",
+    border: "1px solid var(--border)",
+    borderRadius: 4,
+    color: "var(--fg)",
+  };
+  const labelStyle: React.CSSProperties = {
+    display: "block",
+    fontSize: 10,
+    color: "var(--fg-dim)",
+    marginBottom: 3,
+  };
+
+  return (
+    <div style={{ padding: 10, width: 220 }}>
+      <button
+        onClick={onBack}
+        style={{
+          background: "none",
+          border: "none",
+          color: "var(--fg-muted)",
+          cursor: "pointer",
+          fontSize: 11,
+          padding: 0,
+          marginBottom: 8,
+        }}
+      >
+        ← back
+      </button>
+      <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+        {(["daily", "weekly", "monthly"] as Cadence[]).map((c) => (
+          <button
+            key={c}
+            onClick={() => setCadence(c)}
+            style={{
+              flex: 1,
+              padding: "5px 0",
+              fontSize: 11,
+              fontFamily: "var(--font-sans)",
+              borderRadius: 4,
+              border: "1px solid var(--border)",
+              background: cadence === c ? "var(--accent-soft)" : "transparent",
+              color: cadence === c ? "var(--accent)" : "var(--fg-muted)",
+              cursor: "pointer",
+              textTransform: "capitalize",
+            }}
+          >
+            {c}
+          </button>
+        ))}
+      </div>
+      <label style={labelStyle}>Time (your timezone)</label>
+      <input
+        type="time"
+        value={time}
+        onChange={(e) => setTime(e.target.value)}
+        style={{
+          width: "100%",
+          padding: "5px 6px",
+          marginBottom: 8,
+          fontSize: 12,
+          fontFamily: "var(--font-mono)",
+          background: "var(--bg-elev-1)",
+          border: "1px solid var(--border)",
+          borderRadius: 4,
+          color: "var(--fg)",
+        }}
+      />
+      <div style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 8 }}>
+        Stored in UTC — may shift by an hour across daylight saving.
+      </div>
+      {cadence === "weekly" && (
+        <>
+          <label style={labelStyle}>Day of week</label>
+          <select
+            value={dayOfWeek}
+            onChange={(e) => setDayOfWeek(Number(e.target.value))}
+            style={selectStyle}
+          >
+            {DOW_LABELS.map((label, i) => (
+              <option key={i} value={i}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+      {cadence === "monthly" && (
+        <>
+          <label style={labelStyle}>Day of month</label>
+          <select
+            value={dayOfMonth}
+            onChange={(e) => setDayOfMonth(Number(e.target.value))}
+            style={selectStyle}
+          >
+            {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+      {scheduleNextRunAt && (
+        <div style={{ fontSize: 10, color: "var(--fg-dim)", marginBottom: 8 }}>
+          Next run: {new Date(scheduleNextRunAt).toLocaleString()}
+        </div>
+      )}
+      {error && (
+        <div
+          style={{ fontSize: 10.5, color: "var(--danger)", marginBottom: 8 }}
+        >
+          {error}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          disabled={saving}
+          onClick={async () => {
+            setSaving(true);
+            setError(null);
+            try {
+              await onSave(
+                cadenceToCron({ cadence, time, dayOfWeek, dayOfMonth }),
+              );
+            } catch (e) {
+              setError(
+                e instanceof Error ? e.message : "could not save schedule",
+              );
+              setSaving(false);
+            }
+          }}
+          style={{
+            flex: 1,
+            padding: "6px 0",
+            fontSize: 11.5,
+            fontWeight: 600,
+            borderRadius: 4,
+            border: "none",
+            background: "var(--accent)",
+            color: "var(--bg)",
+            cursor: saving ? "default" : "pointer",
+            opacity: saving ? 0.6 : 1,
+          }}
+        >
+          Save
+        </button>
+        {scheduleCron && (
+          <button
+            disabled={saving}
+            onClick={async () => {
+              if (!removeConfirming) {
+                setRemoveConfirming(true);
+                return;
+              }
+              setSaving(true);
+              setError(null);
+              try {
+                await onRemove();
+              } catch (e) {
+                setError(
+                  e instanceof Error ? e.message : "could not remove schedule",
+                );
+                setSaving(false);
+                setRemoveConfirming(false);
+              }
+            }}
+            onBlur={() => setRemoveConfirming(false)}
+            style={{
+              padding: "6px 10px",
+              fontSize: 11.5,
+              borderRadius: 4,
+              border: "1px solid var(--border-strong)",
+              background: removeConfirming
+                ? "var(--danger-soft, transparent)"
+                : "transparent",
+              color: "var(--danger)",
+              fontWeight: removeConfirming ? 600 : 500,
+              cursor: saving ? "default" : "pointer",
+            }}
+          >
+            {removeConfirming ? "Remove permanently?" : "Remove"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function WorkflowRows({
   items,
   onOpen,
+  onGeofence,
   onDelete,
+  onSetSchedule,
+  onClearSchedule,
+  onShare,
 }: {
   items: Workflow[];
   onOpen: (id: string) => void;
+  onGeofence: (id: string) => void;
   onDelete: (id: string) => void;
+  onSetSchedule: (id: string, cron: string) => Promise<void>;
+  onClearSchedule: (id: string) => Promise<void>;
+  onShare: (id: string) => void;
 }) {
+  const readOnly = useReadOnly();
   return (
     <Card style={{ padding: 0, overflowX: "auto" }}>
       <div
+        className="hide-md"
         style={{
           display: "grid",
-          gridTemplateColumns:
-            "minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr) minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px",
+          gridTemplateColumns: "var(--wf-row-cols)",
           gap: 12,
           padding: "10px 16px",
           background: "var(--bg-elev-2)",
@@ -676,22 +1291,33 @@ function WorkflowRows({
       {items.map((wf, i) => (
         <div
           key={wf.id}
+          className="wf-row"
           onClick={() => onOpen(wf.id)}
           style={{
             display: "grid",
-            gridTemplateColumns:
-              "minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr) minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px",
-            gap: 12,
-            padding: "14px 16px",
+            gridTemplateColumns: "var(--wf-row-cols)",
+            // Tokenised for the same reason as the padding: an inline value
+            // beats the stylesheet, so a media query could never have reached
+            // it. There are five gaps per card on a phone.
+            // Fallbacks are not decoration. `var(--x)` with no fallback and no
+            // definition resolves to nothing, and `padding: <nothing>` collapses to
+            // ZERO -- the card goes from spacious to clamped with no error anywhere.
+            // The desktop values are the fallback, so the worst case is desktop
+            // spacing on a phone rather than none at all.
+            gap: "var(--wf-row-gap, 12px)",
+            padding: "var(--wf-row-pad, 14px 16px)",
             alignItems: "center",
             borderBottom:
               i < items.length - 1 ? "1px solid var(--border-soft)" : "none",
             cursor: "pointer",
             transition: "background .12s",
           }}
-          onMouseEnter={(e) =>
-            (e.currentTarget.style.background = "var(--bg-elev-2)")
-          }
+          // Mouse only: a tap fires the enter event too, and the highlight
+          // then stays on the row after the finger lifts.
+          onPointerEnter={(e) => {
+            if (e.pointerType === "mouse")
+              e.currentTarget.style.background = "var(--bg-elev-2)";
+          }}
           onMouseLeave={(e) =>
             (e.currentTarget.style.background = "transparent")
           }
@@ -717,13 +1343,20 @@ function WorkflowRows({
               >
                 {wf.name}
               </div>
-              <div style={{ display: "flex", gap: 5, marginTop: 4 }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "2px 5px",
+                  marginTop: 4,
+                }}
+              >
                 {wf.tags?.map((t) => (
                   <span
                     key={t}
                     style={{
                       fontFamily: "var(--font-mono)",
-                      fontSize: 9,
+                      fontSize: 11,
                       color: "var(--fg-dim)",
                       textTransform: "uppercase",
                       letterSpacing: "0.06em",
@@ -735,13 +1368,19 @@ function WorkflowRows({
               </div>
             </div>
           </div>
-          <StatusBadge status={wf.status} />
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+          <span data-label="Status" style={{ display: "inline-flex" }}>
+            <StatusBadge status={wf.status} />
+          </span>
+          <span
+            data-label="Agents"
+            style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}
+          >
             {wf.agents ??
               wf.nodes?.filter((n) => n.type === "agent").length ??
               0}
           </span>
           <span
+            data-label="Runs · 30d"
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 12,
@@ -751,16 +1390,17 @@ function WorkflowRows({
             {wf.runs?.toLocaleString() ?? "-"}
           </span>
           <span
+            data-label="Spend · 30d"
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 12,
               color: "var(--accent)",
             }}
           >
-            {wf.spend ?? "-"}
-            {wf.spend && <span style={{ color: "var(--fg-dim)" }}> ALGO</span>}
+            {wf.spend ? `$${wf.spend}` : "-"}
           </span>
           <span
+            data-label="Updated"
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: 11,
@@ -769,7 +1409,7 @@ function WorkflowRows({
           >
             {fmtDate(wf.updatedAt ?? wf.updated)}
           </span>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 4 }}>
+          <div className="wf-row-actions" style={{ display: "flex", gap: 4 }}>
             <button
               style={ghostBtnSm}
               onClick={(e) => {
@@ -779,7 +1419,39 @@ function WorkflowRows({
             >
               Open
             </button>
-            <RowMenu onDelete={() => onDelete(wf.id)} />
+            {/* Its own button rather than an item in RowMenu below, because
+                that menu is gated on "workflow.delete" and so never appears on
+                a phone -- which is the one device this screen is for. Shown
+                only for a deployed workflow: SetGeofence answers 409 until
+                then, and an entry point that always fails is worse than none.
+                The capability, not the device, decides -- see lib/readonly.ts. */}
+            {can("workflow.geofence", readOnly) && wf.status === "deployed" && (
+              <button
+                style={ghostBtnSm}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onGeofence(wf.id);
+                }}
+                title={
+                  wf.geofenceRadiusM !== undefined
+                    ? "Location trigger is set"
+                    : "Set a location trigger"
+                }
+              >
+                {wf.geofenceRadiusM !== undefined ? "Zone ·" : "Zone"}
+              </button>
+            )}
+            {can("workflow.delete", readOnly) && (
+              <RowMenu
+                workflowId={wf.id}
+                onDelete={() => onDelete(wf.id)}
+                onShare={() => onShare(wf.id)}
+                deployed={wf.status === "deployed"}
+                scheduleCron={wf.scheduleCron}
+                onSetSchedule={(cron) => onSetSchedule(wf.id, cron)}
+                onClearSchedule={() => onClearSchedule(wf.id)}
+              />
+            )}
           </div>
         </div>
       ))}
@@ -798,7 +1470,7 @@ function WorkflowGrid({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "repeat(3, 1fr)",
+        gridTemplateColumns: "var(--wf-card-cols)",
         gap: 16,
       }}
     >
@@ -810,7 +1482,10 @@ function WorkflowGrid({
             cursor: "pointer",
             transition: "border-color .15s, transform .15s",
           }}
-          onMouseEnter={(e) => {
+          // Mouse only, as on the row above: after a tap the card would stay
+          // lifted.
+          onPointerEnter={(e) => {
+            if (e.pointerType !== "mouse") return;
             (e.currentTarget as HTMLElement).style.borderColor =
               "var(--border-strong)";
             (e.currentTarget as HTMLElement).style.transform =
@@ -842,13 +1517,20 @@ function WorkflowGrid({
           >
             {wf.name}
           </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "2px 6px",
+              marginTop: 6,
+            }}
+          >
             {wf.tags?.map((t) => (
               <span
                 key={t}
                 style={{
                   fontFamily: "var(--font-mono)",
-                  fontSize: 9,
+                  fontSize: 11,
                   color: "var(--fg-dim)",
                   textTransform: "uppercase",
                   letterSpacing: "0.06em",
@@ -864,7 +1546,7 @@ function WorkflowGrid({
               paddingTop: 12,
               borderTop: "1px solid var(--border-soft)",
               display: "grid",
-              gridTemplateColumns: "repeat(3, 1fr)",
+              gridTemplateColumns: "var(--wf-cardmeta-cols)",
               gap: 8,
               fontFamily: "var(--font-mono)",
               fontSize: 11,
@@ -886,7 +1568,7 @@ function WorkflowGrid({
                 <div
                   style={{
                     color: "var(--fg-dim)",
-                    fontSize: 9,
+                    fontSize: 11,
                     textTransform: "uppercase",
                     letterSpacing: "0.06em",
                   }}
@@ -925,31 +1607,3 @@ function fmtDate(iso?: string): string {
 }
 
 // Shared styles
-const ghostBtn: React.CSSProperties = {
-  height: 36,
-  padding: "0 14px",
-  fontSize: 13,
-  fontWeight: 500,
-  background: "var(--bg-elev-2)",
-  border: "1px solid var(--border-strong)",
-  borderRadius: "var(--r-2)",
-  color: "var(--fg)",
-  cursor: "pointer",
-  fontFamily: "var(--font-sans)",
-  display: "inline-flex",
-  alignItems: "center",
-};
-const primaryBtn: React.CSSProperties = {
-  height: 36,
-  padding: "0 14px",
-  fontSize: 13,
-  fontWeight: 600,
-  background: "var(--accent)",
-  border: "1px solid var(--accent)",
-  borderRadius: "var(--r-2)",
-  color: "var(--accent-fg)",
-  cursor: "pointer",
-  fontFamily: "var(--font-sans)",
-  display: "inline-flex",
-  alignItems: "center",
-};

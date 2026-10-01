@@ -245,7 +245,7 @@ func TestInsufficientBalanceBlocksToolNodeBeforeExecution(t *testing.T) {
 	}
 }
 
-func TestAgentNodeChargesOwnFeeAndAttachedToolCalls(t *testing.T) {
+func TestAgentNodeChargesAttachedToolCallsButNotItsOwnByokTurn(t *testing.T) {
 	runner, store := newTestRunner(t)
 	ctx := context.Background()
 

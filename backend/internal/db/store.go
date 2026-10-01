@@ -1,10 +1,12 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strconv"
 	"strings"
@@ -35,28 +37,71 @@ func (s *Store) Close() {
 
 // --- Workflow methods ---
 
-func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models.Workflow, error) {
-	id := uuid.New().String()
-	emptyGraph := `{"nodes":[],"edges":[]}`
+// workflowColumns is the single source of truth for every query in this
+// file that reads a full `workflows` row -- CreateWorkflow, GetWorkflow,
+// ListWorkflows, UpdateWorkflow, ClaimDueSchedules, and FindSystemWorkflow
+// all select and scan this exact list via scanWorkflowRow below, instead of
+// each hand-writing its own copy. That hand-writing is exactly what let
+// FindSystemWorkflow silently fall behind when schedule_cron/
+// schedule_next_run_at were added to the others in an earlier pass: five
+// independent copies meant a new column had to be remembered at five call
+// sites, and one was missed. A future column now only needs to be added
+// here and in scanWorkflowRow's Scan call, once, for every caller to pick
+// it up automatically.
+const workflowColumns = `id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at, schedule_cron, schedule_next_run_at, geofence_lat, geofence_lng, geofence_radius_m, geofence_inside, geofence_last_fix_at, is_system, description`
+
+// rowScanner is satisfied by both pgx.Row (QueryRow) and *pgx.Rows
+// (Query's per-row iteration) -- scanWorkflowRow works with either, so a
+// single-row lookup and a multi-row list can share the same scan logic.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanWorkflowRow scans one row shaped like workflowColumns into a
+// models.Workflow, handling the nullable run_endpoint column and the
+// graph JSON unmarshal every caller needs identically.
+func scanWorkflowRow(row rowScanner) (models.Workflow, error) {
 	var w models.Workflow
 	var graphJSON []byte
-	var runEndpoint *string
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO workflows (id, user_id, name, status, graph)
-		VALUES ($1, $2, $3, 'draft', $4::jsonb)
-		RETURNING id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
-	`, id, userID, name, emptyGraph).Scan(
+	var runEndpoint, description *string
+	if err := row.Scan(
 		&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
 		&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-	)
-	if err != nil {
-		return w, err
+		&w.ScheduleCron, &w.ScheduleNextRunAt,
+		&w.GeofenceLat, &w.GeofenceLng, &w.GeofenceRadiusM,
+		&w.GeofenceInside, &w.GeofenceLastFixAt, &w.IsSystem,
+		&description,
+	); err != nil {
+		return models.Workflow{}, err
 	}
 	if runEndpoint != nil {
 		w.RunEndpoint = *runEndpoint
 	}
+	if description != nil {
+		w.Description = *description
+	}
 	unmarshalGraph(graphJSON, &w)
 	return w, nil
+}
+
+func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models.Workflow, error) {
+	return s.createWorkflowRow(ctx, name, userID, false)
+}
+
+// createWorkflowRow is CreateWorkflow's and GetOrCreateSystemWorkflow's
+// shared INSERT, split out so isSystem can never be set by anything but
+// GetOrCreateSystemWorkflow itself -- CreateWorkflow (the ordinary
+// POST /workflows path) always passes false, hardcoded at its one call site
+// rather than threaded through from a request body a user could set.
+func (s *Store) createWorkflowRow(ctx context.Context, name, userID string, isSystem bool) (models.Workflow, error) {
+	id := uuid.New().String()
+	emptyGraph := `{"nodes":[],"edges":[]}`
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO workflows (id, user_id, name, status, graph, is_system)
+		VALUES ($1, $2, $3, 'draft', $4::jsonb, $5)
+		RETURNING `+workflowColumns+`
+	`, id, userID, name, emptyGraph, isSystem)
+	return scanWorkflowRow(row)
 }
 
 // FindSystemWorkflow is GetOrCreateSystemWorkflow's read-only half: looks
@@ -72,28 +117,26 @@ func (s *Store) CreateWorkflow(ctx context.Context, name, userID string) (models
 // workflow-page visit calling GetOrCreateSystemWorkflow instead would mint
 // an empty "Tendril Console" row for every user who has never touched
 // Tendril, the instant they open ANY of their own workflows.
+// AND is_system = true is load-bearing, not redundant with the name match:
+// without it, a user renaming their OWN workflow to this exact name (there
+// is no name validation on UpdateWorkflow) would resolve here as THE system
+// workflow -- oldest match wins -- silently swapping their real workflow for
+// the console from then on. is_system is a column no rename can touch, so
+// only a row this store itself created via createWorkflowRow(isSystem=true)
+// can ever match.
 func (s *Store) FindSystemWorkflow(ctx context.Context, userID, name string) (w models.Workflow, found bool, err error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
-		FROM workflows WHERE user_id = $1 AND name = $2 ORDER BY created_at ASC LIMIT 1
+		SELECT `+workflowColumns+`
+		FROM workflows WHERE user_id = $1 AND name = $2 AND is_system = true ORDER BY created_at ASC LIMIT 1
 	`, userID, name)
 	if err != nil {
 		return models.Workflow{}, false, err
 	}
 	for rows.Next() {
-		var graphJSON []byte
-		var runEndpoint *string
-		if err := rows.Scan(
-			&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
-			&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-		); err != nil {
+		if w, err = scanWorkflowRow(rows); err != nil {
 			rows.Close()
 			return models.Workflow{}, false, err
 		}
-		if runEndpoint != nil {
-			w.RunEndpoint = *runEndpoint
-		}
-		unmarshalGraph(graphJSON, &w)
 		found = true
 	}
 	rows.Close()
@@ -117,34 +160,348 @@ func (s *Store) GetOrCreateSystemWorkflow(ctx context.Context, userID, name stri
 	if found {
 		return w, nil
 	}
-	return s.CreateWorkflow(ctx, name, userID)
+	return s.createWorkflowRow(ctx, name, userID, true)
 }
 
 func (s *Store) GetWorkflow(ctx context.Context, id string) (models.Workflow, error) {
-	var w models.Workflow
-	var graphJSON []byte
-	var runEndpoint *string
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
-		FROM workflows WHERE id = $1
-	`, id).Scan(
-		&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
-		&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-	)
-	if err != nil {
-		return w, err
-	}
-	if runEndpoint != nil {
-		w.RunEndpoint = *runEndpoint
-	}
-	unmarshalGraph(graphJSON, &w)
-	return w, nil
+	row := s.pool.QueryRow(ctx, `SELECT `+workflowColumns+` FROM workflows WHERE id = $1`, id)
+	return scanWorkflowRow(row)
 }
 
+// SetWorkflowSchedule enables (or updates) this workflow's cron schedule.
+// nextRunAt is caller-computed (scheduler.nextCronRun) rather than derived
+// here, so this method has no cron-parsing dependency of its own.
+func (s *Store) SetWorkflowSchedule(ctx context.Context, workflowID, cronExpr string, nextRunAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE workflows SET schedule_cron=$2, schedule_next_run_at=$3 WHERE id=$1
+	`, workflowID, cronExpr, nextRunAt)
+	return err
+}
+
+// RescheduleWorkflowNextRun moves a workflow's next scheduled run to next,
+// but only while its schedule is still cronExpr: a schedule changed or
+// removed since the caller read it is left as it now is. Reports whether a
+// row was updated.
+func (s *Store) RescheduleWorkflowNextRun(ctx context.Context, workflowID, cronExpr string, next time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE workflows SET schedule_next_run_at=$3 WHERE id=$1 AND schedule_cron=$2
+	`, workflowID, cronExpr, next)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ClearWorkflowSchedule disables scheduling for a workflow. Idempotent --
+// clearing an already-unscheduled workflow is a no-op, not an error.
+func (s *Store) ClearWorkflowSchedule(ctx context.Context, workflowID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE workflows SET schedule_cron=NULL, schedule_next_run_at=NULL WHERE id=$1
+	`, workflowID)
+	return err
+}
+
+// SetWorkflowGeofence configures the zone. All three values move together --
+// a half-set zone cannot be evaluated -- and the recorded state is reset so a
+// moved fence does not inherit an inside/outside answer that was true of the
+// OLD location. After this the next fix re-establishes the baseline silently.
+func (s *Store) SetWorkflowGeofence(ctx context.Context, workflowID string, lat, lng, radiusM float64) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE workflows
+		   SET geofence_lat=$2, geofence_lng=$3, geofence_radius_m=$4,
+		       geofence_inside=NULL, geofence_last_fix_at=NULL
+		 WHERE id=$1
+	`, workflowID, lat, lng, radiusM)
+	return err
+}
+
+// ClearWorkflowGeofence disables the geofence trigger. Idempotent, matching
+// ClearWorkflowSchedule: clearing an unfenced workflow is a no-op.
+func (s *Store) ClearWorkflowGeofence(ctx context.Context, workflowID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE workflows
+		   SET geofence_lat=NULL, geofence_lng=NULL, geofence_radius_m=NULL,
+		       geofence_inside=NULL, geofence_last_fix_at=NULL
+		 WHERE id=$1
+	`, workflowID)
+	return err
+}
+
+// GeofenceCrossing is what RecordGeofenceFix decided about one location fix.
+type GeofenceCrossing struct {
+	// Fired is true only for an actual transition between two KNOWN states.
+	Fired bool
+	// Entered distinguishes the direction of a fired crossing.
+	Entered bool
+	// Stale is true when the fix was older than the last one already acted
+	// on, so it was ignored entirely. Reported rather than silently swallowed
+	// because a client flushing a queue deserves to know its ping was a
+	// replay, not a failure.
+	Stale bool
+}
+
+// RecordGeofenceFix records one location fix and reports whether it crossed
+// the boundary.
+//
+// The whole point is that this is ATOMIC. The Android client pushes a fix
+// every 30-60s while a session is active and flushes a queued burst after
+// reconnecting, so two pings for the same workflow can easily be in flight at
+// once. Read-compare-write outside a transaction would let both observe the
+// same prior state and both fire, double-charging the user for one crossing.
+// SELECT ... FOR UPDATE serialises them, exactly as ClaimDueSchedules does for
+// the cron path.
+//
+// Three things are deliberately NOT a crossing:
+//   - the first fix ever (geofence_inside IS NULL) -- it establishes the
+//     baseline, because an unknown position is not the same as an outside one;
+//   - a fix at the same state as the last one (the common case: parked inside
+//     the zone, pinging every minute);
+//   - a fix older than the last one acted on -- a replayed queue must not
+//     re-fire a crossing that has already been handled.
+func (s *Store) RecordGeofenceFix(
+	ctx context.Context, workflowID string, inside bool, fixAt time.Time,
+) (GeofenceCrossing, error) {
+	// Postgres TIMESTAMPTZ stores microseconds; Go's time.Time carries
+	// nanoseconds. Without truncating here, a value does not survive its own
+	// round trip: what is written is compared on the next call against a
+	// version of itself that has lost sub-microsecond digits, so
+	// fixAt.After(prevAt) is TRUE for the very same instant and a resent fix
+	// looks new rather than replayed. That defeats the replay guard this
+	// column exists for, at exactly the boundary an offline flush hits --
+	// clients resend identical timestamps, they do not invent fresh ones.
+	fixAt = fixAt.UTC().Truncate(time.Microsecond)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return GeofenceCrossing{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var prevInside *bool
+	var prevAt *time.Time
+	err = tx.QueryRow(ctx, `
+		SELECT geofence_inside, geofence_last_fix_at
+		  FROM workflows
+		 WHERE id=$1 AND geofence_lat IS NOT NULL
+		 FOR UPDATE
+	`, workflowID).Scan(&prevInside, &prevAt)
+	if err != nil {
+		return GeofenceCrossing{}, err
+	}
+
+	// Out-of-order replay: leave the recorded state exactly as it is. Writing
+	// an older fix over a newer one would move the baseline backwards and let
+	// the NEXT live fix look like a crossing it is not.
+	if prevAt != nil && !fixAt.After(*prevAt) {
+		return GeofenceCrossing{Stale: true}, tx.Commit(ctx)
+	}
+
+	crossing := GeofenceCrossing{}
+	if prevInside != nil && *prevInside != inside {
+		crossing.Fired = true
+		crossing.Entered = inside
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE workflows SET geofence_inside=$2, geofence_last_fix_at=$3 WHERE id=$1
+	`, workflowID, inside, fixAt); err != nil {
+		return GeofenceCrossing{}, err
+	}
+	return crossing, tx.Commit(ctx)
+}
+
+// maxScheduleCatchUpIterations bounds ClaimDueSchedules' per-workflow
+// catch-up loop (walking forward one occurrence at a time from a
+// schedule's own due time until the result clears `now`) -- generous
+// enough to catch up even a once-a-minute cron across roughly two months
+// of scheduler downtime in one call (a few hundred thousand pure in-memory
+// iterations, no I/O per step), while still bounding against a
+// non-advancing nextRun implementation looping forever. Exhausting it
+// without clearing `now` isn't treated as an error: the row is left at
+// whatever the loop last computed and simply gets caught up further on
+// each subsequent tick, same as it always would across ticks anyway.
+const maxScheduleCatchUpIterations = 500_000
+
+// ClaimDueSchedules finds every deployed workflow whose schedule is due at
+// or before `now`, advances each one's schedule_next_run_at (via nextRun,
+// caller-supplied so this package carries no cron-parsing dependency) in
+// the SAME transaction that claims it, and returns the claimed workflows.
+//
+// Uses SELECT ... FOR UPDATE SKIP LOCKED rather than the
+// pg_advisory_xact_lock(hashtext(id)) pattern LockOAuthCredentialForRefresh
+// uses: that pattern fits one caller-known ID, while this claims an
+// unknown-in-advance BATCH of due rows in one pass. SKIP LOCKED is the
+// standard Postgres job-queue idiom for exactly that -- a second replica's
+// concurrent sweep simply skips any row this transaction already holds,
+// rather than blocking on it, so the same tick can never fire twice.
+func (s *Store) ClaimDueSchedules(ctx context.Context, now time.Time, nextRun func(cronExpr string, after time.Time) (time.Time, error)) ([]models.Workflow, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `
+		SELECT `+workflowColumns+`
+		FROM workflows
+		WHERE status = 'deployed' AND schedule_cron IS NOT NULL AND schedule_next_run_at <= $1
+		FOR UPDATE SKIP LOCKED
+	`, now)
+	if err != nil {
+		return nil, err
+	}
+	var batch []models.Workflow
+	for rows.Next() {
+		w, err := scanWorkflowRow(rows)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		batch = append(batch, w)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]models.Workflow, 0, len(batch))
+	for _, w := range batch {
+
+		// Anchored on the row's own due time (w.ScheduleNextRunAt), NOT
+		// `now` (the sweep time) -- a scheduler that's down or delayed past
+		// a due firing must resume counting from where the schedule
+		// actually was, not silently skip every occurrence between the due
+		// time and whenever the tick happens to land, which would shift
+		// the cron's cadence off its original anchor (e.g. an hourly cron
+		// due at 14:00, swept at 15:47, must keep landing on the :00
+		// boundary -- nextRun(cron, 15:47) would instead jump to whatever
+		// second `now` happens to be, off that anchor forever after).
+		//
+		// A single nextRun(cron, dueTime) call isn't enough on its own,
+		// though: for a schedule whose own period is <= the scheduler's
+		// poll interval (e.g. an every-minute cron on a 1-minute poll),
+		// ordinary tick jitter can mean stepping forward exactly one
+		// period from dueTime STILL lands at or before `now` -- not a
+		// long-outage scenario, just routine timing, and left as a single
+		// call this would leave the row due again for an immediate second
+		// tick (confirmed live: TestTickFiresDueScheduleAndAdvancesIt's
+		// second-tick-must-not-double-fire assertion broke on exactly
+		// this). So this walks forward one occurrence at a time from the
+		// original due time -- preserving the anchor -- until the result
+		// is actually past `now`, catching up every missed occurrence to
+		// the correct future time in this single call while still firing
+		// only once this tick (matching the existing one-row-per-tick
+		// contract: `due` returns each workflow at most once regardless of
+		// how many occurrences it missed).
+		next := *w.ScheduleNextRunAt
+		var err error
+		invalidExpr := false
+		for i := 0; i < maxScheduleCatchUpIterations; i++ {
+			next, err = nextRun(*w.ScheduleCron, next)
+			if err != nil {
+				invalidExpr = true
+				break
+			}
+			if next.After(now) {
+				break
+			}
+		}
+		if invalidExpr {
+			// A schedule that no longer parses (edited into an invalid
+			// expression some other way) must not wedge the sweep forever
+			// re-claiming the same broken row every tick -- clear it and
+			// move on rather than failing the whole batch.
+			if _, clearErr := tx.Exec(ctx, `UPDATE workflows SET schedule_cron=NULL, schedule_next_run_at=NULL WHERE id=$1`, w.ID); clearErr != nil {
+				return nil, clearErr
+			}
+			continue
+		}
+		if _, err := tx.Exec(ctx, `UPDATE workflows SET schedule_next_run_at=$2 WHERE id=$1`, w.ID, next); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListSchedulesNeedingWarning finds deployed, scheduled workflows whose next
+// occurrence falls strictly after `now` (not yet due -- ClaimDueSchedules
+// owns anything due already) and at or before `before` (the lookahead
+// window), and have not already been warned about that exact occurrence.
+//
+// schedule_warned_for IS DISTINCT FROM schedule_next_run_at covers both
+// "never warned" (the column starts NULL) and "warned for an occurrence that
+// has since advanced" -- a schedule that fired and moved to its next
+// occurrence, or was edited, is correctly treated as unwarned again.
+//
+// Read-only and deliberately separate from ClaimDueSchedules: this never
+// claims or advances schedule_next_run_at, which stays exclusively that
+// function's column to write.
+func (s *Store) ListSchedulesNeedingWarning(ctx context.Context, now, before time.Time) ([]models.Workflow, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+workflowColumns+`
+		FROM workflows
+		WHERE status = 'deployed'
+		  AND schedule_cron IS NOT NULL
+		  AND schedule_next_run_at > $1
+		  AND schedule_next_run_at <= $2
+		  AND schedule_warned_for IS DISTINCT FROM schedule_next_run_at
+	`, now, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Workflow
+	for rows.Next() {
+		w, err := scanWorkflowRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// ClaimScheduleWarning records that the upcoming-run heads-up is being sent
+// for this schedule's occurrence, and reports whether this caller is the one
+// sending it. The occurrence is identified by its schedule_next_run_at rather
+// than a boolean, so a schedule that has since advanced (fired, or been edited
+// to a new time) is correctly treated as unwarned again for whatever
+// occurrence comes next.
+//
+// A conditional update, not a read followed by a write: every replica runs the
+// scheduler, and two ticks that both listed the same unwarned occurrence would
+// otherwise both mark it and both push. Only the update that finds the row
+// still on this occurrence and still unwarned changes it, so exactly one
+// caller gets true.
+func (s *Store) ClaimScheduleWarning(ctx context.Context, workflowID string, forOccurrence time.Time) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE workflows SET schedule_warned_for = $2
+		WHERE id = $1
+		  AND schedule_next_run_at = $2
+		  AND schedule_warned_for IS DISTINCT FROM $2
+	`, workflowID, forOccurrence)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// AND NOT is_system excludes a partner console's hidden row (Tendril,
+// Prism): the user never authored it and there is nothing to open on a
+// canvas, so it has no place in a list of things the user built. Filtered
+// here, in the query, rather than after the fact in the handler -- a row
+// excluded post-hoc still paid for its own decrypt and its own
+// attachWorkflowStats aggregation for nothing; idx_workflows_user_visible
+// (migration 000033) covers this exact predicate.
 func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Workflow, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
-		FROM workflows WHERE user_id = $1 ORDER BY updated_at DESC
+		SELECT `+workflowColumns+`
+		FROM workflows WHERE user_id = $1 AND NOT is_system ORDER BY updated_at DESC
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -152,45 +509,173 @@ func (s *Store) ListWorkflows(ctx context.Context, userID string) ([]models.Work
 	defer rows.Close()
 	var wfs []models.Workflow
 	for rows.Next() {
-		var w models.Workflow
-		var graphJSON []byte
-		var runEndpoint *string
-		if err := rows.Scan(
-			&w.ID, &w.UserID, &w.Name, &w.Status, &graphJSON,
-			&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-		); err != nil {
+		w, err := scanWorkflowRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		if runEndpoint != nil {
-			w.RunEndpoint = *runEndpoint
-		}
-		unmarshalGraph(graphJSON, &w)
 		wfs = append(wfs, w)
 	}
-	return wfs, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.attachWorkflowStats(ctx, userID, wfs); err != nil {
+		// The Runs/Spend columns are decoration over `runs` and
+		// `debit_ledger`. A problem aggregating them must not turn "show me
+		// my workflows" into a 500 -- log it and return the list with those
+		// fields left at their zero values.
+		//
+		// Those zero values are not facts, though, and they are not
+		// distinguishable from real ones on the wire, so each row says so.
+		// Otherwise a client renders an aggregation outage as "0 runs, $0
+		// spent", which is a number the reader has no reason to doubt.
+		log.Printf("db: list workflows for user %s: stats aggregation failed: %v", userID, err)
+		for i := range wfs {
+			wfs[i].StatsUnavailable = true
+		}
+	}
+	return wfs, nil
+}
+
+// workflowStatsWindow is the trailing period the Runs/Spend columns on the
+// workflows list summarise. The UI labels those columns "· 30d", so the two
+// have to agree; changing one means changing the other.
+const workflowStatsWindow = 30 * 24 * time.Hour
+
+// attachWorkflowStats fills in the Runs and Spend fields that ListWorkflows'
+// own SELECT cannot produce -- they are aggregates over `runs` and
+// `debit_ledger`, not columns on `workflows`. Kept as a separate pass rather
+// than a join so workflowColumns/scanWorkflowRow stay the single shared
+// read path for a workflow row.
+//
+// Both queries are scoped by user_id, not just by the workflow ids in hand,
+// so a row belonging to someone else can never be counted into this user's
+// totals even if a workflow id were somehow reused.
+func (s *Store) attachWorkflowStats(ctx context.Context, userID string, wfs []models.Workflow) error {
+	if len(wfs) == 0 {
+		return nil
+	}
+	since := time.Now().Add(-workflowStatsWindow)
+
+	runCounts := map[string]int{}
+	lastRuns := map[string]time.Time{}
+	rows, err := s.pool.Query(ctx, `
+		SELECT r.workflow_id, COUNT(*), MAX(r.started_at)
+		FROM runs r
+		JOIN workflows w ON w.id = r.workflow_id
+		WHERE w.user_id = $1 AND r.started_at >= $2
+		GROUP BY r.workflow_id
+	`, userID, since)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var n int
+		var last time.Time
+		if err := rows.Scan(&id, &n, &last); err != nil {
+			rows.Close()
+			return err
+		}
+		runCounts[id] = n
+		lastRuns[id] = last
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	spendMicros := map[string]int64{}
+	rows, err = s.pool.Query(ctx, `
+		SELECT workflow_id, COALESCE(SUM(amount_usd_micros), 0)
+		FROM debit_ledger
+		WHERE user_id = $1 AND created_at >= $2
+		GROUP BY workflow_id
+	`, userID, since)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id string
+		var micros int64
+		if err := rows.Scan(&id, &micros); err != nil {
+			rows.Close()
+			return err
+		}
+		spendMicros[id] = micros
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for i := range wfs {
+		wfs[i].Runs = runCounts[wfs[i].ID]
+		if last, ok := lastRuns[wfs[i].ID]; ok {
+			wfs[i].LastRunAt = &last
+		}
+		// Spend is a display string in USD. Left empty when nothing settled
+		// so the UI renders its "no data" dash rather than a misleading
+		// "$0.00" on a workflow that has simply never run.
+		if micros, ok := spendMicros[wfs[i].ID]; ok && micros > 0 {
+			wfs[i].Spend = fmt.Sprintf("%.2f", float64(micros)/1e6)
+		}
+	}
+	return nil
 }
 
 func (s *Store) UpdateWorkflow(ctx context.Context, id, name string, graph models.WorkflowGraph) (models.Workflow, error) {
+	return s.UpdateWorkflowAndDescription(ctx, id, name, graph, nil)
+}
+
+// UpdateWorkflowAndDescription saves the name, the graph and, when
+// description is non-nil, the description, in one statement. A save that
+// changes both either takes effect whole or not at all; two statements could
+// commit the graph and then fail on the description, answering 500 for a save
+// that half happened. A nil description leaves the stored one alone, and an
+// empty one clears it.
+func (s *Store) UpdateWorkflowAndDescription(ctx context.Context, id, name string, graph models.WorkflowGraph, description *string) (models.Workflow, error) {
 	graphJSON, _ := json.Marshal(graph)
-	var w models.Workflow
-	var gJSON []byte
-	var runEndpoint *string
-	err := s.pool.QueryRow(ctx, `
-		UPDATE workflows SET name=$2, graph=$3::jsonb, updated_at=NOW()
+	var value *string
+	if description != nil && *description != "" {
+		value = description
+	}
+	row := s.pool.QueryRow(ctx, `
+		UPDATE workflows SET name=$2, graph=$3::jsonb, updated_at=NOW(),
+			description = CASE WHEN $4::boolean THEN $5::text ELSE description END
 		WHERE id=$1
-		RETURNING id, user_id, name, status, graph, deployed_at, run_endpoint, created_at, updated_at
-	`, id, name, string(graphJSON)).Scan(
-		&w.ID, &w.UserID, &w.Name, &w.Status, &gJSON,
-		&w.DeployedAt, &runEndpoint, &w.CreatedAt, &w.UpdatedAt,
-	)
-	if err != nil {
-		return w, err
+		RETURNING `+workflowColumns+`
+	`, id, name, string(graphJSON), description != nil, value)
+	return scanWorkflowRow(row)
+}
+
+// SetWorkflowDescription writes a workflow's description, or clears it when
+// description is empty. Kept apart from UpdateWorkflow so saving the graph
+// from the editor, which never sends a description, cannot wipe one.
+func (s *Store) SetWorkflowDescription(ctx context.Context, id, description string) error {
+	var value *string
+	if description != "" {
+		value = &description
 	}
-	if runEndpoint != nil {
-		w.RunEndpoint = *runEndpoint
+	_, err := s.pool.Exec(ctx, `UPDATE workflows SET description=$2 WHERE id=$1`, id, value)
+	return err
+}
+
+// CountRuns counts every run a workflow has had, however old.
+func (s *Store) CountRuns(ctx context.Context, workflowID string) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM runs WHERE workflow_id = $1`, workflowID).Scan(&n)
+	return n, err
+}
+
+// AttachWorkflowStats fills one workflow's 30-day Runs, Spend and LastRunAt
+// the same way the list does, for the detail endpoint.
+func (s *Store) AttachWorkflowStats(ctx context.Context, userID string, wf *models.Workflow) error {
+	wfs := []models.Workflow{*wf}
+	if err := s.attachWorkflowStats(ctx, userID, wfs); err != nil {
+		return err
 	}
-	unmarshalGraph(gJSON, &w)
-	return w, nil
+	*wf = wfs[0]
+	return nil
 }
 
 func (s *Store) DeleteWorkflow(ctx context.Context, id string) error {
@@ -216,10 +701,33 @@ func unmarshalGraph(data []byte, w *models.Workflow) {
 
 // --- Run methods ---
 
-func (s *Store) CreateRun(ctx context.Context, workflowID, triggeredBy string, inputContext []byte) (models.Run, error) {
+// rowQuerier is the subset of *pgxpool.Pool and pgx.Tx that insertRun
+// needs, so it can run either as its own implicit single-statement
+// transaction (CreateRun, via s.pool) or as part of a caller-managed one
+// (CreateRunWithCooldown, via its tx).
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// insertRun does the actual runs INSERT+RETURNING+decode shared by
+// CreateRun and CreateRunWithCooldown -- pulled out so the two can't drift
+// (they used to duplicate this block verbatim) and so a fix here, like the
+// one below, only has to happen once.
+//
+// A failure decoding the returned input_context back into r.InputContext
+// is logged, not returned as a hard error: InputContext is typed `any`,
+// so this can't actually fail for the syntactically-valid JSON Postgres
+// already required to accept the row via `$3::jsonb` at INSERT time (a
+// real syntax error fails there, before this ever runs) -- but staying
+// silent about it would still violate this codebase's own "never swallow
+// an error silently" convention if that ever stops being true (e.g.
+// InputContext becoming a concrete struct type later), and the row itself
+// is already durably inserted at this point regardless, so there's
+// nothing to roll back over a decode issue.
+func insertRun(ctx context.Context, q rowQuerier, workflowID, triggeredBy string, inputContext []byte) (models.Run, error) {
 	var r models.Run
 	var ic []byte
-	err := s.pool.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
 		INSERT INTO runs (workflow_id, triggered_by, status, input_context)
 		VALUES ($1, $2, 'running', $3::jsonb)
 		RETURNING id, workflow_id, triggered_by, status, started_at, finished_at, input_context
@@ -228,10 +736,138 @@ func (s *Store) CreateRun(ctx context.Context, workflowID, triggeredBy string, i
 		&r.StartedAt, &r.FinishedAt, &ic,
 	)
 	if err != nil {
-		return r, err
+		return models.Run{}, err
 	}
 	if ic != nil {
-		json.Unmarshal(ic, &r.InputContext)
+		if err := json.Unmarshal(ic, &r.InputContext); err != nil {
+			log.Printf("db: run %s: failed to decode stored input_context (%d bytes): %v", r.ID, len(ic), err)
+		}
+	}
+	return r, nil
+}
+
+func (s *Store) CreateRun(ctx context.Context, workflowID, triggeredBy string, inputContext []byte) (models.Run, error) {
+	return insertRun(ctx, s.pool, workflowID, triggeredBy, inputContext)
+}
+
+// advisoryLockNamespaceRunCooldown is the first key of the two-key
+// pg_advisory_xact_lock CreateRunWithCooldown takes. Any int32 works here --
+// what matters is that it puts this lock in Postgres's two-key advisory
+// lock space, which never overlaps the single-key space
+// LockOAuthCredentialForRefresh uses, so the two can never collide no
+// matter what workflowID/credential id hash to.
+const advisoryLockNamespaceRunCooldown = 1
+
+// ErrRunOnCooldown is returned by CreateRunWithCooldown when workflowID
+// started a run within the last cooldown window passed to it. RetryAfter
+// is how much longer the caller must wait.
+type ErrRunOnCooldown struct {
+	RetryAfter time.Duration
+}
+
+func (e *ErrRunOnCooldown) Error() string {
+	return fmt.Sprintf("workflow run cooldown active, retry after %s", e.RetryAfter.Round(time.Second))
+}
+
+// CreateRunWithCooldown is CreateRun plus an atomic, DB-backed minimum gap
+// between two run starts for the same workflow -- a blunt deterrent
+// against a leaked webhook URL or a bot hammering the public trigger
+// endpoint with no rate limit otherwise (handlers.TriggerRun/PublicTrigger
+// are the only callers).
+//
+// Deliberately DB-backed rather than an in-process map: (1) the check and
+// the insert happen in the same transaction, so a CreateRun failure below
+// this point rolls the whole thing back -- a caller that reasonably
+// retries right after a transient DB error never sees a phantom cooldown
+// for a run that never actually started; (2) it piggybacks on the
+// existing runs table instead of a separate unbounded map, so there is no
+// new storage to leak over a long-running process's lifetime; (3) since
+// Postgres is the one shared source of truth, this is correct regardless
+// of how many backend replicas are running, unlike an in-process lock
+// that only ever sees its own replica's traffic.
+//
+// pg_try_advisory_xact_lock (non-blocking), not the plain blocking
+// pg_advisory_xact_lock LockOAuthCredentialForRefresh uses below -- that
+// function WANTS a caller to wait for a concurrent refresh of the same
+// credential to finish. Here, waiting would be actively harmful: this repo
+// runs against the Supabase transaction pooler's small shared connection
+// budget, and a blocking lock means every request in a burst against the
+// same workflow (exactly the burst this cooldown exists to reject) queues
+// holding a pooled connection until the one ahead of it finishes -- turning
+// this anti-abuse check into a connection-pool-exhaustion vector that can
+// starve unrelated, legitimate requests across the whole app. A failed
+// try-lock is treated as "another request for this workflow is already
+// mid-check" and answered with the same cooldown response, so a burst still
+// gets rejected, it just never blocks a connection to do it.
+//
+// Uses the two-key form of the advisory lock (advisoryLockNamespaceRunCooldown,
+// hashtext(workflowID)) rather than a string-prefixed single key. Postgres
+// guarantees the two-key lock space never overlaps the single-key space
+// LockOAuthCredentialForRefresh uses below, so this new lock can never
+// collide with it regardless of hash values -- without needing to change
+// LockOAuthCredentialForRefresh's existing key formula (see its own doc
+// comment for why that matters: it's pre-existing, and changing its key
+// shape would desync old/new replicas mid-rollout).
+func (s *Store) CreateRunWithCooldown(ctx context.Context, workflowID, triggeredBy string, inputContext []byte, cooldown time.Duration) (models.Run, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return models.Run{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var locked bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1, hashtext($2))`, advisoryLockNamespaceRunCooldown, workflowID).Scan(&locked); err != nil {
+		return models.Run{}, fmt.Errorf("run cooldown: acquire advisory lock: %w", err)
+	}
+	if !locked {
+		// Best-effort: report the actual remaining cooldown, not the full
+		// duration. This read doesn't need (and doesn't take) the advisory
+		// lock -- it's a plain MVCC snapshot read on the already-held tx
+		// connection (not a fresh pool acquisition), purely to give
+		// the caller a more accurate Retry-After than "the whole window,"
+		// which could be up to `cooldown` longer than the real remaining
+		// wait if the lock holder's own check is almost done. Any error, or
+		// no rows yet, falls back to reporting the full cooldown -- correct
+		// (if imprecise) either way, since RetryAfter is a hint, not a
+		// correctness guarantee.
+		retryAfter := cooldown
+		var elapsedSecs float64
+		if err := tx.QueryRow(ctx, `
+			SELECT EXTRACT(EPOCH FROM (now() - started_at)) FROM runs
+			WHERE workflow_id = $1 ORDER BY started_at DESC LIMIT 1
+		`, workflowID).Scan(&elapsedSecs); err == nil {
+			if elapsed := time.Duration(elapsedSecs * float64(time.Second)); elapsed < cooldown {
+				retryAfter = cooldown - elapsed
+			}
+		}
+		return models.Run{}, &ErrRunOnCooldown{RetryAfter: retryAfter}
+	}
+
+	// EXTRACT(EPOCH FROM (now() - started_at)), not started_at scanned into
+	// Go and compared via time.Since: the elapsed duration must be computed
+	// against Postgres's own clock throughout, not the app server's --
+	// otherwise clock skew between hosts could make the cooldown window
+	// effectively longer or shorter than `cooldown` actually specifies.
+	var elapsedSecs float64
+	err = tx.QueryRow(ctx, `
+		SELECT EXTRACT(EPOCH FROM (now() - started_at)) FROM runs
+		WHERE workflow_id = $1 ORDER BY started_at DESC LIMIT 1
+	`, workflowID).Scan(&elapsedSecs)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return models.Run{}, fmt.Errorf("run cooldown: check last run: %w", err)
+	}
+	if err == nil {
+		if elapsed := time.Duration(elapsedSecs * float64(time.Second)); elapsed < cooldown {
+			return models.Run{}, &ErrRunOnCooldown{RetryAfter: cooldown - elapsed}
+		}
+	}
+
+	r, err := insertRun(ctx, tx, workflowID, triggeredBy, inputContext)
+	if err != nil {
+		return models.Run{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return models.Run{}, err
 	}
 	return r, nil
 }
@@ -239,12 +875,24 @@ func (s *Store) CreateRun(ctx context.Context, workflowID, triggeredBy string, i
 func (s *Store) GetRun(ctx context.Context, runID string) (models.Run, error) {
 	var r models.Run
 	var ic []byte
+	// Spend joins the same way runSpendJoin does for the list endpoints
+	// (runs_list.go): a lateral sum over debit_ledger, defaulted to 0 so a
+	// run with no charges yet still scans cleanly. No user_id filter here —
+	// GetRun has never been user-scoped; the handler enforces ownership
+	// afterward via GetWorkflow.
 	err := s.pool.QueryRow(ctx, `
-		SELECT id, workflow_id, triggered_by, status, started_at, finished_at, input_context
-		FROM runs WHERE id=$1
+		SELECT r.id, r.workflow_id, r.triggered_by, r.status, r.started_at,
+		       r.finished_at, r.input_context, COALESCE(spend.total, 0)
+		FROM runs r
+		LEFT JOIN LATERAL (
+			SELECT SUM(d.amount_usd_micros) AS total
+			FROM debit_ledger d
+			WHERE d.run_id = r.id
+		) spend ON true
+		WHERE r.id = $1
 	`, runID).Scan(
 		&r.ID, &r.WorkflowID, &r.TriggeredBy, &r.Status,
-		&r.StartedAt, &r.FinishedAt, &ic,
+		&r.StartedAt, &r.FinishedAt, &ic, &r.SpendUSDMicros,
 	)
 	if err != nil {
 		return r, err
@@ -289,10 +937,13 @@ func (s *Store) InsertRunLog(ctx context.Context, l models.RunLog) (models.RunLo
 	return out, nil
 }
 
-func (s *Store) UpdateRunLog(ctx context.Context, id string, status models.LogStatus, outputJSON []byte, durationMs int) error {
+// configHash is only meaningful (and only ever read back) for a
+// LogStatusSuccess row -- see GetLatestNodeStates and RunLog.ConfigHash's
+// own doc comment. Callers updating any other status pass "".
+func (s *Store) UpdateRunLog(ctx context.Context, id string, status models.LogStatus, outputJSON []byte, durationMs int, configHash string) error {
 	_, err := s.pool.Exec(ctx, `
-		UPDATE run_logs SET status=$2, output=$3::jsonb, duration_ms=$4 WHERE id=$1
-	`, id, string(status), string(outputJSON), durationMs)
+		UPDATE run_logs SET status=$2, output=$3::jsonb, duration_ms=$4, node_config_hash=$5 WHERE id=$1
+	`, id, string(status), string(outputJSON), durationMs, configHash)
 	return err
 }
 
@@ -325,6 +976,131 @@ func (s *Store) GetRunLogs(ctx context.Context, runID string) ([]models.RunLog, 
 		logs = append(logs, l)
 	}
 	return logs, rows.Err()
+}
+
+// GetLatestNodeStates returns each node's most recent logged status/output
+// for a run, keyed by node ID. Runner.Resume uses this to skip re-executing
+// (and re-billing/re-paying) any node that already reached a terminal state
+// on a prior attempt.
+//
+// Supported by migration 000028's idx_run_logs_run_id_node_id_ts index --
+// this DISTINCT ON/ORDER BY shape matches it exactly (run_id, node_id, ts
+// DESC), so Postgres can satisfy it with an index scan instead of sorting
+// every row for the run in memory, which otherwise gets more expensive the
+// more times a run has been retried/resumed and the more rows per node it
+// accumulates.
+func (s *Store) GetLatestNodeStates(ctx context.Context, runID string) (map[string]models.RunLog, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (node_id) node_id, status, output, node_config_hash
+		FROM run_logs WHERE run_id=$1
+		ORDER BY node_id, ts DESC
+	`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	states := make(map[string]models.RunLog)
+	for rows.Next() {
+		var l models.RunLog
+		var outJSON []byte
+		if err := rows.Scan(&l.NodeID, &l.Status, &outJSON, &l.ConfigHash); err != nil {
+			return nil, err
+		}
+		if outJSON != nil {
+			json.Unmarshal(outJSON, &l.Output)
+		}
+		states[l.NodeID] = l
+	}
+	return states, rows.Err()
+}
+
+// MarkRunRunning resets a run back to "running" with no finish time -- used
+// by Resume to undo the "failed"/"stopped" terminal state a prior attempt
+// left behind, so the run reads correctly as in-progress while it's retried.
+//
+// The WHERE clause is Resume's only admission gate: two concurrent resume
+// calls for the same run (double-click, retried request) race this same
+// UPDATE, and Postgres's row-level lock lets exactly one of them observe the
+// pre-terminal status and flip it -- the loser's statement matches zero rows
+// and must not execute any node. The same clause rejects a resume on a run
+// that's already "running" or already "success", since neither is in the
+// IN-list. Returns (false, nil) rather than an error for "not resumable" --
+// that's an expected outcome, not a failure.
+func (s *Store) MarkRunRunning(ctx context.Context, runID string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE runs SET status='running', finished_at=NULL
+		WHERE id=$1 AND status IN ('failed','stopped')
+	`, runID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// HasRunningRun reports whether workflowID has any run currently in
+// "running" status, read straight from Postgres rather than any
+// in-process registry -- the scheduler's overlap guard needs this to be
+// visible across every backend replica, not just the one whose tick happens
+// to land next. Like every other admission check in this file, this is a
+// point-in-time read, not a claim: a run can transition between this call
+// and whatever the caller does next, so it narrows the cross-replica gap
+// engine.Runner.IsRunning has (in-process only) without claiming to make
+// the scheduler's decision fully atomic.
+func (s *Store) HasRunningRun(ctx context.Context, workflowID string) (bool, error) {
+	var exists bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM runs WHERE workflow_id=$1 AND status='running')
+	`, workflowID).Scan(&exists)
+	return exists, err
+}
+
+// --- DeadLetterRun methods ---
+
+func (s *Store) InsertDeadLetterRun(ctx context.Context, dl models.DeadLetterRun) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO dead_letter_runs (run_id, node_id, error, attempt_count, payment_risk)
+		VALUES ($1,$2,$3,$4,$5)
+	`, dl.RunID, dl.NodeID, dl.Error, dl.AttemptCount, dl.PaymentRisk)
+	return err
+}
+
+// DeleteDeadLettersForNode removes every dead-letter row for nodeID within
+// runID -- called once that node reaches a real success within this same
+// run (a fresh run, or a resume that retried it), so a node's earlier
+// failed attempt stops permanently gating every future resume of this run.
+// Without this, a single PaymentRisk row that gets force-resolved (forced
+// past, node succeeds) still shows up in GetDeadLetterRuns forever after,
+// so an unrelated later node failing for an ordinary transient reason would
+// ALSO require force to resume, since the stale, already-resolved row is
+// still in the result set alongside it. Scoped to (run_id, node_id), not
+// the whole run, so any OTHER node's still-unresolved dead-letter row is
+// untouched.
+func (s *Store) DeleteDeadLettersForNode(ctx context.Context, runID, nodeID string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM dead_letter_runs WHERE run_id=$1 AND node_id=$2`, runID, nodeID)
+	return err
+}
+
+// GetDeadLetterRuns returns every dead-letter entry for a run, oldest
+// first -- normally one row (the level failure stops the run), but a
+// workflow can have more than one node fail in the same parallel level.
+func (s *Store) GetDeadLetterRuns(ctx context.Context, runID string) ([]models.DeadLetterRun, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, run_id, node_id, error, attempt_count, payment_risk, created_at
+		FROM dead_letter_runs WHERE run_id=$1 ORDER BY created_at
+	`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.DeadLetterRun
+	for rows.Next() {
+		var dl models.DeadLetterRun
+		if err := rows.Scan(&dl.ID, &dl.RunID, &dl.NodeID, &dl.Error, &dl.AttemptCount, &dl.PaymentRisk, &dl.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, dl)
+	}
+	return out, rows.Err()
 }
 
 // --- AgentWallet methods ---
@@ -502,6 +1278,17 @@ func (s *Store) CreateCryptoCreditTransaction(ctx context.Context, userID, provi
 	return txn, err
 }
 
+// clearLowBalanceMarker goes in an UPDATE that adds $1 to a user's balance.
+// It clears the low-balance marker when the new balance is back at or above
+// the threshold. CheckAndMarkLowBalance also clears it, but it only runs when
+// a run finishes. Without this, a top-up that restored the balance left the
+// marker set, and the next drop below the threshold was never reported.
+// (In an UPDATE the right-hand side sees the row as it was, so the sum is the
+// new balance.)
+var clearLowBalanceMarker = fmt.Sprintf(`low_balance_notified_at = CASE
+		WHEN credit_balance_usd_micros + $1 >= %d THEN NULL
+		ELSE low_balance_notified_at END`, models.LowBalanceThresholdUSDMicros)
+
 // ErrCreditTransactionNotFound is returned when no credit_ledger row exists for the given
 // provider order ID — the caller supplied an order Razorpay never told us about (or that
 // our own CreateCreditTransaction failed to record). Callers should treat this as a
@@ -556,7 +1343,9 @@ func (s *Store) CompleteCreditTransaction(ctx context.Context, provider, provide
 	}
 
 	if _, err := tx.Exec(ctx, `
-		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1 WHERE id = $2
+		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1,
+		`+clearLowBalanceMarker+`
+		WHERE id = $2
 	`, creditUSDMicros, userID); err != nil {
 		return 0, false, err
 	}
@@ -565,6 +1354,21 @@ func (s *Store) CompleteCreditTransaction(ctx context.Context, provider, provide
 		return 0, false, err
 	}
 	return creditUSDMicros, true, nil
+}
+
+// GetCreditTransactionUserID looks up who a completed ledger row belongs to.
+//
+// CompleteCreditTransaction already knows this internally but does not return
+// it, since its many call sites (production and test) would all need updating
+// for one field only two callers need. Those two are exactly the payment
+// webhooks (Cashfree, NOWPayments): unauthenticated routes with no session to
+// read a user id from, needed only to address a top-up-completed push.
+func (s *Store) GetCreditTransactionUserID(ctx context.Context, provider, providerOrderID string) (string, error) {
+	var userID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT user_id FROM credit_ledger WHERE provider_order_id = $1 AND provider = $2
+	`, providerOrderID, provider).Scan(&userID)
+	return userID, err
 }
 
 // RefundCreditTransaction reverses previously-credited USD micros when Razorpay reports a
@@ -647,10 +1451,77 @@ func (s *Store) GetCreditBalance(ctx context.Context, userID string) (int64, err
 	return balance, err
 }
 
-// ListCreditHistory returns a user's credit-ledger rows, most recent first, so
-// the billing UI can render real purchases from the DB instead of a browser-local
-// mock. Returns a non-nil (possibly empty) slice so the JSON is always an array.
-func (s *Store) ListCreditHistory(ctx context.Context, userID string) ([]models.CreditTransaction, error) {
+// CreditBalance is a thin alias for GetCreditBalance, named to match
+// nodes.TendrilStore's method set (TendrilCreditBalance/CreditBalance read
+// as a pair there) without a second implementation of the same query.
+func (s *Store) CreditBalance(ctx context.Context, userID string) (int64, error) {
+	return s.GetCreditBalance(ctx, userID)
+}
+
+// CheckAndMarkLowBalance reports whether a low-balance push is worth sending
+// right now, and records the answer atomically so the next call sees it.
+//
+// A crossing notifies once: the first check to find the balance below
+// thresholdUSDMicros with low_balance_notified_at still unset marks it and
+// reports true. Every check after that sees the marker already set and stays
+// quiet, however many more debits land while the balance stays low. Once the
+// balance recovers back to or above the threshold, the marker clears, so the
+// next time it dips back down notifies again.
+//
+// Same FOR UPDATE shape as debitCredits/ReserveCredits above: read the row
+// locked, decide, write, commit. The balance it read is returned too, so the
+// notification quotes the figure the decision was made on.
+func (s *Store) CheckAndMarkLowBalance(ctx context.Context, userID string, thresholdUSDMicros int64) (notify bool, balance int64, err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	var notifiedAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT credit_balance_usd_micros, low_balance_notified_at
+		FROM users WHERE id = $1 FOR UPDATE
+	`, userID).Scan(&balance, &notifiedAt); err != nil {
+		return false, 0, err
+	}
+
+	switch {
+	case balance < thresholdUSDMicros && notifiedAt == nil:
+		if _, err := tx.Exec(ctx, `
+			UPDATE users SET low_balance_notified_at = NOW() WHERE id = $1
+		`, userID); err != nil {
+			return false, 0, err
+		}
+		notify = true
+	case balance >= thresholdUSDMicros && notifiedAt != nil:
+		if _, err := tx.Exec(ctx, `
+			UPDATE users SET low_balance_notified_at = NULL WHERE id = $1
+		`, userID); err != nil {
+			return false, 0, err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, 0, err
+	}
+	return notify, balance, nil
+}
+
+// ListCreditTransactions returns a user's top-up history, newest first.
+//
+// This is the read side of the same credit_ledger rows CreateCreditTransaction
+// writes and CompleteCreditTransaction settles — the authoritative record of
+// what a user paid and what it granted. It exists because the billing page
+// previously kept its own copy in localStorage, which is per-browser: signing
+// in elsewhere (or as a different account in the same browser) showed the
+// wrong history for money the database had recorded correctly all along.
+//
+// Rows of every status are returned, not just 'completed'. A pending or failed
+// top-up is exactly what a user comes to this page to see after a payment that
+// did not visibly land, and hiding it would make the page a worse answer than
+// the localStorage version it replaces.
+func (s *Store) ListCreditTransactions(ctx context.Context, userID string, limit int) ([]models.CreditTransaction, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id, user_id, provider, provider_order_id, provider_payment_id, status,
 		       amount_inr_paise, fx_rate_usd_per_inr, amount_usd_cents, credit_usd_micros,
@@ -658,32 +1529,27 @@ func (s *Store) ListCreditHistory(ctx context.Context, userID string) ([]models.
 		FROM credit_ledger
 		WHERE user_id = $1
 		ORDER BY created_at DESC
-		LIMIT 100`, userID)
+		LIMIT $2
+	`, userID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	history := []models.CreditTransaction{}
+	// Non-nil so an account with no top-ups marshals as [] rather than null.
+	out := make([]models.CreditTransaction, 0, limit)
 	for rows.Next() {
 		var t models.CreditTransaction
 		if err := rows.Scan(
-			&t.ID, &t.UserID, &t.Provider, &t.ProviderOrderID, &t.ProviderPaymentID, &t.Status,
-			&t.AmountINRPaise, &t.FXRateUSDPerINR, &t.AmountUSDCents, &t.CreditUSDMicros,
-			&t.CreatedAt, &t.CompletedAt,
+			&t.ID, &t.UserID, &t.Provider, &t.ProviderOrderID, &t.ProviderPaymentID,
+			&t.Status, &t.AmountINRPaise, &t.FXRateUSDPerINR, &t.AmountUSDCents,
+			&t.CreditUSDMicros, &t.CreatedAt, &t.CompletedAt,
 		); err != nil {
 			return nil, err
 		}
-		history = append(history, t)
+		out = append(out, t)
 	}
-	return history, rows.Err()
-}
-
-// CreditBalance is a thin alias for GetCreditBalance, named to match
-// nodes.TendrilStore's method set (TendrilCreditBalance/CreditBalance read
-// as a pair there) without a second implementation of the same query.
-func (s *Store) CreditBalance(ctx context.Context, userID string) (int64, error) {
-	return s.GetCreditBalance(ctx, userID)
+	return out, rows.Err()
 }
 
 // --- Coupons ---
@@ -798,7 +1664,8 @@ func (s *Store) RedeemCoupon(ctx context.Context, userID, code string) (newBalan
 	}
 
 	if err := tx.QueryRow(ctx, `
-		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1
+		UPDATE users SET credit_balance_usd_micros = credit_balance_usd_micros + $1,
+		`+clearLowBalanceMarker+`
 		WHERE id = $2
 		RETURNING credit_balance_usd_micros
 	`, amount, userID).Scan(&newBalance); err != nil {
@@ -831,12 +1698,22 @@ func (s *Store) MarkCreditTransactionStatus(ctx context.Context, provider, provi
 // warrant a short window, while on-chain crypto providers like NOWPayments need a much
 // longer one to avoid expiring payments still working through block confirmations. Keeps
 // 'pending' meaningful as "still in progress" rather than accumulating dead rows.
+//
+// The cutoff is computed by the database, not by this process. created_at is written by
+// Postgres NOW(), so comparing it against an app-computed time.Now() straddles two
+// clocks: any skew between them (a containerised Postgres on a macOS VM routinely runs a
+// fraction of a second ahead of the host) shifts the effective window by that skew, and a
+// row created moments ago can be newer than a cutoff that was supposed to already include
+// it. Evaluating both sides in the DB makes the window exactly olderThan, whatever either
+// clock says. A zero olderThan sweeps everything already pending as of the database's own
+// now — useful for a test that wants a deterministic "sweep right now" without racing a
+// fixed small duration or writing a raw UPDATE against created_at.
 func (s *Store) ExpireStalePendingTransactions(ctx context.Context, provider string, olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-olderThan)
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE credit_ledger SET status = 'expired'
-		WHERE status = 'pending' AND provider = $1 AND created_at < $2
-	`, provider, cutoff)
+		WHERE status = 'pending' AND provider = $1
+		  AND created_at < NOW() - make_interval(secs => $2)
+	`, provider, olderThan.Seconds())
 	if err != nil {
 		return 0, err
 	}
@@ -968,6 +1845,22 @@ func (s *Store) DebitCreditsForPlatformLLM(ctx context.Context, userID string, a
 			INSERT INTO debit_ledger (user_id, workflow_id, run_id, node_id, kind, amount_usd_micros, model, tokens_in, tokens_out)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		`, userID, workflowID, runID, nodeID, models.DebitKindPlatformKeyLLMFee, amountUSDMicros, model, tokensIn, tokensOut)
+		return err
+	})
+}
+
+// DebitCreditsForBuildTest charges a platform-key agent call made by a chat
+// build's test run. Same atomic lock/check/decrement as every other debit;
+// the only difference is that run_id is NULL, because a test run is never
+// persisted as a run (see migration 000037). Without this a user with a
+// single credit could test-run platform-key agents for free, over and over,
+// one build message at a time.
+func (s *Store) DebitCreditsForBuildTest(ctx context.Context, userID string, amountUSDMicros int64, workflowID, nodeID, model string) error {
+	return s.debitCredits(ctx, userID, amountUSDMicros, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO debit_ledger (user_id, workflow_id, run_id, node_id, kind, amount_usd_micros, model)
+			VALUES ($1, $2, NULL, $3, $4, $5, $6)
+		`, userID, workflowID, nodeID, models.DebitKindBuildTestLLMFee, amountUSDMicros, model)
 		return err
 	})
 }
@@ -1120,6 +2013,176 @@ func (s *Store) ListX402RelaySettlementsByRunFunding(ctx context.Context, runFun
 	return out, rows.Err()
 }
 
+// --- Workflow variable methods ---
+
+const (
+	// MaxWorkflowVariables caps how many keys one workflow may hold. This
+	// is bounded key/value state for "remember the last row I processed",
+	// not a document store.
+	MaxWorkflowVariables = 64
+	// maxWorkflowVariableBytes mirrors the CHECK constraint on the column,
+	// enforced here too so the caller gets a typed error instead of a raw
+	// Postgres constraint violation.
+	maxWorkflowVariableBytes = 16384
+)
+
+var (
+	ErrVariableQuotaExceeded = errors.New("workflow variable limit reached")
+	ErrVariableTooLarge      = errors.New("workflow variable value too large")
+)
+
+// GetWorkflowVariables returns every variable for a workflow, JSON-decoded.
+// Returns an empty (non-nil) map when the workflow has none, so callers can
+// index it without a nil check.
+func (s *Store) GetWorkflowVariables(ctx context.Context, workflowID string) (map[string]any, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT key, value FROM workflow_variables WHERE workflow_id=$1
+	`, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]any)
+	for rows.Next() {
+		var k string
+		var v []byte
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		var decoded any
+		if err := json.Unmarshal(v, &decoded); err != nil {
+			return nil, fmt.Errorf("workflow variable %q: stored value is not valid JSON: %w", k, err)
+		}
+		out[k] = decoded
+	}
+	return out, rows.Err()
+}
+
+// SetWorkflowVariable upserts one variable. Concurrent writers are
+// last-write-wins by design: the alternative (optimistic versioning) would
+// make the common cases — "cache this token", "remember this cursor" —
+// fail spuriously when two runs overlap. Callers that need a correct
+// counter under concurrency use IncrementWorkflowVariable instead, which
+// is atomic in the database.
+//
+// The key-count quota is checked inside the same transaction as the write
+// so two concurrent inserts cannot both slip past the cap.
+func (s *Store) SetWorkflowVariable(ctx context.Context, workflowID, key string, valueJSON []byte) error {
+	// Compact before measuring: the caller's JSON may carry insignificant
+	// whitespace this check would otherwise count against the quota, while
+	// Postgres's own CHECK measures octet_length(value::text) on the JSONB
+	// column -- which never stores that whitespace. Compacting here keeps
+	// the two checks measuring the same thing, so a value cannot pass one
+	// and fail the other depending on how it happened to be formatted.
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, valueJSON); err != nil {
+		return fmt.Errorf("workflow variable value must be valid JSON: %w", err)
+	}
+	valueJSON = compact.Bytes()
+	if len(valueJSON) > maxWorkflowVariableBytes {
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrVariableTooLarge, len(valueJSON), maxWorkflowVariableBytes)
+	}
+	if key == "" || len(key) > 128 {
+		return errors.New("workflow variable key must be 1-128 characters")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var count int
+	var exists bool
+	// COALESCE because BOOL_OR over zero rows is NULL, which will not scan
+	// into a bool.
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*), COALESCE(BOOL_OR(key=$2), FALSE)
+		FROM workflow_variables WHERE workflow_id=$1
+	`, workflowID, key).Scan(&count, &exists); err != nil {
+		return err
+	}
+	// Updating a key that already exists never adds to the count, so it is
+	// allowed even at the cap.
+	if !exists && count >= MaxWorkflowVariables {
+		return fmt.Errorf("%w: %d keys, limit %d", ErrVariableQuotaExceeded, count, MaxWorkflowVariables)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO workflow_variables (workflow_id, key, value, updated_at)
+		VALUES ($1,$2,$3::jsonb,NOW())
+		ON CONFLICT (workflow_id, key) DO UPDATE
+		SET value = EXCLUDED.value, updated_at = NOW()
+	`, workflowID, key, string(valueJSON)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// IncrementWorkflowVariable adds delta to a numeric variable and returns
+// the new value, creating it at delta if absent. The insert/update itself
+// is a single statement, so overlapping runs of the same workflow cannot
+// lose an update the way a read-then-write from application code would --
+// the quota check runs in the same transaction as that statement, same as
+// SetWorkflowVariable, so a key that doesn't exist yet still can't slip
+// past MaxWorkflowVariables (a state/increment node with a templated key,
+// or just many distinct counter keys, would otherwise grow the table past
+// the cap unbounded, since this path took no count check at all before).
+//
+// A non-numeric existing value is replaced by delta rather than erroring —
+// the counter use case wants to keep counting, not to fail a run because
+// something once wrote a string there.
+func (s *Store) IncrementWorkflowVariable(ctx context.Context, workflowID, key string, delta float64) (float64, error) {
+	if key == "" || len(key) > 128 {
+		return 0, errors.New("workflow variable key must be 1-128 characters")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	var count int
+	var exists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*), COALESCE(BOOL_OR(key=$2), FALSE)
+		FROM workflow_variables WHERE workflow_id=$1
+	`, workflowID, key).Scan(&count, &exists); err != nil {
+		return 0, err
+	}
+	if !exists && count >= MaxWorkflowVariables {
+		return 0, fmt.Errorf("%w: %d keys, limit %d", ErrVariableQuotaExceeded, count, MaxWorkflowVariables)
+	}
+
+	var out float64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO workflow_variables (workflow_id, key, value, updated_at)
+		VALUES ($1,$2,to_jsonb($3::numeric),NOW())
+		ON CONFLICT (workflow_id, key) DO UPDATE
+		SET value = to_jsonb(
+			CASE WHEN jsonb_typeof(workflow_variables.value) = 'number'
+			     THEN (workflow_variables.value)::numeric + $3::numeric
+			     ELSE $3::numeric
+			END),
+		    updated_at = NOW()
+		RETURNING (value)::numeric
+	`, workflowID, key, delta).Scan(&out); err != nil {
+		return 0, err
+	}
+	return out, tx.Commit(ctx)
+}
+
+// DeleteWorkflowVariable removes one key. Deleting a key that does not
+// exist is not an error.
+func (s *Store) DeleteWorkflowVariable(ctx context.Context, workflowID, key string) error {
+	_, err := s.pool.Exec(ctx, `
+		DELETE FROM workflow_variables WHERE workflow_id=$1 AND key=$2
+	`, workflowID, key)
+	return err
+}
+
 const tendrilLeaseCols = `id, user_id, workflow_id, run_id, node_id, lease_id,
 	lease_token_enc, tendril_node_id, tendril_node_label, ssh_host, ssh_port,
 	ssh_username, ssh_command, ssh_public_key, ssh_private_key_enc,
@@ -1237,6 +2300,28 @@ func (s *Store) LatestActiveLeaseForRun(ctx context.Context, runID string) (mode
 		 ORDER BY started_at DESC LIMIT 1`, runID))
 }
 
+// ListActiveTendrilLeasesForRun returns every lease a run opened that is
+// still active, for the runner's end-of-run cleanup and Resume.
+func (s *Store) ListActiveTendrilLeasesForRun(ctx context.Context, runID string) ([]models.TendrilLease, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
+		 WHERE run_id = $1 AND status = 'active'
+		 ORDER BY started_at`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TendrilLease
+	for rows.Next() {
+		l, err := scanTendrilLease(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
 // LatestActiveLeaseForUser is the fallback resolveLease reaches for once a
 // Run/Release step is split into its own standalone one-node workflow: its
 // own run_id never matches the Rent step's (that was a different run
@@ -1248,4 +2333,174 @@ func (s *Store) LatestActiveLeaseForUser(ctx context.Context, userID string) (mo
 		`SELECT `+tendrilLeaseCols+` FROM tendril_leases
 		 WHERE user_id = $1 AND status = 'active'
 		 ORDER BY started_at DESC LIMIT 1`, userID))
+}
+
+const oauthCredentialCols = `id, user_id, provider, account_label, access_token_enc,
+	refresh_token_enc, scopes, expires_at, created_at, updated_at`
+
+func scanOAuthCredential(row pgx.Row) (models.OAuthCredential, error) {
+	var c models.OAuthCredential
+	err := row.Scan(&c.ID, &c.UserID, &c.Provider, &c.AccountLabel, &c.AccessTokenEnc,
+		&c.RefreshTokenEnc, &c.Scopes, &c.ExpiresAt, &c.CreatedAt, &c.UpdatedAt)
+	return c, err
+}
+
+// InsertOAuthCredential persists a newly-connected account, or replaces the
+// existing one in place (same id) if this user already has a credential for
+// the same provider+account_label -- reconnecting the same account must not
+// pile up duplicate rows with stale, still-valid refresh tokens, and must
+// not change the row's id, since workflow nodes reference credentials by id.
+// accessTokenEnc/refreshTokenEnc must already be encrypted -- this layer
+// never sees a raw token, mirroring how encryptNodes/decryptNodes keep node
+// secrets out of the store package (here it's the caller's job instead,
+// since the caller is the one holding the encryption key during the OAuth
+// callback).
+func (s *Store) InsertOAuthCredential(ctx context.Context, c models.OAuthCredential) (models.OAuthCredential, error) {
+	return scanOAuthCredential(s.pool.QueryRow(ctx, `
+		INSERT INTO oauth_credentials (user_id, provider, account_label, access_token_enc,
+			refresh_token_enc, scopes, expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (user_id, provider, account_label) DO UPDATE
+		   SET access_token_enc = EXCLUDED.access_token_enc,
+		       refresh_token_enc = EXCLUDED.refresh_token_enc,
+		       scopes = EXCLUDED.scopes,
+		       expires_at = EXCLUDED.expires_at,
+		       updated_at = now()
+		RETURNING `+oauthCredentialCols,
+		c.UserID, c.Provider, c.AccountLabel, c.AccessTokenEnc,
+		c.RefreshTokenEnc, c.Scopes, c.ExpiresAt))
+}
+
+func (s *Store) GetOAuthCredential(ctx context.Context, id string) (models.OAuthCredential, error) {
+	return scanOAuthCredential(s.pool.QueryRow(ctx,
+		`SELECT `+oauthCredentialCols+` FROM oauth_credentials WHERE id = $1`, id))
+}
+
+// ListOAuthCredentials backs the Inspector's "connect account" picker --
+// never returns the encrypted tokens themselves (the struct's json tags
+// already omit them, but this is also the query boundary: no caller of this
+// method needs the ciphertext, only GetOAuthCredential's node-execution path
+// does).
+func (s *Store) ListOAuthCredentials(ctx context.Context, userID, provider string) ([]models.OAuthCredential, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+oauthCredentialCols+` FROM oauth_credentials
+		 WHERE user_id = $1 AND provider = $2 ORDER BY created_at DESC`, userID, provider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.OAuthCredential
+	for rows.Next() {
+		c, err := scanOAuthCredential(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// UpdateOAuthCredentialTokens persists a refreshed access token (and,
+// usually, a rotated refresh token) after RefreshToken exchanges an expired
+// one. refreshTokenEnc may be "" -- a provider re-issuing an access token
+// doesn't always send a new refresh token, and "" here means "leave the
+// existing one alone" (COALESCE against NULLIF), never "erase it": erasing
+// a still-valid refresh token would permanently strand this credential the
+// next time its access token expires.
+func (s *Store) UpdateOAuthCredentialTokens(ctx context.Context, id, accessTokenEnc, refreshTokenEnc string, expiresAt time.Time) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE oauth_credentials
+		   SET access_token_enc = $2,
+		       refresh_token_enc = COALESCE(NULLIF($3, ''), refresh_token_enc),
+		       expires_at = $4,
+		       updated_at = now()
+		 WHERE id = $1`, id, accessTokenEnc, refreshTokenEnc, expiresAt)
+	return err
+}
+
+// DeleteOAuthCredential is owner-checked by the caller (handlers layer)
+// before this runs, same pattern as DeleteWorkflow.
+func (s *Store) DeleteOAuthCredential(ctx context.Context, id string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM oauth_credentials WHERE id = $1`, id)
+	return err
+}
+
+// LockOAuthCredentialForRefresh serializes concurrent token refreshes of the
+// same credential ACROSS PROCESSES, not just within one -- oauthcred's
+// refreshLocks (an in-memory sync.Mutex keyed by credential ID) only
+// protects against a race between goroutines in a single backend replica.
+// On a multi-replica deployment (Railway runs several), two replicas can
+// each independently observe the same expired credential, both hit the
+// provider's refresh endpoint, and both write tokens back with no
+// coordination between them.
+//
+// Uses pg_advisory_XACT_lock (transaction-scoped), not the session-scoped
+// pg_advisory_lock/unlock pair a first version of this used -- this project
+// connects through Supabase's transaction-mode pooler in production
+// (CLAUDE.md mandates port 6543; db.go's DefaultQueryExecMode workaround
+// exists for the same PgBouncer transaction-mode reality). Under
+// transaction-mode pooling, a client is only guaranteed the SAME real
+// Postgres backend for the duration of one explicit transaction -- two bare
+// Exec calls with no transaction between them (the session-scoped version's
+// lock and unlock) can silently land on two different backends. The unlock
+// would then no-op against the wrong backend and the lock would never
+// actually release, hanging every future refresh of that credential (or
+// anything hashing to the same key) forever. A transaction-scoped advisory
+// lock sidesteps this entirely: it's automatically released when the
+// transaction ends (commit OR rollback), with no separate unlock statement
+// that could be misrouted.
+//
+// This does mean the transaction stays open for the whole check-refresh-
+// persist sequence, including the outbound HTTP call to the provider's
+// refresh endpoint -- normally worth avoiding, but oauthcred's httpClient
+// caps that call at a 10s timeout, well inside any reasonable
+// idle-in-transaction timeout, so the tradeoff is acceptable here in
+// exchange for correctness under the pooler this project actually runs
+// behind.
+//
+// hashtext() returns a 32-bit int4, so this has a 32-bit collision space --
+// not the 64-bit space pg_advisory_xact_lock's bigint argument might
+// suggest. A false-positive collision between two different credential
+// UUIDs would only ever cause two unrelated refreshes to serialize behind
+// each other, never a correctness issue, so this is an acceptable
+// consequence at this scale rather than a negligible one -- worth
+// revisiting (e.g. hashing into a wider key, or the two-key form) if the
+// number of distinct OAuth credentials ever refreshed concurrently grows
+// large enough for that to matter in practice. Collision against
+// CreateRunWithCooldown's unrelated lock isn't a concern either way: that
+// one lives in Postgres's separate two-key advisory lock space (see its
+// own doc comment), so it can't collide with this single-key one
+// regardless of either one's actual key width.
+//
+// Key formula deliberately left as plain hashtext(id) -- unchanged since
+// before CreateRunWithCooldown was introduced. Prefixing it (e.g.
+// hashtext('oauth_credential:' || id)) to "namespace" it would change what
+// every in-flight replica computes for the same credential id: during a
+// rolling deploy, an old-binary replica and a new-binary replica would
+// then use different keys for the same credential and no longer serialize
+// against each other -- exactly the race this lock exists to prevent, and
+// avoidable entirely by giving new lock users their own key space instead
+// of changing this pre-existing one's.
+//
+// release must be called (via defer) once the caller is done -- it commits
+// the underlying transaction, which is what actually releases the lock.
+//
+// Same Begin+pg_advisory_xact_lock shape as CreateRunWithCooldown,
+// deliberately not shared: this one blocks until the lock is free (a
+// caller here wants to wait for a concurrent refresh of the same
+// credential to finish), whereas CreateRunWithCooldown uses the
+// non-blocking pg_try_advisory_xact_lock specifically to avoid queuing
+// pooled connections under a burst -- see that function's doc comment.
+func (s *Store) LockOAuthCredentialForRefresh(ctx context.Context, id string) (release func(context.Context), err error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, id); err != nil {
+		tx.Rollback(ctx)
+		return nil, err
+	}
+	return func(releaseCtx context.Context) {
+		tx.Commit(releaseCtx)
+	}, nil
 }

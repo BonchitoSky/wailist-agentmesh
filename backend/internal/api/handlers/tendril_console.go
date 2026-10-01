@@ -106,10 +106,12 @@ func (d *Deps) TendrilConsoleWorkflowExists(w http.ResponseWriter, r *http.Reque
 type consoleRunContext struct{ message string }
 
 func (c consoleRunContext) Message() string             { return c.message }
+func (c consoleRunContext) LastOutput() any             { return c.message }
 func (c consoleRunContext) UserInput() string           { return c.message }
 func (c consoleRunContext) ToolOutputs() map[string]any { return nil }
 func (c consoleRunContext) Set(string, any)             {}
 func (c consoleRunContext) Get(string) (any, bool)      { return nil, false }
+func (c consoleRunContext) OutputOrder() []string       { return nil }
 
 // runTendrilAction executes exactly one Tendril node, bypassing the graph
 // engine (TopologicalSort/Run) entirely — the console has no trigger, no

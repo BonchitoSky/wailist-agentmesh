@@ -1,63 +1,55 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { CanvasPage } from "@/components/canvas/CanvasPage";
-import { TendrilConsolePage } from "@/components/tendril/TendrilConsolePage";
-import { tendril } from "@/lib/tendril";
+import { useIsHandheld } from "@/hooks/useIsHandheld";
+import { IS_NATIVE } from "@/lib/nativeAuth";
+import { WorkflowSummary } from "./WorkflowSummary";
 
-// Most workflow ids open the normal canvas. The one id that is this user's
-// Tendril console (backend: GetOrCreateSystemWorkflow, one hidden row per
-// user, matched here by id -- never by name, since the backend's real row
-// name has no fixed relationship to any frontend constant) opens the
-// console instead: renting real hardware is a lookup-and-press-buttons
-// task, not something that benefits from a node graph, so that row never
-// shows the editor -- there's nothing on its canvas to show in the first
-// place.
+// Every workflow id opens the canvas. Partner consoles (Tendril, Prism) used
+// to be dispatched from here too -- one hidden row per user per partner,
+// matched by id against tendril/prism.consoleWorkflowIdIfExists() on every
+// single workflow-page visit, canvas or not, just to answer "is this one of
+// the two console ids". They now live at their own routes (/bazaar/tendril,
+// /bazaar/prism): neither console page ever read a workflow id in the first
+// place (they drive off /tendril/* and /prism/* directly), so the id-match
+// dispatch was pure per-visit overhead -- two network calls and a loading
+// flicker -- for a question a route segment now answers for free.
 //
-// Uses consoleWorkflowIdIfExists(), NOT console() -- the latter creates the
-// console row on first call, which here would mean every workflow-page
-// visit silently minting a hidden "Tendril Console" row for users who have
-// never touched Tendril at all, just from opening one of their own,
-// unrelated workflows. A "not found yet" answer trivially resolves to
-// "this isn't the console" without ever needing to create it.
-export function WorkflowRoute({ workflowId }: { workflowId: string }) {
-  const [isTendrilConsole, setIsTendrilConsole] = useState<boolean | null>(
-    () => (workflowId === "new" ? false : null),
+// On a phone or tablet the canvas is replaced by WorkflowSummary: run status,
+// run history and Run/Stop, which is what a handheld is used for. The native
+// app is always handheld, so it never ships the choice to the device.
+//
+// On the web the device is only known in the browser, and the server renders
+// the desktop answer. Rendering CanvasPage until hydration would mount the
+// whole editor on a phone for one frame and fire its requests, so nothing
+// workflow-specific renders until the client has answered.
+
+const subscribeNever = () => () => {};
+
+// False during the server render and hydration, true afterwards.
+function useHasMounted(): boolean {
+  return useSyncExternalStore(
+    subscribeNever,
+    () => true,
+    () => false,
   );
+}
 
-  useEffect(() => {
-    if (workflowId === "new") return;
-    let stale = false;
-    tendril
-      .consoleWorkflowIdIfExists()
-      .then((consoleWorkflowId) => {
-        if (!stale) setIsTendrilConsole(workflowId === consoleWorkflowId);
-      })
-      .catch(() => {
-        if (!stale) setIsTendrilConsole(false);
-      });
-    return () => {
-      stale = true;
-    };
-  }, [workflowId]);
+export function WorkflowRoute({ workflowId }: { workflowId: string }) {
+  const handheld = useIsHandheld();
+  const mounted = useHasMounted();
 
-  if (isTendrilConsole === null) {
+  if (IS_NATIVE || (mounted && handheld)) {
+    return <WorkflowSummary key={workflowId} workflowId={workflowId} />;
+  }
+  if (!mounted) {
     return (
       <div
-        style={{
-          height: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          background: "var(--bg)",
-          color: "var(--fg-dim)",
-          fontFamily: "var(--font-mono)",
-          fontSize: 12,
-        }}
-      >
-        loading…
-      </div>
+        className="am-viewport"
+        aria-busy="true"
+        style={{ height: "100dvh", background: "var(--bg)" }}
+      />
     );
   }
-  if (isTendrilConsole) return <TendrilConsolePage />;
   return <CanvasPage key={workflowId} workflowId={workflowId} />;
 }

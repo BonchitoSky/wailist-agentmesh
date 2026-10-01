@@ -645,6 +645,20 @@ type X402RelayConfig struct {
 	// amount+markup total from one DB-backed ledger per call — there's no
 	// upfront padded pool to protect against in that path.
 	MarkupLedger RunLedger
+	// BatchPlatformFee suppresses the per-call flat markup on this call.
+	//
+	// Set ONLY by a caller that charges models.X402PlatformFeeUSDMicros once
+	// for a whole batch of calls itself (see handlers.PrismRepoReview). A repo
+	// review is N calls to one endpoint on the user's single instruction, and
+	// billing the flat fee N times turned a 30-file review into $48 of markup
+	// on $3 of vendor cost -- the fee is priced per user action, not per HTTP
+	// request.
+	//
+	// When true this call reserves and commits the vendor amount only, and
+	// settles no fee on-chain. The batch owner is then responsible for exactly
+	// one Commit + SettlePlatformFee covering the run; leaving this true
+	// without doing that means the platform is never paid at all.
+	BatchPlatformFee bool
 	// LegacyLedger is the original per-call, DB-backed ledger (always
 	// r.newPaymentLedger(wf, run), never the run-level in-memory pool) —
 	// what the legacy flat-quote dialect's direct-pay branch reserves/
@@ -1373,7 +1387,14 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, cfg X4
 	// plus the platform's flat markup -- see executeTool402RunLevel's
 	// identical total/amount split for the run-funded path; both real x402
 	// dispatch paths bill the same way.
-	total := int64(amount) + models.X402PlatformFeeUSDMicros
+	// Zero when the caller bills one fee for a whole batch (see
+	// X402RelayConfig.BatchPlatformFee); every reserve/commit/settle below
+	// keys off this rather than the constant, so there is one switch.
+	perCallFee := models.X402PlatformFeeUSDMicros
+	if cfg.BatchPlatformFee {
+		perCallFee = 0
+	}
+	total := int64(amount) + perCallFee
 	//
 	// Reserve (atomically decrement) the exact amount now, before signing —
 	// not just check it — so a second call racing this one (another
@@ -1458,11 +1479,13 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, cfg X4
 	if payResp.Header.Get("X-Inbound-Settled") == "true" {
 		out.SettledUSDMicros = int64(amount)
 		out.DebitKind = models.DebitKindX402RelayCost
-		out.PlatformFeeUSDMicros = models.X402PlatformFeeUSDMicros
+		out.PlatformFeeUSDMicros = perCallFee
 		settled = true
 		if commit := ledger.Commit; commit != nil {
 			commit(ctx, node.ID, int64(amount), models.DebitKindX402RelayCost)
-			commit(ctx, node.ID, models.X402PlatformFeeUSDMicros, models.DebitKindX402PlatformFee)
+			if perCallFee > 0 {
+				commit(ctx, node.ID, perCallFee, models.DebitKindX402PlatformFee)
+			}
 		}
 		// Settle the platform's own flat markup as a second, real Wallet 1
 		// -> Wallet 2 payment -- see SettlePlatformFee's doc comment for why
@@ -1474,21 +1497,32 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, cfg X4
 		// to the caller, already succeeded. cfg.Facilitator == nil (dev/test
 		// wiring that never configured one) makes this a silent no-op.
 		//
-		// Detached from ctx (WithoutCancel, own timeout) rather than run on
-		// it directly: by this point money has already moved and the user
-		// has already been billed the fee in credits, so a caller-initiated
-		// cancellation (a closed console tab, a StopWorkflow racing this
-		// exact instant) must not abort the one thing that would actually
-		// back that charge with real USDC -- same reasoning as every other
-		// post-settlement compensating action in this codebase (see
-		// runner.go's ledgerCompensationTimeout uses). 60s budget: up to 20s
-		// each for the facilitator's Verify and Settle calls
-		// (FacilitatorClient's own http.Client timeout), plus the signing
-		// call ahead of them making its own algod SuggestedParams round
-		// trip on this same context with no timeout of its own, plus
-		// headroom.
-		if cfg.Facilitator != nil {
-			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
+		// Detached from ctx (context.WithoutCancel) -- unlike FundRunReserve,
+		// where a StopWorkflow landing mid-retry just means ReleaseReservedCredits
+		// undoes a reservation that was never committed, the two Commit calls
+		// above have ALREADY moved this fee into the caller's committed ledger
+		// total by the time we get here. A StopWorkflow racing this call must
+		// not be allowed to abort the retry sequence early (selfSettleWallet1ToWallet2's
+		// ctx.Err() check would do exactly that on a cancelable ctx): that would
+		// leave the fee permanently billed in the ledger with no on-chain
+		// settlement ever attempted again, not merely delayed. SelfSettleRetryBudget
+		// still bounds how long this can run.
+		//
+		// Runs synchronously (not backgrounded) even though it's best-effort:
+		// this blocks the agent's tool-calling loop for up to
+		// SelfSettleRetryBudget on a degraded facilitator, which is a real
+		// cost, but backgrounding it would mean either dropping
+		// PlatformFeeTxID/PlatformFeeExplorerURL from the tool result
+		// entirely (LogDrawer's receipt display and platformfee_test.go both
+		// depend on it being there synchronously on success) or bolting on
+		// a callback/polling path to fill it in later. Given the fee is
+		// already committed either way, the ceiling here bounds the
+		// downside to a fixed worst case rather than an unbounded hang, and
+		// the CRITICAL alert below is the actual backstop for the failure
+		// case -- worth revisiting if p95 tool-call latency under a
+		// degraded facilitator becomes a real product problem.
+		if cfg.Facilitator != nil && perCallFee > 0 {
+			fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), SelfSettleRetryBudget)
 			feeTxID, feeErr := SettlePlatformFee(fctx, RunPreFundConfig{
 				USDCSigner:               usdcSigner,
 				PlatformSpendEncMnemonic: platformSpendEncMnemonic,
@@ -1498,11 +1532,11 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, cfg X4
 				RelayFeePayer:            cfg.RelayFeePayer,
 				ExpectedAssetID:          expectedAssetID,
 				FrontendURL:              cfg.FrontendURL,
-			}, models.X402PlatformFeeUSDMicros)
+			}, perCallFee)
 			cancel()
 			if feeErr != nil {
 				msg := fmt.Sprintf("CRITICAL: x402 platform fee failed to settle on-chain (node %s, target %s, fee %d): %v",
-					node.ID, node.Endpoint, models.X402PlatformFeeUSDMicros, feeErr)
+					node.ID, node.Endpoint, perCallFee, feeErr)
 				log.Print(msg)
 				go alert.Notify(context.Background(), alert.ChannelPayments, msg)
 			} else {
@@ -1568,7 +1602,7 @@ func executeTool402V2Relay(ctx context.Context, node models.WorkflowNode, cfg X4
 			if len(snippet) > errSnippetLimit {
 				snippet = snippet[:errSnippetLimit]
 			}
-			return out, fmt.Errorf("x402 relay: target rejected the paid request (status %d): %s", payResp.StatusCode, snippet)
+			return out, &ErrPaymentAlreadyCommitted{Err: fmt.Errorf("x402 relay: target rejected the paid request (status %d): %s", payResp.StatusCode, snippet)}
 		}
 	} else {
 		releaseReservation()
@@ -1713,7 +1747,7 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 		// Target unreachable at the network level -- no response body to
 		// return, nothing else to give the caller but the error. The ledger
 		// above still reflects the real spend via Commit, not Release.
-		return Tool402PaymentResult{}, payErr
+		return Tool402PaymentResult{}, &ErrPaymentAlreadyCommitted{Err: payErr}
 	}
 
 	var response any
@@ -1736,7 +1770,7 @@ func executeTool402RunLevel(ctx context.Context, node models.WorkflowNode, cfg X
 			snippet = snippet[:errSnippetLimit]
 		}
 		return Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost, PlatformFeeUSDMicros: markup},
-			fmt.Errorf("x402 run-level: target rejected the paid request (status %d): %s", result.StatusCode, snippet)
+			&ErrPaymentAlreadyCommitted{Err: fmt.Errorf("x402 run-level: target rejected the paid request (status %d): %s", result.StatusCode, snippet)}
 	}
 
 	out := Tool402PaymentResult{Response: response, SettledUSDMicros: amount, DebitKind: models.DebitKindX402RelayCost, PlatformFeeUSDMicros: markup}

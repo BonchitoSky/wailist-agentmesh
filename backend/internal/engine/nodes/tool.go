@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/agentmesh/backend/internal/models"
+	"github.com/agentmesh/backend/internal/netutil"
 )
 
 // dialAndValidate resolves host, blocks private IPs, then dials the validated address.
@@ -34,7 +35,7 @@ func dialAndValidate(ctx context.Context, network, addr string) (net.Conn, error
 		return nil, fmt.Errorf("no addresses resolved for %s", host)
 	}
 	for _, ia := range ips {
-		if isPrivateIP(ia.IP) {
+		if netutil.IsPrivateIP(ia.IP) {
 			return nil, fmt.Errorf("requests to private/internal addresses are not allowed")
 		}
 	}
@@ -115,42 +116,235 @@ func SafeOutboundPayHTTPClient() *http.Client {
 }
 
 func ExecuteTool(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
+	return executeTool(ctx, node, rc, nil)
+}
+
+// ExecuteToolWithArgs is ExecuteTool plus the LLM's chosen function-call
+// arguments. Only "websearch" reads them today -- a per-call query the
+// static node config can't supply, unlike "http"'s fixed URL/calc's fixed
+// expression. A separate entry point rather than widening ExecuteTool's own
+// signature so the many call sites that never have LLM args (every
+// standalone, non-agent-attached tool node) don't need to pass nil through.
+func ExecuteToolWithArgs(ctx context.Context, node models.WorkflowNode, rc RunContexter, args map[string]any) (any, error) {
+	return executeTool(ctx, node, rc, args)
+}
+
+func executeTool(ctx context.Context, node models.WorkflowNode, rc RunContexter, args map[string]any) (any, error) {
 	switch node.Template {
 	case "calc":
 		return evalMath(node.URL)
 	case "datetime":
-		return time.Now().UTC().Format(time.RFC3339), nil
+		return executeDateTime(node)
 	case "http":
 		return callHTTP(ctx, node, rc)
+	case "set":
+		return executeSet(node, rc)
+	case "json_extract":
+		return executeJSONExtract(node, rc)
+	case "crypto":
+		return executeCrypto(node, rc)
+	case "xml":
+		return executeXMLToJSON(rc)
+	case "template":
+		return executeTemplate(node, rc)
+	case "html_extract":
+		return executeHTMLExtract(node, rc)
+	case "markdown":
+		return executeMarkdown(node, rc)
+	case "quickchart":
+		return executeQuickChart(node, rc)
+	case "websearch":
+		return webSearch(ctx, websearchQuery(node, args, rc), platformGeminiKey())
 	default:
 		return rc.Message(), nil
 	}
+}
+
+// websearchQuery decides what this node searches for, in priority order.
+//
+// An agent's function-call argument wins: that is the question actually being
+// asked. Then the node's own searchQuery, which is what makes a standalone
+// flow node possible at all -- the catalog used to give this template no
+// fields, so a node wired into the flow had nothing to search for and failed
+// with "query is required" whenever the step before it produced no text, as a
+// manual trigger always does. The upstream message is the last resort and the
+// original behaviour.
+func websearchQuery(node models.WorkflowNode, args map[string]any, rc RunContexter) string {
+	if q, ok := args["query"].(string); ok && strings.TrimSpace(q) != "" {
+		return q
+	}
+	if q := configVal(node, "searchQuery", ""); strings.TrimSpace(q) != "" {
+		return resolveTemplate(q, rc)
+	}
+	return rc.Message()
+}
+
+// platformKeysForTools holds AgentMesh's own provider API keys for tool
+// execution -- set once at startup, mirroring geminiBaseURL/urlValidator's
+// swappable-package-var pattern above, rather than widening ExecuteTool's
+// signature (and every one of its many existing call sites) just to carry
+// one map that's genuinely process-wide, not per-call.
+var platformKeysForTools map[string]string
+
+// SetPlatformKeys installs the keys "websearch" (and any future built-in
+// tool needing a platform-held credential) reads from. Called once from
+// engine.Runner.SetPlatformKeys.
+func SetPlatformKeys(keys map[string]string) { platformKeysForTools = keys }
+
+func platformGeminiKey() string { return platformKeysForTools["gemini"] }
+
+// PlatformKeys returns the provider key map the runner was configured with
+// (SetPlatformKeys), for code outside a run -- the builder's dry run -- that
+// has to call a platform-key agent the same way a run would.
+func PlatformKeys() map[string]string { return platformKeysForTools }
+
+// httpMethodsWithBody are the methods callHTTP attaches rc.Message() to as a
+// request body -- GET/HEAD/OPTIONS never carry one, matching real HTTP
+// semantics rather than the old POST-only special case.
+var httpMethodsWithBody = map[string]bool{
+	http.MethodPost:   true,
+	http.MethodPut:    true,
+	http.MethodPatch:  true,
+	http.MethodDelete: true,
+}
+
+// idempotentHTTPMethods are the methods where repeating an identical request
+// cannot compound whatever the first attempt already did server-side --
+// standard HTTP idempotency (RFC 7231 §4.2.2), used here to decide whether a
+// failed call is safe to retry. POST and PATCH are deliberately excluded:
+// neither is idempotent, so a retry after an ambiguous failure (e.g. the
+// response was lost after the server already processed the write) could
+// double the effect.
+var idempotentHTTPMethods = map[string]bool{
+	http.MethodGet:     true,
+	http.MethodHead:    true,
+	http.MethodPut:     true,
+	http.MethodDelete:  true,
+	http.MethodOptions: true,
+}
+
+func isIdempotentHTTPMethod(method string) bool {
+	return idempotentHTTPMethods[method]
+}
+
+// IsIdempotentHTTPMethod exports isIdempotentHTTPMethod for callers outside
+// this package -- currently engine.nodeMayHaveRealSideEffect, which needs
+// the identical GET/HEAD/PUT/DELETE/OPTIONS classification to decide
+// whether an "http" Tool node's config-staleness check is safe to apply
+// (see its own doc comment).
+func IsIdempotentHTTPMethod(method string) bool {
+	return isIdempotentHTTPMethod(method)
+}
+
+// httpRequestBody is the body callHTTP sends for this node, whether it sends
+// one at all, and whether it came from httpBodyTemplate. The one place this
+// decision lives: callHTTP sends it, and the builder's dry run reports it as
+// what a simulated request would have carried, so the two cannot disagree.
+//
+// Only POST, PUT, PATCH and DELETE carry a body. httpBodyTemplate is this
+// node's own template key, distinct from messageTemplate -- a different node
+// type/Inspector, and "body" is the accurate term for what a request carries,
+// vs. a connector's "message". Same {{ result }} / {{ result.field }} /
+// {{ node.<id> }} syntax either way (resolveTemplate).
+//
+// Only POST defaults to rc.Message() verbatim with no template set -- that's
+// the pre-existing behavior and changing it would silently alter every
+// already-saved POST node. That comparison is against the trimmed but NOT
+// case-normalized method, so an already-saved "post" keeps sending no body,
+// exactly as it did under the old literal method == "POST" check.
+// PUT/PATCH/DELETE only attach a body when the node explicitly opts in via
+// httpBodyTemplate -- never defaulted, to avoid silently changing behavior
+// for nodes saved before this method-aware body logic existed.
+func httpRequestBody(node models.WorkflowNode, rc RunContexter) (body string, sends, templated bool) {
+	rawMethod := strings.TrimSpace(node.Method)
+	method := strings.ToUpper(rawMethod)
+	if method == "" {
+		method = http.MethodGet
+	}
+	if !httpMethodsWithBody[method] {
+		return "", false, false
+	}
+	if tmpl := configVal(node, "httpBodyTemplate", ""); tmpl != "" {
+		return resolveTemplate(tmpl, rc), true, true
+	}
+	if rawMethod == http.MethodPost {
+		return rc.Message(), true, false
+	}
+	return "", false, false
+}
+
+// HTTPRequestBodyForDryRun exports httpRequestBody for the builder's dry run.
+func HTTPRequestBodyForDryRun(node models.WorkflowNode, rc RunContexter) (body string, sends, templated bool) {
+	return httpRequestBody(node, rc)
 }
 
 func callHTTP(ctx context.Context, node models.WorkflowNode, rc RunContexter) (any, error) {
 	if err := urlValidator(node.URL); err != nil {
 		return nil, err
 	}
-	method := node.Method
+	// method (normalized) is what's sent on the wire; whether a body goes
+	// with it is httpRequestBody's decision.
+	method := strings.ToUpper(strings.TrimSpace(node.Method))
 	if method == "" {
 		method = http.MethodGet
 	}
 	var bodyReader io.Reader
-	if method == http.MethodPost {
-		bodyReader = bytes.NewReader([]byte(rc.Message()))
+	if body, sends, _ := httpRequestBody(node, rc); sends {
+		bodyReader = bytes.NewReader([]byte(body))
 	}
 	req, err := http.NewRequestWithContext(ctx, method, node.URL, bodyReader)
 	if err != nil {
 		return nil, err
 	}
-	if method == http.MethodPost {
+	if bodyReader != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	// Custom headers: a JSON object of header name -> value, e.g.
+	// {"X-Api-Key": "...", "Authorization": "Bearer ..."}. Kept in Secrets
+	// rather than Config -- headers commonly carry credentials and there's
+	// no way to tell which ones from the shape alone, so the whole blob
+	// gets the encrypted-at-rest treatment. Applied AFTER the Content-Type
+	// default above so an explicit Content-Type here (e.g. for an
+	// XML/form-urlencoded httpBodyTemplate) overrides the application/json
+	// default instead of being clobbered by it.
+	if raw := secretVal(node, "httpHeadersJSON"); raw != "" {
+		var headers map[string]string
+		if err := json.Unmarshal([]byte(raw), &headers); err != nil {
+			return nil, fmt.Errorf("http: invalid headers JSON: %w", err)
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+	}
+	if user := secretVal(node, "httpBasicUser"); user != "" {
+		req.SetBasicAuth(user, secretVal(node, "httpBasicPass"))
 	}
 	resp, err := toolHTTPClient.Do(req)
 	if err != nil {
+		// A transport failure on an idempotent method (nothing non-repeatable
+		// can have happened server-side) is safe to retry. POST/PATCH stay
+		// unwrapped and therefore non-retryable by default: the request may
+		// have reached the server and been acted on before the connection
+		// dropped, so a retry could replay a write we can't confirm failed.
+		if isIdempotentHTTPMethod(method) {
+			return nil, Retryable(err)
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		httpErr := fmt.Errorf("http: %s %d: %s", method, resp.StatusCode, readErrorBody(resp))
+		if isIdempotentHTTPMethod(method) {
+			return nil, Retryable(httpErr)
+		}
+		return nil, httpErr
+	}
+	if resp.StatusCode >= 400 {
+		// 4xx is a client error, not a transient one -- retrying sends the
+		// exact same broken request again. Never retryable regardless of
+		// method.
+		return nil, fmt.Errorf("http: %s %d: %s", method, resp.StatusCode, readErrorBody(resp))
+	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, httpResponseLimit))
 	if err != nil {
 		return nil, err
@@ -194,33 +388,6 @@ func validateURL(raw string) error {
 		return fmt.Errorf("URL must not contain userinfo")
 	}
 	return nil
-}
-
-func isPrivateIP(ip net.IP) bool {
-	private := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"127.0.0.0/8",
-		"169.254.0.0/16", // link-local
-		"100.64.0.0/10",  // CGNAT
-		"::1/128",        // loopback IPv6
-		"fc00::/7",       // unique local IPv6
-		"fe80::/10",      // link-local IPv6
-		"224.0.0.0/4",    // multicast
-		"240.0.0.0/4",    // reserved
-		"0.0.0.0/8",      // this network
-	}
-	for _, cidr := range private {
-		_, network, err := net.ParseCIDR(cidr)
-		if err != nil {
-			continue
-		}
-		if network.Contains(ip) {
-			return true
-		}
-	}
-	return false
 }
 
 // evalMath evaluates a simple arithmetic expression using the go/constant package.

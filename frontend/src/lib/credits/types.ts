@@ -1,34 +1,37 @@
 import type { PaymentMethod } from "@/components/checkout/types";
 
-// Credit wallet model. With a backend configured, the balance comes from
-// GET /credits/balance and history from GET /credits/history, so both are
-// per-account rather than per-browser, and only the auto-recharge preference
-// stays in localStorage. Without one, history and preferences fall back to a
-// per-browser localStorage mock. Amounts paid are INR; credits are denominated
-// in USD (via a mock FX in mock mode).
+// Credit wallet model. Both fields are server-owned and neither is persisted
+// locally: balanceUSD comes from users.credit_balance_usd_micros and purchases
+// from credit_ledger, the same rows the payment webhooks write and settle. A
+// per-browser copy showed the wrong history after a sign-out or an account
+// switch while the database had it right all along.
 
-// "paid" is a completed, credited purchase. Real DB-backed history can also be
-// pending (awaiting confirmation), failed/expired, or refunded.
-export type PurchaseStatus = "paid" | "pending" | "failed" | "refunded";
+// Mirrors credit_ledger.status. 'completed' is the only state where credits
+// were actually granted; the rest are shown so a user who paid and saw nothing
+// land can tell which of "still settling", "the gateway declined", and "we
+// stopped waiting" happened, instead of finding an empty page.
+export type PurchaseStatus =
+  | "pending"
+  | "completed"
+  | "failed"
+  | "expired"
+  | "partial"
+  | "refunded";
 
 export interface Purchase {
   id: string;
   createdAt: string; // ISO 8601
-  amountINR: number; // amount charged
-  creditsUSD: number; // credits granted (base + bonus)
+  // Exactly one of these is set, matching how the row was paid: the Cashfree
+  // path is INR-denominated (with an FX rate recorded at purchase time), the
+  // crypto path is already USD. A renderer must handle either.
+  amountINR?: number;
+  amountUSD?: number;
+  creditsUSD: number; // credits granted
   method: PaymentMethod;
   status: PurchaseStatus;
-}
-
-export interface AutoRecharge {
-  enabled: boolean;
-  thresholdUSD: number; // recharge when balance drops below this
-  amountINR: number; // how much to top up each time
-  monthlyCapINR: number | null; // optional spend ceiling
 }
 
 export interface CreditsState {
   balanceUSD: number;
   purchases: Purchase[]; // newest first
-  autoRecharge: AutoRecharge;
 }
