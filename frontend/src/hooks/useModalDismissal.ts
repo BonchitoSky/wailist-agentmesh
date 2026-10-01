@@ -52,7 +52,21 @@ export function useModalDismissal(onClose: () => void, active = true) {
     // toolbar button. Putting it back is what lets somebody carry on down the
     // list instead of being dropped at the top of the document.
     const previous = document.activeElement as HTMLElement | null;
-    const dialog = document.querySelector<HTMLElement>("[aria-modal='true']");
+
+    // Exactly one, or none at all.
+    //
+    // Several components render aria-modal without going through this hook --
+    // RunSheet (which traps focus itself), NotificationsSheet, the Topbar
+    // menu. If one of those were open when a dialog using this hook opened,
+    // taking "the first aria-modal in the document" could trap focus inside
+    // the WRONG element, which is worse than not trapping at all. Skipping
+    // when the answer is ambiguous leaves those cases behaving exactly as
+    // they do today, and costs nothing: one dialog on screen is the
+    // overwhelmingly common case.
+    const openDialogs = document.querySelectorAll<HTMLElement>(
+      "[aria-modal='true']",
+    );
+    const dialog = openDialogs.length === 1 ? openDialogs[0] : null;
 
     // Focus the dialog itself rather than its first control: a dialog whose
     // first control is destructive should not open with that control armed
