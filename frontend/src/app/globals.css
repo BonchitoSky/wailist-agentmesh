@@ -681,6 +681,41 @@ body {
   }
 }
 
+/* The share link's own field carries its box inline and only its focus state
+   here -- the hybrid the rest of this codebase uses (see .chat-send), because
+   :focus cannot be written in a style prop. */
+.share-linkfield:focus {
+  outline: none;
+  border-color: var(--accent-line);
+  color: var(--fg);
+}
+
+/* A tertiary action inside a sentence. Copying a code is not a peer of the two
+   buttons that send a link -- it hands over the workflow itself, so there is
+   nothing left to revoke afterwards -- and sitting in that row at the same
+   size it read as a third way to send the same thing. Same shape as
+   .upc__retry, this app's other button written into a sentence. */
+.share-textlink {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.share-textlink:disabled {
+  color: var(--fg-dim);
+  text-decoration: none;
+  cursor: default;
+}
+.share-textlink:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+
 /* The one action on a share link's public page. A class rather than inline
    styles because it needs :hover, :active and a reduced-motion escape, which
    a style prop cannot express -- the same reason .credit-topup above is one.

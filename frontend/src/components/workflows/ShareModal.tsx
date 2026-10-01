@@ -206,7 +206,11 @@ export function ShareModal({
       await navigator.clipboard.writeText(shareUrl(share.token));
       flash("link");
     } catch {
-      setError("clipboard write was blocked -- select the link and copy it");
+      // Deliberately nothing. The link is on screen, in a field that selects
+      // itself when focused -- that IS the fallback, and raising an error for
+      // something the person can still do by hand is noise. CopyField on the
+      // Helixbox console makes the same call for the same reason. A code is
+      // different: that value is not on screen, so its failure still speaks.
     }
   };
 
@@ -405,45 +409,72 @@ export function ShareModal({
 
         {share && (
           <>
-            <div
+            {/* Band 1 -- the thing people opened this dialog for.
+                It used to be fifth down the panel, below a disclosure line, a
+                full-width field nobody reads and a status row. Field and
+                button side by side is how CopyField does it on the Helixbox
+                console; the difference here is that copying is this dialog's
+                primary action, so it keeps the accent rather than going
+                ghost. */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <input
+                readOnly
+                value={url}
+                onFocus={(e) => e.currentTarget.select()}
+                aria-label="Share link"
+                className="share-linkfield"
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  height: 38,
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11.5,
+                  padding: "0 10px",
+                  background: "var(--bg-elev-2)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--r-2)",
+                  color: "var(--fg-muted)",
+                }}
+              />
+              <button
+                type="button"
+                onClick={handleCopyLink}
+                disabled={currentLife.dead}
+                className="share-primary-btn"
+                style={{ width: "auto", flex: "0 0 auto", padding: "0 14px" }}
+              >
+                <IconCopy size={13} />{" "}
+                {currentLife.dead
+                  ? "Link is dead"
+                  : copied === "link"
+                    ? "Copied"
+                    : "Copy link"}
+              </button>
+            </div>
+
+            {/* Band 2 -- what this link lets somebody do, and what it has
+                done. The second line was previously shown for every OTHER
+                link but never for the one on screen, so the most interesting
+                question a sharer has -- has anyone actually used it? -- was
+                the one the dialog would not answer. */}
+            <p
               style={{
+                margin: "0 0 4px",
                 fontSize: 11.5,
+                lineHeight: 1.5,
                 color: "var(--fg-dim)",
-                marginBottom: 6,
               }}
             >
-              Anyone with this link can see the workflow and import a copy.
-            </div>
-            <input
-              readOnly
-              value={url}
-              onFocus={(e) => e.currentTarget.select()}
-              aria-label="Share link"
-              style={{
-                width: "100%",
-                height: 38,
-                fontFamily: "var(--font-mono)",
-                fontSize: 11.5,
-                padding: "0 10px",
-                background: "var(--bg-elev-2)",
-                border: "1px solid var(--border)",
-                borderRadius: "var(--r-2)",
-                color: "var(--fg-muted)",
-                marginBottom: 10,
-              }}
-            />
-            {/* What this particular link's life looks like, and how much use
-                it has had. Both were previously shown for every OTHER link
-                but never for the one on screen -- so the most interesting
-                question a sharer has ("has anyone actually used it?") was the
-                one the dialog would not answer. */}
+              Anyone with this link can open the workflow and import a copy.
+            </p>
             <div
               style={{
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
                 gap: 8,
-                marginBottom: 10,
+                minHeight: 26,
+                marginBottom: 14,
                 fontSize: 11.5,
                 color: currentLife.dead ? "var(--warm)" : "var(--fg-dim)",
               }}
@@ -462,21 +493,14 @@ export function ShareModal({
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={handleCopyLink}
-              disabled={currentLife.dead}
-              className="share-primary-btn"
-            >
-              <IconCopy size={13} />{" "}
-              {currentLife.dead
-                ? "This link is dead"
-                : copied === "link"
-                  ? "Copied!"
-                  : "Copy link"}
-            </button>
-
-            <div style={{ display: "flex", gap: 8, margin: "10px 0 14px" }}>
+            {/* Band 3 -- sending it.
+                A code used to be a third ghost button in this row, the same
+                size and shape as the two that send a link, and the one thing
+                it does differently -- it cannot be taken back -- was said
+                AFTERWARDS, in a warning that appeared once the copying was
+                already done. A warning read after the act is the weaker half
+                of the same sentence, so it is now the sentence. */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 9 }}>
               <a
                 href={tweetUrl}
                 target="_blank"
@@ -488,46 +512,48 @@ export function ShareModal({
               <a href={mailUrl} className="share-ghost-btn">
                 <IconMail size={13} /> Email
               </a>
+            </div>
+            <p
+              style={{
+                margin: 0,
+                fontSize: 11.5,
+                lineHeight: 1.6,
+                color: "var(--fg-dim)",
+                maxWidth: "60ch",
+              }}
+            >
+              or{" "}
               <button
                 type="button"
                 onClick={handleCopyCode}
                 disabled={busy || currentLife.dead}
-                className="share-ghost-btn"
-                title="A code works without a link, but cannot be revoked"
+                className="share-textlink"
               >
-                <IconCopy size={13} /> {copied === "code" ? "Copied!" : "Code"}
-              </button>
-            </div>
-
-            {/* Said out loud, because the rest of this dialog implies the
-                opposite. Everything else here can be pulled back -- there is
-                a Revoke on every link and an expiry select -- and a code sits
-                among them looking like one more way to send the same thing.
-                It is not: a code is the graph itself, so once it is out there
-                is nothing left to revoke. */}
-            {copied === "code" && (
-              <div
-                style={{
-                  margin: "0 0 12px",
-                  fontSize: 11.5,
-                  lineHeight: 1.6,
-                  color: "var(--warm)",
-                  maxWidth: "60ch",
-                }}
-              >
-                A code carries the workflow itself, so it keeps working even
-                after you revoke the link. Send a link if you might change your
-                mind.
-              </div>
-            )}
+                {copied === "code"
+                  ? "code copied"
+                  : busy
+                    ? "preparing…"
+                    : "copy a code"}
+              </button>{" "}
+              instead — it works where a link gets mangled, but it can&apos;t be
+              revoked.
+            </p>
 
             <div
               style={{
-                border: "1px solid var(--border-soft)",
-                borderRadius: "var(--r-2)",
-                background: "var(--bg-elev-2)",
-                padding: "11px 13px",
-                marginBottom: 14,
+                height: 1,
+                background: "var(--border)",
+                margin: "14px 0 12px",
+              }}
+            />
+
+            {/* Band 4 -- what the recipient does NOT get.
+                The same words it has always had, minus the border and the
+                fill. A bordered, filled card was the fourth box in a panel
+                that had four, and none of what this says needed one. */}
+            <p
+              style={{
+                margin: 0,
                 fontSize: 12,
                 lineHeight: 1.65,
                 color: "var(--fg-muted)",
@@ -540,13 +566,13 @@ export function ShareModal({
               {lines.length > 0
                 ? `${lines.join(", ")}. Whoever imports it adds their own.`
                 : "any API keys, secrets or uploaded files. Whoever imports it adds their own."}
-            </div>
+            </p>
 
             <div
               style={{
                 height: 1,
                 background: "var(--border)",
-                margin: "0 0 14px",
+                margin: "14px 0",
               }}
             />
 
