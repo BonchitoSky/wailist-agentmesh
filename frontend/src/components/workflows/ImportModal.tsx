@@ -177,19 +177,9 @@ export function ImportModal({
   return (
     <div
       role="presentation"
+      className="share-scrim"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
-      }}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        background: "rgba(8,7,12,0.72)",
-        backdropFilter: "blur(4px)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
       }}
     >
       <div
@@ -197,16 +187,7 @@ export function ImportModal({
         role="dialog"
         aria-modal="true"
         aria-label="Import workflow"
-        style={{
-          width: "100%",
-          maxWidth: 480,
-          border: "1px solid var(--border-strong)",
-          borderRadius: "var(--r-4)",
-          background: "var(--bg-elev-1)",
-          color: "var(--fg)",
-          boxShadow: "0 24px 64px rgba(0,0,0,0.55)",
-          padding: 24,
-        }}
+        className="share-panel"
       >
         <div
           style={{
