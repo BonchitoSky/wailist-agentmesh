@@ -78,10 +78,10 @@ function page(runs: RunSummary[], nextCursor: string | null = null): RunPage {
 }
 
 beforeEach(() => {
-  api.get.mockResolvedValue(workflow());
-  api.listForWorkflow.mockResolvedValue(page([FINISHED]));
-  api.run.mockResolvedValue({ runId: "r-2" });
-  api.stop.mockResolvedValue(undefined);
+  api.get.mockReset().mockResolvedValue(workflow());
+  api.listForWorkflow.mockReset().mockResolvedValue(page([FINISHED]));
+  api.run.mockReset().mockResolvedValue({ runId: "r-2" });
+  api.stop.mockReset().mockResolvedValue(undefined);
   api.runGet.mockReset();
   // A poll asks runs.get about a run the list has not picked up yet, so it
   // needs a promise back. Still running: the pending row stays as it is.
@@ -311,6 +311,12 @@ describe("WorkflowSummary", () => {
   // outranks an older one.
   it("still shows the first load when a newer quiet read fails first", async () => {
     let settleFirst!: (wf: Workflow) => void;
+    let settleHistory!: (runs: RunPage) => void;
+    api.listForWorkflow.mockReturnValueOnce(
+      new Promise<RunPage>((resolve) => {
+        settleHistory = resolve;
+      }),
+    );
     api.get
       .mockReturnValueOnce(
         new Promise<Workflow>((r) => {
@@ -320,6 +326,11 @@ describe("WorkflowSummary", () => {
       .mockRejectedValueOnce(new Error("offline"));
     render(<WorkflowSummary workflowId="wf-1" />);
     await waitFor(() => expect(api.listForWorkflow).toHaveBeenCalledTimes(1));
+
+    // Establish the initial activity before simulating a newly started run.
+    await act(async () => {
+      settleHistory(page([FINISHED]));
+    });
 
     const started = {
       ...FINISHED,
