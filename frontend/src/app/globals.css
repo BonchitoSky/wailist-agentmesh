@@ -681,6 +681,50 @@ body {
   }
 }
 
+/* One line that opens the rest. Same shape and the same chevron as .bilp-row
+   on the Credits screen, scaled for a dialog whose other controls are 26-38px
+   -- this one is desktop-only, so it is not sized for a thumb. */
+.share-disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .share-disclosure:hover {
+    color: var(--fg);
+  }
+}
+.share-disclosure:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+/* Points right while shut, down while open -- IconArrow already points right,
+   so the shut state needs no rotation at all. */
+.share-disclosure__chevron {
+  display: inline-flex;
+  color: var(--fg-dim);
+  transition: transform 0.15s var(--ease);
+}
+.share-disclosure__chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .share-disclosure__chevron {
+    transition: none;
+  }
+}
+
 /* The share link's own field carries its box inline and only its focus state
    here -- the hybrid the rest of this codebase uses (see .chat-send), because
    :focus cannot be written in a style prop. */

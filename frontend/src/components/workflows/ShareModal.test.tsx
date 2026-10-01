@@ -80,11 +80,21 @@ describe("ShareModal", () => {
     expect(summary.textContent).toMatch(/webhook secret/);
   });
 
-  it("keeps the link on offer out of the list below it", async () => {
+  it("keeps every other link behind one line until asked for", async () => {
+    // Collapsed for the reason the Credits screen collapses "How credits
+    // work": it costs one line rather than a field. The list grows without
+    // bound, and it sat permanently on screen competing with Copy link.
     state.listFor.mockResolvedValue([SHARE, { ...SHARE, token: "tok-older" }]);
 
     render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
-    await screen.findByText(/Not included:/);
+    const options = await screen.findByRole("button", { name: /Link options/ });
+
+    expect(options.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText(/Other links to this workflow/)).toBeNull();
+    // The count rides on the label, so the line is worth reading while shut.
+    expect(options.textContent).toMatch(/1 other/);
+
+    fireEvent.click(options);
     await screen.findByText(/Other links to this workflow/);
 
     // Two links exist, but the one shown above is not repeated underneath --
@@ -105,8 +115,51 @@ describe("ShareModal", () => {
     ]);
 
     render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Link options/ }),
+    );
     const row = await screen.findByText(/ok-dead/);
     expect(row.textContent).toMatch(/Revoked/);
+  });
+
+  it("will not offer to mint a duplicate of the link on screen", async () => {
+    // "No expiry" used to be the default beside "Make it", so the obvious
+    // press produced a SECOND never-expiring link to the same workflow --
+    // against an allowance counted per user, for no benefit. It is offered
+    // only when the current link does expire, so there is no state in which
+    // this control makes something pointless.
+    render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Link options/ }),
+    );
+
+    const select = screen.getByLabelText(/Make another, expiring in/);
+    const offered = Array.from(
+      select.querySelectorAll("option"),
+      (o) => o.textContent,
+    );
+    expect(offered).not.toContain("No expiry");
+    expect(offered).toContain("7 days");
+  });
+
+  it("offers no expiry again once the current link has one", async () => {
+    state.create.mockResolvedValue({
+      share: {
+        ...SHARE,
+        expiresAt: new Date(Date.now() + 864e5).toISOString(),
+      },
+      redactions: REDACTIONS,
+    });
+
+    render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Link options/ }),
+    );
+
+    const select = screen.getByLabelText(/Make another, expiring in/);
+    expect(
+      Array.from(select.querySelectorAll("option"), (o) => o.textContent),
+    ).toContain("No expiry");
   });
 
   it("asks before revoking, because a link cannot be un-revoked", async () => {

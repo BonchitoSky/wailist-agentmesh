@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { IconClose } from "@/components/ui";
+import { IconArrow, IconClose } from "@/components/ui";
 import { useModalDismissal } from "@/hooks/useModalDismissal";
 import { shares as sharesApi } from "@/lib/api";
 import { shareUrl } from "@/lib/routes";
@@ -139,7 +139,28 @@ export function ShareModal({
   // time: arming a second row disarms the first, which is what a person
   // expects and saves a per-row state.
   const [confirming, setConfirming] = useState<string | null>(null);
+  // Everything beyond the link on screen is behind one line until asked for.
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const loading = !share && !error;
+
+  // "No expiry" is offered only when the current link DOES expire.
+  //
+  // It used to be the default, so the press next to it minted a second
+  // never-expiring link to the same workflow -- a duplicate of the one in the
+  // panel, against an allowance counted per user, for no benefit. Taking the
+  // option away where it would do nothing is better than disabling the button
+  // and explaining why: there is then no state in which this control makes
+  // something pointless.
+  const expiryChoices = EXPIRY_CHOICES.filter(
+    (c) => c.days !== 0 || !!share?.expiresAt,
+  );
+  // Derived rather than synced in an effect -- `share` arrives after the
+  // first render, so a state this depends on would need an effect to correct
+  // it, which is both the slower path and the one this repo's
+  // set-state-in-effect rule exists to stop.
+  const expirySelection = expiryChoices.some((c) => c.days === expiryDays)
+    ? expiryDays
+    : (expiryChoices[0]?.days ?? 0);
 
   const dialogRef = useModalDismissal(onClose);
 
@@ -242,7 +263,7 @@ export function ShareModal({
     setBusy(true);
     setError(null);
     try {
-      const created = await sharesApi.create(workflowId, expiryDays);
+      const created = await sharesApi.create(workflowId, expirySelection);
       setOthers((prev) => (share ? [share, ...prev] : prev));
       setShare(created.share);
       setRedactions(created.redactions);
@@ -576,107 +597,145 @@ export function ShareModal({
               }}
             />
 
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                marginBottom: otherLinks.length > 0 ? 12 : 0,
-              }}
-            >
-              {/* Worded so it cannot be read as applying to the link above.
-                  It sets the expiry of the link the button beside it MAKES --
-                  labelled "New link expires", people reasonably read it as
-                  putting an expiry on the one they had just copied. */}
-              <label
-                htmlFor="share-expiry"
-                style={{ fontSize: 11.5, color: "var(--fg-dim)" }}
-              >
-                Make another, expiring in
-              </label>
-              <select
-                id="share-expiry"
-                value={expiryDays}
-                onChange={(e) => setExpiryDays(Number(e.target.value))}
-                style={{
-                  height: 30,
-                  padding: "0 8px",
-                  background: "var(--bg-elev-2)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--r-2)",
-                  color: "var(--fg)",
-                  fontSize: 12,
-                }}
-              >
-                {EXPIRY_CHOICES.map((c) => (
-                  <option key={c.days} value={c.days}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={handleNewLink}
-                disabled={busy}
-                className="share-ghost-btn"
-                style={{ flex: "0 0 auto", padding: "0 12px" }}
-              >
-                Make it
-              </button>
-            </div>
+            {/* Band 5 -- everything about this workflow's links beyond the
+                one in the panel: making another with an expiry, and what has
+                already been handed out.
 
-            {otherLinks.length > 0 && (
-              <div>
+                Collapsed until asked for, for the reason the Credits screen
+                gives for doing the same with "How credits work": it costs one
+                line rather than a field. Both of these were permanently on
+                screen, the second of them a list that grows without bound
+                inside a fixed panel, and between them they were two of the
+                four things competing with the Copy button. Nothing is
+                removed; the label carries the count so the line is worth
+                reading while shut. */}
+            <button
+              type="button"
+              className="share-disclosure"
+              aria-expanded={optionsOpen}
+              onClick={() => setOptionsOpen((v) => !v)}
+            >
+              <span>
+                Link options
+                {otherLinks.length > 0 &&
+                  ` · ${otherLinks.length} other${otherLinks.length === 1 ? "" : "s"}`}
+              </span>
+              <span
+                className="share-disclosure__chevron"
+                data-open={optionsOpen}
+                aria-hidden
+              >
+                <IconArrow size={12} />
+              </span>
+            </button>
+
+            {optionsOpen && (
+              <div style={{ paddingTop: 10 }}>
                 <div
                   style={{
-                    fontSize: 11.5,
-                    color: "var(--fg-dim)",
-                    marginBottom: 6,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    marginBottom: otherLinks.length > 0 ? 14 : 0,
                   }}
                 >
-                  Other links to this workflow
-                </div>
-                {otherLinks.map((s) => (
-                  <div
-                    key={s.token}
+                  {/* Worded so it cannot be read as applying to the link
+                      above. It sets the expiry of the link the button beside
+                      it MAKES -- labelled "New link expires", people
+                      reasonably read it as putting an expiry on the one they
+                      had just copied. */}
+                  <label
+                    htmlFor="share-expiry"
+                    style={{ fontSize: 11.5, color: "var(--fg-dim)" }}
+                  >
+                    Make another, expiring in
+                  </label>
+                  <select
+                    id="share-expiry"
+                    value={expirySelection}
+                    onChange={(e) => setExpiryDays(Number(e.target.value))}
                     style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 8,
-                      padding: "6px 0",
-                      fontSize: 11.5,
-                      color: "var(--fg-muted)",
+                      height: 30,
+                      padding: "0 8px",
+                      background: "var(--bg-elev-2)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--r-2)",
+                      color: "var(--fg)",
+                      fontSize: 12,
                     }}
                   >
-                    <span
+                    {expiryChoices.map((c) => (
+                      <option key={c.days} value={c.days}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleNewLink}
+                    disabled={busy}
+                    className="share-ghost-btn"
+                    style={{ flex: "0 0 auto", padding: "0 12px" }}
+                  >
+                    Make it
+                  </button>
+                </div>
+
+                {otherLinks.length > 0 && (
+                  <div>
+                    <div
                       style={{
-                        fontFamily: "var(--font-mono)",
-                        fontVariantNumeric: "tabular-nums",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        // A dead link is kept, and shown as spent rather than
-                        // as an option.
-                        opacity: lifeOf(s).dead ? 0.55 : 1,
-                        textDecoration: lifeOf(s).dead
-                          ? "line-through"
-                          : undefined,
+                        fontSize: 11.5,
+                        color: "var(--fg-dim)",
+                        marginBottom: 6,
                       }}
                     >
-                      …{s.token.slice(-8)} · {importsOf(s)} · {lifeOf(s).label}
-                    </span>
-                    {isLive(s) && (
-                      <button
-                        type="button"
-                        onClick={() => void handleRevoke(s.token)}
-                        className="share-revoke-btn"
+                      Other links to this workflow
+                    </div>
+                    {otherLinks.map((s) => (
+                      <div
+                        key={s.token}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          padding: "6px 0",
+                          fontSize: 11.5,
+                          color: "var(--fg-muted)",
+                        }}
                       >
-                        {confirming === s.token ? "Revoke?" : "Revoke"}
-                      </button>
-                    )}
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontVariantNumeric: "tabular-nums",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            // A dead link is kept, and shown as spent rather
+                            // than as an option.
+                            opacity: lifeOf(s).dead ? 0.55 : 1,
+                            textDecoration: lifeOf(s).dead
+                              ? "line-through"
+                              : undefined,
+                          }}
+                        >
+                          …{s.token.slice(-8)} · {importsOf(s)} ·{" "}
+                          {lifeOf(s).label}
+                        </span>
+                        {isLive(s) && (
+                          <button
+                            type="button"
+                            onClick={() => void handleRevoke(s.token)}
+                            className="share-revoke-btn"
+                          >
+                            {confirming === s.token ? "Revoke?" : "Revoke"}
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             )}
           </>
