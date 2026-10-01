@@ -18,6 +18,7 @@ export function WorkflowsPhoneHeader({
   spend,
   known = true,
   spendKnown = true,
+  showBalance = true,
 }: {
   total: number;
   // How many survive the search and filter. Saying "1 of 6" keeps the count
@@ -32,6 +33,7 @@ export function WorkflowsPhoneHeader({
   // arrives fine while the runs/spend aggregation behind it fails, and then
   // the count is real but the total is not.
   spendKnown?: boolean;
+  showBalance?: boolean;
 }) {
   const router = useRouter();
   const { balanceUSD, balanceKnown } = useCredits();
@@ -68,7 +70,7 @@ export function WorkflowsPhoneHeader({
             The spoken name starts with exactly what is shown ("Credit
             $12.50"), so someone using voice control can say what they see
             (WCAG 2.5.3, label in name). */}
-        <button
+        {showBalance && <button
           type="button"
           className="wfp-head__balance"
           aria-label={
@@ -85,7 +87,7 @@ export function WorkflowsPhoneHeader({
           <span className="wfp-head__balance-chevron" aria-hidden>
             ›
           </span>
-        </button>
+        </button>}
       </div>
     </header>
   );

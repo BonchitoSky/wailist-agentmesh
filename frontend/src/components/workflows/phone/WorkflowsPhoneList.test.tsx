@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { Workflow } from "@/lib/types";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("@/components/runs/UpcomingRuns", () => ({ UpcomingRuns: () => null }));
 vi.mock("@/lib/credits/store", () => ({
   useCredits: () => ({ balanceUSD: 3.4, balanceKnown: true }),
 }));

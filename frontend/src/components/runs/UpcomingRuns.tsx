@@ -7,6 +7,7 @@ import { schedules, UpcomingUnavailableError } from "@/lib/api";
 import type { UpcomingRun } from "@/lib/types";
 import { workflowHref } from "@/lib/routes";
 import { formatRunTime, formatUntil } from "@/lib/runFormat";
+import overviewStyles from "@/components/workflows/WorkflowOverview.module.css";
 
 // Schedules move slowly; a minute between refreshes keeps the list true
 // without polling like a running run does. The clock ticks faster so an
@@ -41,11 +42,13 @@ export function UpcomingRuns({
   workflowId,
   title = "Upcoming",
   hideWhenEmpty = false,
+  presentation = "plain",
 }: {
   limit?: number;
   workflowId?: string;
   title?: string;
   hideWhenEmpty?: boolean;
+  presentation?: "plain" | "overview";
 }) {
   const [items, setItems] = useState<UpcomingRun[] | null>(null);
   const [unavailable, setUnavailable] = useState(false);
@@ -94,6 +97,38 @@ export function UpcomingRuns({
   const now = useNow(!!items?.length, CLOCK_MS);
 
   if (unavailable) return null;
+  if (presentation === "overview") {
+    return (
+      <section className={`upc ${overviewStyles.upcoming}`} aria-labelledby={headingId}>
+        <h2 id={headingId} className="upc__title">{title}</h2>
+        {items === null ? (
+          failed ? (
+            <p className="upc__empty" role="alert">
+              Couldn&rsquo;t load upcoming runs.{" "}
+              <button type="button" className="upc__retry" onClick={load}>Retry</button>
+            </p>
+          ) : (
+            <p className="upc__empty" role="status">Loading scheduled runs…</p>
+          )
+        ) : items.length === 0 ? (
+          <p className="upc__empty">Nothing scheduled.</p>
+        ) : (
+          <ul className="upc__list">
+            {items.map((u) => (
+              <li key={`${u.workflowId}@${u.at}`}>
+                <Link href={workflowHref(u.workflowId)} className={overviewStyles.upcomingRow} title={u.workflowName}>
+                  <span className={overviewStyles.upcomingName}>{u.workflowName}</span>
+                  <time className={overviewStyles.upcomingTime} dateTime={u.at}>
+                    {dayLabel(u.at, now)}, {formatRunTime(u.at)}
+                  </time>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    );
+  }
   if (items === null) {
     if (!failed) return null;
     return (

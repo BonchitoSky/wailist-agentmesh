@@ -13,7 +13,6 @@ import {
   Tag,
   IconSearch,
   IconGrid,
-  IconWallet,
   Card,
   ghostBtnSm,
 } from "@/components/ui";
@@ -31,7 +30,7 @@ import { filterWorkflows, type StatusFilter } from "@/lib/workflowList";
 import { ImportModal } from "./ImportModal";
 import { ShareModal } from "./ShareModal";
 import { WorkflowsPhoneList } from "./phone/WorkflowsPhoneList";
-import { UpcomingRuns } from "@/components/runs/UpcomingRuns";
+import { WorkflowOverview } from "./WorkflowOverview";
 import { ghostBtn, primaryBtn } from "@/components/ui/buttons";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import {
@@ -72,7 +71,7 @@ export function WorkflowsPage() {
   // (non-null = open), the same "id doubles as open state" shape RowMenu's
   // own view state already uses.
   const [shareWorkflowId, setShareWorkflowId] = useState<string | null>(null);
-  const { balanceUSD, balanceKnown, refreshBalance } = useCredits();
+  const { refreshBalance } = useCredits();
 
   // Extracted from the mount effect so pull-to-refresh can run the same fetch
   // rather than a second copy of it that could drift.
@@ -348,66 +347,7 @@ export function WorkflowsPage() {
             </div>
           </div>
 
-          {/* Credit balance — the one number that actually gates whether a run
-              can happen here. Replaces the old KPI row, whose cards were all
-              unwired placeholders. */}
-          <Card
-            style={{
-              marginBottom: 24,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 16,
-            }}
-          >
-            <div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 7,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 10,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.08em",
-                  color: "var(--fg-dim)",
-                }}
-              >
-                <IconWallet size={13} /> Credit balance
-              </div>
-              <div
-                style={{
-                  marginTop: 8,
-                  // Token, not a literal: the phone step shrinks it. This is
-                  // the largest single element on the screen at 375px.
-                  fontSize: "var(--wf-balance-size)",
-                  fontWeight: 500,
-                  letterSpacing: "-0.02em",
-                  fontFamily: "var(--font-mono)",
-                  fontVariantNumeric: "tabular-nums",
-                  color: "var(--fg)",
-                }}
-              >
-                {balanceKnown ? `$${balanceUSD.toFixed(2)}` : "—"}
-              </div>
-              <div
-                style={{ marginTop: 4, fontSize: 11, color: "var(--fg-muted)" }}
-              >
-                {balanceKnown
-                  ? "Spent as your agents call paid tools and models."
-                  : "Loading balance…"}
-              </div>
-            </div>
-            <button onClick={() => router.push("/billing")} style={ghostBtn}>
-              Add credits
-            </button>
-          </Card>
-
-          {/* The scheduled runs coming up, the same list the phone shows on
-              Activity. Takes no room when nothing is scheduled. */}
-          <div style={{ marginBottom: 24, maxWidth: 560 }}>
-            <UpcomingRuns limit={5} hideWhenEmpty />
-          </div>
+          <WorkflowOverview />
 
           {pageError && (
             <div
