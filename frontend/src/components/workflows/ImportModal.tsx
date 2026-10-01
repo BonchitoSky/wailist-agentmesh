@@ -216,7 +216,9 @@ export function ImportModal({
                 maxWidth: "60ch",
               }}
             >
-              Paste a share link or a code
+              {resolved
+                ? "Check this before importing"
+                : "Paste a share link or a code"}
             </p>
           </div>
           <button
@@ -236,51 +238,80 @@ export function ImportModal({
             {...cardPropsFor(resolved)}
           />
         ) : (
-          <textarea
-            autoFocus
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              setError(null);
-            }}
-            // Enter has to stay a newline -- a code that arrived wrapped is
-            // pasted as several lines, and swallowing Enter would make fixing
-            // one by hand impossible. Ctrl/Cmd+Enter is the usual way out of
-            // that, and without it the only route forward was the mouse.
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                void resolve();
-              }
-            }}
-            placeholder="https://www.agent-mesh.app/s/… or am1.…"
-            style={{
-              width: "100%",
-              height: 100,
-              resize: "none",
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              lineHeight: 1.5,
-              padding: 10,
-              background: "var(--bg-elev-2)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--r-2)",
-              color: "var(--fg)",
-              marginBottom: 10,
-              wordBreak: "break-all",
-            }}
-          />
-        )}
-
-        {!resolved && (
-          <button
-            type="button"
-            onClick={handlePasteFromClipboard}
-            className="share-ghost-btn"
-            style={{ width: "100%", marginBottom: 14 }}
-          >
-            <IconPaste /> Paste from clipboard
-          </button>
+          // Two rows, not five, and 13px rather than 11.
+          //
+          // What arrives here is one line out of a chat message. A tall
+          // monospace box at the smallest type size in the app read as "paste
+          // a config blob", which is both the wrong size for the job and the
+          // wrong promise about what the dialog wants. It stays monospace --
+          // a token is a machine value and this app sets those in mono --
+          // and it stays a textarea, because a code that arrived wrapped is
+          // pasted as several lines.
+          <div style={{ position: "relative", marginBottom: 12 }}>
+            <textarea
+              autoFocus
+              value={input}
+              onChange={(e) => {
+                setInput(e.target.value);
+                setError(null);
+              }}
+              // Enter has to stay a newline -- a code that arrived wrapped is
+              // pasted as several lines, and swallowing Enter would make
+              // fixing one by hand impossible. Ctrl/Cmd+Enter is the usual
+              // way out of that, and without it the only route forward was
+              // the mouse.
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  void resolve();
+                }
+              }}
+              rows={2}
+              placeholder="https://www.agent-mesh.app/s/… or am1.…"
+              className="share-linkfield"
+              style={{
+                display: "block",
+                width: "100%",
+                resize: "none",
+                fontFamily: "var(--font-mono)",
+                fontSize: 13,
+                lineHeight: 1.5,
+                padding: 10,
+                // Room for the Paste button while there is nothing to
+                // collide with, and the full width once there is.
+                paddingRight: input ? 10 : 92,
+                background: "var(--bg-elev-2)",
+                border: "1px solid var(--border)",
+                borderRadius: "var(--r-2)",
+                color: "var(--fg)",
+                wordBreak: "break-all",
+              }}
+            />
+            {/* Inside the field, and only while it is empty.
+                It cost a full-width 36px row of its own to duplicate Ctrl+V,
+                and once something has been pasted there is nothing left for
+                it to do -- so it goes, which is also what keeps it from ever
+                sitting on top of the text. */}
+            {!input && (
+              <button
+                type="button"
+                onClick={handlePasteFromClipboard}
+                className="share-ghost-btn"
+                style={{
+                  position: "absolute",
+                  top: 7,
+                  right: 7,
+                  flex: "0 0 auto",
+                  height: 26,
+                  padding: "0 9px",
+                  fontSize: 11.5,
+                  background: "var(--bg-elev-1)",
+                }}
+              >
+                <IconPaste /> Paste
+              </button>
+            )}
+          </div>
         )}
 
         {error && (
