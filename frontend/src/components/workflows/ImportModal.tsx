@@ -4,8 +4,8 @@ import { IconClose } from "@/components/ui";
 import { useModalDismissal } from "@/hooks/useModalDismissal";
 import { shares as sharesApi, workflows as workflowsApi } from "@/lib/api";
 import { classifyShareInput } from "@/lib/shareInput";
-import { requirementLines } from "@/lib/shareRequirements";
 import type { ShareImportRequirements, WorkflowShare } from "@/lib/types";
+import { SharedWorkflowCard } from "@/components/share/SharedWorkflowCard";
 import type { WorkflowShareData } from "@/lib/workflowShare";
 import { decodeWorkflowShare } from "@/lib/workflowShare";
 
@@ -230,7 +230,11 @@ export function ImportModal({
         </div>
 
         {resolved ? (
-          <ResolvedCard resolved={resolved} />
+          <SharedWorkflowCard
+            variant="dialog"
+            className="reveal"
+            {...cardPropsFor(resolved)}
+          />
         ) : (
           <textarea
             autoFocus
@@ -333,121 +337,36 @@ export function ImportModal({
   );
 }
 
-// What the paste turned out to be, shown before anything is created.
+// What the paste turned out to be, in the same card the public /s/ page uses
+// -- so the two ways into one workflow cannot end up describing it
+// differently. The dialog used to render a flatter copy of that layout, which
+// is exactly how the wording of the two drifts without anybody noticing.
 //
-// Deliberately the same three things the public /s/ page leads with -- what
-// it is called, how big it is, and what the importer will have to supply --
-// so the two ways into the same workflow do not describe it differently.
-function ResolvedCard({ resolved }: { resolved: Resolved }) {
-  const name =
-    resolved.kind === "link"
-      ? resolved.share.name
-      : resolved.data.name || "Untitled workflow";
-  const description =
-    resolved.kind === "link"
-      ? resolved.share.description
-      : resolved.data.description;
-  const nodes =
-    resolved.kind === "link"
-      ? resolved.share.nodeCount
-      : resolved.data.nodes.length;
-  const edges =
-    resolved.kind === "link"
-      ? resolved.share.edgeCount
-      : resolved.data.edges.length;
-  // Only a link has requirements: they are derived server-side from a stored
-  // snapshot, and a code has no row anywhere until it is imported.
-  const lines = resolved.kind === "link" ? requirementLines(resolved.req) : [];
-
-  return (
-    <div
-      className="reveal"
-      style={{
-        border: "1px solid var(--border-soft)",
-        borderRadius: "var(--r-2)",
-        background: "var(--bg-elev-2)",
-        padding: "13px 15px",
-        marginBottom: 14,
-      }}
-    >
-      <p
-        style={{
-          margin: "0 0 4px",
-          fontSize: 15,
-          fontWeight: 700,
-          letterSpacing: "-0.01em",
-        }}
-      >
-        {name}
-      </p>
-      {description && (
-        <p
-          style={{
-            margin: "0 0 8px",
-            fontSize: 12.5,
-            lineHeight: 1.6,
-            color: "var(--fg-muted)",
-            maxWidth: "60ch",
-          }}
-        >
-          {description}
-        </p>
-      )}
-      <p
-        style={{
-          margin: "0 0 10px",
-          fontFamily: "var(--font-mono)",
-          fontVariantNumeric: "tabular-nums",
-          fontSize: 11.5,
-          color: "var(--fg-dim)",
-        }}
-      >
-        {nodes} nodes · {edges} connections
-      </p>
-
-      {/* A code gets neither heading. "Ready to run as-is" is a claim, and
-          for a code nothing has checked it: requirements are derived
-          server-side from a stored snapshot, and a code has no row anywhere
-          until it is imported. Saying it anyway would be the same false
-          promise this work removed from the link preview, reintroduced one
-          branch over. */}
-      <p style={{ margin: "0 0 5px", fontSize: 12, fontWeight: 600 }}>
-        {resolved.kind === "code"
-          ? "What it may still need"
-          : lines.length > 0
-            ? "You'll need to add"
-            : "Ready to run as-is"}
-      </p>
-      {lines.length > 0 ? (
-        <ul
-          style={{
-            margin: 0,
-            paddingLeft: 17,
-            fontSize: 12,
-            lineHeight: 1.7,
-            color: "var(--fg-muted)",
-            maxWidth: "60ch",
-          }}
-        >
-          {lines.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      ) : (
-        <p
-          style={{
-            margin: 0,
-            fontSize: 12,
-            lineHeight: 1.6,
-            color: "var(--fg-muted)",
-            maxWidth: "60ch",
-          }}
-        >
-          {resolved.kind === "link"
-            ? "Nothing to configure — this one runs on AgentMesh's own model keys."
-            : "The sender's keys, secrets and uploaded files were never part of this code, so any model keys or connected accounts it uses will be yours to add. Open it after importing to see which."}
-        </p>
-      )}
-    </div>
-  );
+// `requirements` is left undefined for a code, not set to an empty object:
+// they are derived server-side from a stored snapshot and a code has no row
+// anywhere until it is imported, and that distinction is what makes the card
+// say "what it may still need" rather than claim the thing is ready to run.
+function cardPropsFor(resolved: Resolved) {
+  if (resolved.kind === "link") {
+    const { share, req } = resolved;
+    return {
+      name: share.name,
+      description: share.description,
+      nodeCount: share.nodeCount,
+      edgeCount: share.edgeCount,
+      graph: share.graph,
+      requirements: req,
+      expiresAt: share.expiresAt,
+    };
+  }
+  const { data } = resolved;
+  return {
+    name: data.name?.trim() || "Untitled workflow",
+    description: data.description,
+    nodeCount: data.nodes.length,
+    edgeCount: data.edges.length,
+    graph: { nodes: data.nodes, edges: data.edges },
+    requirements: undefined,
+    expiresAt: undefined,
+  };
 }

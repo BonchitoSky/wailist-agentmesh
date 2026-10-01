@@ -2,13 +2,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Logo, Tag } from "@/components/ui";
+import { Logo } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { useReadOnly } from "@/hooks/useReadOnly";
 import { can } from "@/lib/readonly";
 import { shares } from "@/lib/api";
-import { requirementLines } from "@/lib/shareRequirements";
-import { ShareGraphSketch } from "./ShareGraphSketch";
+import { SharedWorkflowCard } from "./SharedWorkflowCard";
 import { shareHref, workflowHref } from "@/lib/routes";
 import type { ShareImportRequirements, WorkflowShare } from "@/lib/types";
 
@@ -19,32 +18,6 @@ import type { ShareImportRequirements, WorkflowShare } from "@/lib/types";
 // whether they want this before being asked to make an account, and be honest
 // about what they will have to supply themselves, because a workflow that
 // silently cannot run is worse than one that says what it needs.
-
-// How a node type reads to somebody who has never used the app. The catalogue
-// in lib/data.ts is keyed for the canvas palette and carries geometry we have
-// no use for here, so this is a small separate mapping rather than a reach
-// into that.
-const NODE_LABELS: Record<string, string> = {
-  trigger: "Trigger",
-  agent: "Agent",
-  provider: "Model",
-  tool: "Tool",
-  tool402: "Paid tool",
-  action: "Action",
-  state: "State",
-  end: "End",
-  tendril: "Compute",
-  google: "Google",
-};
-
-function expiryNote(expiresAt?: string): string | null {
-  if (!expiresAt) return null;
-  const ms = new Date(expiresAt).getTime() - Date.now();
-  if (Number.isNaN(ms)) return null;
-  const days = Math.ceil(ms / 86_400_000);
-  if (days <= 0) return "Expires today";
-  return days === 1 ? "Expires tomorrow" : `Expires in ${days} days`;
-}
 
 export function SharePreview({
   token,
@@ -136,9 +109,6 @@ export function SharePreview({
     }
   };
 
-  const lines = requirements ? requirementLines(requirements) : [];
-  const expires = expiryNote(share?.expiresAt);
-
   return (
     <div
       style={{
@@ -209,144 +179,16 @@ export function SharePreview({
 
         {share && (
           <>
-            <p
-              style={{
-                margin: "0 0 6px",
-                fontSize: 11,
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                color: "var(--fg-dim)",
-              }}
-            >
-              Shared workflow
-            </p>
-            <h1
-              style={{
-                fontSize: 24,
-                fontWeight: 700,
-                margin: "0 0 10px",
-                letterSpacing: "-0.02em",
-              }}
-            >
-              {share.name}
-            </h1>
-            {share.description && (
-              <p
-                style={{
-                  margin: "0 0 14px",
-                  fontSize: 13.5,
-                  lineHeight: 1.6,
-                  color: "var(--fg-muted)",
-                  maxWidth: "60ch",
-                }}
-              >
-                {share.description}
-              </p>
-            )}
-
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                flexWrap: "wrap",
-                marginBottom: 20,
-                fontFamily: "var(--font-mono)",
-                fontVariantNumeric: "tabular-nums",
-                fontSize: 12,
-                color: "var(--fg-muted)",
-              }}
-            >
-              <span>{share.nodeCount} nodes</span>
-              <span style={{ color: "var(--fg-dim)" }}>·</span>
-              <span>{share.edgeCount} connections</span>
-              {expires && (
-                <>
-                  <span style={{ color: "var(--fg-dim)" }}>·</span>
-                  <span style={{ color: "var(--warm)" }}>{expires}</span>
-                </>
-              )}
-            </div>
-
-            <ShareGraphSketch
-              nodes={share.graph.nodes}
-              edges={share.graph.edges}
+            <SharedWorkflowCard
+              variant="page"
+              name={share.name}
+              description={share.description}
+              nodeCount={share.nodeCount}
+              edgeCount={share.edgeCount}
+              graph={share.graph}
+              requirements={requirements ?? undefined}
+              expiresAt={share.expiresAt}
             />
-
-            {share.graph.nodes.length > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 6,
-                  marginBottom: 22,
-                }}
-              >
-                {share.graph.nodes.slice(0, 12).map((n) => (
-                  <Tag key={n.id}>
-                    {n.label || n.name || NODE_LABELS[n.type] || n.type}
-                  </Tag>
-                ))}
-                {share.graph.nodes.length > 12 && (
-                  <Tag>+{share.graph.nodes.length - 12} more</Tag>
-                )}
-              </div>
-            )}
-
-            <div
-              style={{
-                border: "1px solid var(--border-soft)",
-                borderRadius: "var(--r-2)",
-                background: "var(--bg-elev-2)",
-                padding: "13px 15px",
-                marginBottom: 20,
-              }}
-            >
-              <p style={{ margin: "0 0 6px", fontSize: 12.5, fontWeight: 600 }}>
-                {lines.length > 0 ? "You'll need to add" : "Ready to run as-is"}
-              </p>
-              {lines.length > 0 ? (
-                <ul
-                  style={{
-                    margin: 0,
-                    paddingLeft: 17,
-                    fontSize: 12.5,
-                    lineHeight: 1.75,
-                    color: "var(--fg-muted)",
-                    maxWidth: "60ch",
-                  }}
-                >
-                  {lines.map((line) => (
-                    <li key={line}>{line}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: 12.5,
-                    lineHeight: 1.6,
-                    color: "var(--fg-muted)",
-                    maxWidth: "60ch",
-                  }}
-                >
-                  Nothing to configure — this one runs on AgentMesh&apos;s own
-                  model keys.
-                </p>
-              )}
-              <p
-                style={{
-                  margin: "9px 0 0",
-                  fontSize: 11.5,
-                  lineHeight: 1.6,
-                  color: "var(--fg-dim)",
-                  maxWidth: "60ch",
-                }}
-              >
-                The sender&apos;s API keys, secrets and uploaded files were
-                never part of this link.
-              </p>
-            </div>
 
             {error && (
               <p
