@@ -1406,26 +1406,24 @@ function CanvasTopbar({
           deploy -- the two shared one condition purely because they sit next
           to each other in the toolbar. */}
       {can("workflow.share", readOnly) && (
-        <>
-          <button
-            style={{ ...ghostBtnSm, color: "var(--fg)" }}
-            disabled={preparingShare}
-            onClick={async () => {
-              // Await the save BEFORE the dialog mounts, not inside it: the
-              // link is minted from the mount effect, so a flush started
-              // alongside it would race the thing it is meant to prevent.
-              setPreparingShare(true);
-              try {
-                await onBeforeShare();
-              } finally {
-                setPreparingShare(false);
-              }
-              setShareOpen(true);
-            }}
-          >
-            {preparingShare ? "Saving…" : "Share"}
-          </button>
-        </>
+        <button
+          style={{ ...ghostBtnSm, color: "var(--fg)" }}
+          disabled={preparingShare}
+          onClick={async () => {
+            // Await the save BEFORE the dialog mounts, not inside it: the
+            // link is minted from the mount effect, so a flush started
+            // alongside it would race the thing it is meant to prevent.
+            setPreparingShare(true);
+            try {
+              await onBeforeShare();
+            } finally {
+              setPreparingShare(false);
+            }
+            setShareOpen(true);
+          }}
+        >
+          {preparingShare ? "Saving…" : "Share"}
+        </button>
       )}
       {can("workflow.deploy", readOnly) && (
         <button onClick={onDeploy} style={btnStyle}>
