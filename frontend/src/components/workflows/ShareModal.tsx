@@ -586,8 +586,8 @@ export function ShareModal({
                     ? "preparing…"
                     : "copy a code"}
               </button>{" "}
-              instead — it works where a link gets mangled, but it can&apos;t be
-              revoked.
+              instead — it can&apos;t be revoked, but it works where a link
+              won&apos;t.
             </p>
 
             {/* Revoking, preparing a code and minting a link all fail
