@@ -10,11 +10,14 @@ import { encodeWorkflowShare } from "@/lib/workflowShare";
 
 // Handing a workflow to somebody else.
 //
-// A link first, a code second. The previous version of this dialog produced
-// only a code, and its own X and Email buttons then refused to carry it --
-// they sent a caption and told the recipient to ask for the clipboard
-// separately, because a code is routinely longer than a mailto: survives. A
-// token is 22 characters, so the link goes wherever text goes.
+// A link first, a code second. This dialog hands over the link and gets out of
+// the way: there are no Post or Email buttons, because a link on the clipboard
+// already goes wherever the person sending it wants, and a pair of buttons
+// picking two destinations out of all of them is a guess the dialog does not
+// need to make. An earlier version shipped them, and they could not even carry
+// a code -- they sent a caption and told the recipient to ask for the
+// clipboard separately, because a code is routinely longer than a mailto:
+// survives.
 //
 // The code is still here for a channel that mangles URLs, and is built from
 // the graph the SERVER returned rather than from the workflow's own nodes.
@@ -42,33 +45,6 @@ const IconCopy = ({ size = 14 }: { size?: number }) => (
       stroke="currentColor"
       strokeWidth="1.3"
       strokeLinecap="round"
-    />
-  </svg>
-);
-
-const IconX = ({ size = 14 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor">
-    <path d="M9.3 6.9 14 2h-1.6L8.6 5.9 5.4 2H1l5 6.7L1 14h1.6l4-4.3L9.9 14H14L9.3 6.9Zm-1.4 1.6-.5-.6L3.2 3h1.4l3 4 .5.6 3.9 5.3H10.6l-2.7-3.4Z" />
-  </svg>
-);
-
-const IconMail = ({ size = 14 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
-    <rect
-      x="1.5"
-      y="3.5"
-      width="13"
-      height="9"
-      rx="1.5"
-      stroke="currentColor"
-      strokeWidth="1.3"
-    />
-    <path
-      d="M2 4.5 8 9l6-4.5"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
     />
   </svg>
 );
@@ -306,14 +282,6 @@ export function ShareModal({
   };
 
   const url = share ? shareUrl(share.token) : "";
-  const caption = share
-    ? `Check out "${share.name}" -- a workflow I built with AgentMesh`
-    : "";
-  // Both carry the LINK now. The old version could not: a code is routinely
-  // longer than a mailto: body or a tweet survives, so it sent a caption and
-  // an apology instead.
-  const tweetUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(caption)}&url=${encodeURIComponent(url)}`;
-  const mailUrl = `mailto:?subject=${encodeURIComponent(caption)}&body=${encodeURIComponent(`${caption}\n\n${url}`)}`;
 
   const lines = redactions ? redactionLines(redactions) : [];
   const currentLife = share
@@ -544,26 +512,14 @@ export function ShareModal({
               )}
             </div>
 
-            {/* Band 3 -- sending it.
-                A code used to be a third ghost button in this row, the same
-                size and shape as the two that send a link, and the one thing
-                it does differently -- it cannot be taken back -- was said
-                AFTERWARDS, in a warning that appeared once the copying was
-                already done. A warning read after the act is the weaker half
-                of the same sentence, so it is now the sentence. */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 9 }}>
-              <a
-                href={tweetUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="share-ghost-btn"
-              >
-                <IconX size={13} /> Post
-              </a>
-              <a href={mailUrl} className="share-ghost-btn">
-                <IconMail size={13} /> Email
-              </a>
-            </div>
+            {/* Band 3 -- the other way to hand it over.
+                A code used to be a third ghost button beside two that posted
+                the link to X and opened a mail client, the same size and
+                shape as them, and the one thing it does differently -- it
+                cannot be taken back -- was said AFTERWARDS, in a warning that
+                appeared once the copying was already done. A warning read
+                after the act is the weaker half of the same sentence, so it
+                is now the sentence. */}
             <p
               style={{
                 margin: 0,
