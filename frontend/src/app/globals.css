@@ -523,7 +523,7 @@ body {
   padding: 24px;
   background: rgba(8, 7, 12, 0.72);
   backdrop-filter: blur(4px);
-  animation: share-scrim-in 0.18s var(--ease);
+  animation: fade-in 0.18s var(--ease);
 }
 .share-panel {
   width: 100%;
@@ -547,14 +547,10 @@ body {
 .share-panel:focus-visible {
   outline: none;
 }
-@keyframes share-scrim-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
+/* Not fade-up, which this file already has: that rises 20px with no scale,
+   which is a lot of travel for something arriving in the middle of the screen
+   and reads as a slide rather than a surface coming forward. Same shape and
+   the same numbers as checkout-in, for the same reason. */
 @keyframes share-panel-in {
   from {
     opacity: 0;
@@ -749,6 +745,13 @@ body {
   text-underline-offset: 3px;
   cursor: pointer;
 }
+@media (hover: hover) {
+  .share-textlink:hover:not(:disabled) {
+    color: var(--fg);
+  }
+}
+/* No :active transform. Every other pressable here takes scale(0.97), but this
+   one sits inside a sentence -- scaling it would shove the words around it. */
 .share-textlink:disabled {
   color: var(--fg-dim);
   text-decoration: none;
