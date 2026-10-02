@@ -753,7 +753,7 @@ body {
   --wf-card-cols: repeat(3, 1fr);
   --wf-cardmeta-cols: repeat(3, 1fr);
   --wf-row-cols: minmax(180px, 240px) minmax(96px, 1fr) minmax(80px, 1fr)
-    minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 80px;
+    minmax(96px, 1fr) minmax(110px, 1fr) minmax(120px, 1fr) 200px;
 }
 .wf-header {
   display: flex;
@@ -2097,26 +2097,48 @@ body[data-typing] .bottomnav {
 }
 .wfp-card {
   position: relative;
-  display: block;
-  padding: 12px 14px 12px 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
   border-radius: var(--r-2);
   background: var(--bg-elev-1);
   overflow: hidden;
   color: inherit;
-  text-decoration: none;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   transition: background 0.15s var(--ease);
 }
-.wfp-card:active {
+.wfp-card__open,
+.wfp-card__usage {
+  color: inherit;
+  text-decoration: none;
+}
+.wfp-card__open {
+  min-width: 0;
+  padding: 12px 8px 12px 16px;
+}
+.wfp-card__usage {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px 0 10px;
+  border-left: 1px solid var(--border-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.wfp-card__open:active,
+.wfp-card__usage:active {
   background: var(--bg-elev-2);
 }
-.wfp-card:focus-visible {
+.wfp-card__open:focus-visible,
+.wfp-card__usage:focus-visible {
   outline: 2px solid var(--accent-line);
   outline-offset: -2px;
 }
 @media (hover: hover) {
-  .wfp-card:hover {
+  .wfp-card__open:hover,
+  .wfp-card__usage:hover {
     background: var(--bg-elev-2);
   }
 }
@@ -2589,6 +2611,27 @@ body[data-typing] .bottomnav {
   > :not(.bilp-title):not(.bilp-sub):not(.usgp-seg) {
   opacity: 0.6;
   transition: opacity 0.15s var(--ease);
+}
+.usgp-scope {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-2);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.usgp-scope > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.usgp-scope > button {
+  flex: 0 0 auto;
 }
 /* Three ranges, not the four amounts .bilp-seg was written for. */
 .usgp-seg {

@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { PullToRefresh } from "@/components/PullToRefresh";
 import { ExternalLink } from "@/components/ExternalLink";
 import { workflowHref } from "@/lib/routes";
+import { scopedWorkflowLabel } from "@/lib/usageScope";
 import { useCredits } from "@/lib/credits/store";
 import { LOW_BALANCE_THRESHOLD_USD } from "@/lib/credits/fx";
 import type { UsageCategory, UsagePayload, UsageRange } from "@/lib/types";
@@ -45,6 +46,8 @@ export interface UsagePhoneProps {
   error: Error | null;
   // Reloads; settles when the new figures have landed.
   onRetry: () => void | Promise<void>;
+  scopedWorkflowId: string | null;
+  onClearScope: () => void;
 }
 
 export function UsagePhonePage(p: UsagePhoneProps) {
@@ -82,8 +85,13 @@ export function UsagePhonePage(p: UsagePhoneProps) {
       range={p.range}
       allEndpoints={allEndpoints}
       onToggleEndpoints={() => setAllEndpoints((v) => !v)}
+      scopedWorkflowId={p.scopedWorkflowId}
     />
   );
+
+  const scopeLabel = p.scopedWorkflowId
+    ? scopedWorkflowLabel(p.scopedWorkflowId, p.data?.byWorkflow)
+    : null;
 
   return (
     <PullToRefresh
@@ -95,6 +103,19 @@ export function UsagePhonePage(p: UsagePhoneProps) {
       <main className="bilp-page usgp-page" data-loading={p.loading}>
         <h1 className="bilp-title">Usage</h1>
         <p className="bilp-sub">What your agents spent, and on what.</p>
+
+        {scopeLabel && (
+          <div className="usgp-scope" role="status">
+            <span>Workflows by spend · filtered to {scopeLabel}</span>
+            <button
+              type="button"
+              className="bilp-link"
+              onClick={p.onClearScope}
+            >
+              Clear
+            </button>
+          </div>
+        )}
 
         {/* Also the way to top up from here, now that Credits is not a tab. */}
         <Link
@@ -157,11 +178,13 @@ function UsageBody({
   range,
   allEndpoints,
   onToggleEndpoints,
+  scopedWorkflowId,
 }: {
   data: UsagePayload;
   range: UsageRange;
   allEndpoints: boolean;
   onToggleEndpoints: () => void;
+  scopedWorkflowId: string | null;
 }) {
   const endpointsHeading = useRef<HTMLHeadingElement>(null);
   const settlementsHeading = useRef<HTMLHeadingElement>(null);
@@ -183,7 +206,11 @@ function UsageBody({
     () => new Map(byWorkflow.map((w) => [w.workflowId, w.name])),
     [byWorkflow],
   );
-  const workflows = [...byWorkflow].sort((a, b) => b.algo - a.algo);
+  const workflows = (
+    scopedWorkflowId
+      ? byWorkflow.filter((w) => w.workflowId === scopedWorkflowId)
+      : [...byWorkflow]
+  ).sort((a, b) => b.algo - a.algo);
   const endpoints = [...byEndpoint].sort((a, b) => b.totalAlgo - a.totalAlgo);
   const shownEndpoints = allEndpoints ? endpoints : endpoints.slice(0, TOP);
 

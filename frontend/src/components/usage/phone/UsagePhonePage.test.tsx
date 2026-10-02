@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { buildUsage } from "@/lib/data";
 import { workflowHref } from "@/lib/routes";
 
@@ -31,6 +37,8 @@ function renderPage(over: Partial<UsagePhoneProps> = {}) {
     loading: false,
     error: null,
     onRetry: vi.fn(),
+    scopedWorkflowId: null,
+    onClearScope: vi.fn(),
     ...over,
   };
   return { ...render(<UsagePhonePage {...props} />), props };
@@ -158,6 +166,26 @@ describe("UsagePhonePage", () => {
         .getByRole("link", { name: new RegExp(top.name) })
         .getAttribute("href"),
     ).toBe(workflowHref(top.workflowId));
+  });
+
+  it("shows and clears a workflow scope while filtering spend rows", () => {
+    const data = buildUsage("30d");
+    const scoped = data.byWorkflow.at(-1)!;
+    const { props } = renderPage({
+      data,
+      scopedWorkflowId: scoped.workflowId,
+    });
+
+    expect(
+      screen.getByText(`Workflows by spend · filtered to ${scoped.name}`),
+    ).toBeTruthy();
+    const section = screen
+      .getByRole("heading", { name: "Workflows by spend" })
+      .closest("section")!;
+    expect(within(section).getAllByRole("link")).toHaveLength(1);
+    expect(within(section).getByText(scoped.name)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(props.onClearScope).toHaveBeenCalledTimes(1);
   });
 
   it("offers a retry when nothing could be loaded", () => {
