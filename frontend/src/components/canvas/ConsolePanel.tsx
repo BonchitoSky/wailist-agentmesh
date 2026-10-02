@@ -147,9 +147,9 @@ export function ConsolePanel({
 
   const statusColor = (s: LogEvent["status"]) => {
     if (s === "success") return "var(--accent)";
-    if (s === "failed") return "#F87171";
-    if (s === "degraded") return "#FBBF24";
-    if (s === "stopped") return "#FB923C";
+    if (s === "failed") return "var(--danger)";
+    if (s === "degraded") return "var(--warning)";
+    if (s === "stopped") return "var(--type-action)";
     return "var(--fg-dim)";
   };
 
@@ -213,7 +213,7 @@ export function ConsolePanel({
             style={{
               width: 40,
               height: 3,
-              borderRadius: 2,
+              borderRadius: "var(--r-1)",
               background: resizing ? "var(--accent)" : "var(--border-strong)",
             }}
           />
@@ -234,11 +234,11 @@ export function ConsolePanel({
           flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--s-4)" }}>
           <span
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 10,
+              fontSize: "var(--t-0)",
               color: "var(--fg-muted)",
               textTransform: "uppercase",
               letterSpacing: "0.08em",
@@ -255,7 +255,7 @@ export function ConsolePanel({
             <span
               style={{
                 fontFamily: "var(--font-mono)",
-                fontSize: 10,
+                fontSize: "var(--t-0)",
                 color: "var(--fg-dim)",
               }}
             >
@@ -267,13 +267,13 @@ export function ConsolePanel({
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 5,
+            gap: "var(--s-1)",
             fontFamily: "var(--font-mono)",
-            fontSize: 13,
+            fontSize: "var(--t-3)",
             color: "var(--fg-muted)",
           }}
         >
-          <span style={{ fontSize: 15, lineHeight: 1 }}>
+          <span style={{ fontSize: "var(--t-4)", lineHeight: 1 }}>
             {open ? "▾" : "▴"}
           </span>
           {open ? "collapse" : "expand"}
@@ -291,7 +291,7 @@ export function ConsolePanel({
             overflow: "auto",
             padding: "6px 14px 10px",
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
+            fontSize: "var(--t-1)",
             lineHeight: 1.7,
           }}
         >
@@ -329,14 +329,14 @@ export function ConsolePanel({
                   compactRows
                     ? {
                         display: "flex",
-                        gap: 8,
+                        gap: "var(--s-3)",
                         alignItems: "baseline",
                         minWidth: 0,
                       }
                     : { display: "contents" }
                 }
               >
-                <span style={{ color: "var(--fg-dim)", fontSize: 9.5 }}>
+                <span style={{ color: "var(--fg-dim)", fontSize: "var(--t-0)" }}>
                   {new Date(l.ts).toLocaleTimeString("en", {
                     hour12: false,
                     hour: "2-digit",
@@ -348,7 +348,7 @@ export function ConsolePanel({
                   style={{
                     color: statusColor(l.status),
                     fontWeight: 600,
-                    fontSize: 9.5,
+                    fontSize: "var(--t-0)",
                   }}
                 >
                   {statusLabel(l.status)}
@@ -408,9 +408,9 @@ export function ConsolePanel({
               // chat so the two cannot disagree about the same run.
               const { failed, degraded, succeeded, total } = runSummary(logs);
               const color = failed
-                ? "#F87171"
+                ? "var(--danger)"
                 : degraded > 0
-                  ? "#FBBF24"
+                  ? "var(--warning)"
                   : "var(--accent)";
               // A degraded run really did finish and really did answer, so it
               // is not reported as a failure -- but it is not reported as a
@@ -421,7 +421,7 @@ export function ConsolePanel({
                   ? `! ${degraded} step${degraded === 1 ? "" : "s"} failed, this answer is partial`
                   : "✓ run complete";
               return (
-                <div style={{ color, paddingTop: 6, fontSize: 10 }}>
+                <div style={{ color, paddingTop: 6, fontSize: "var(--t-0)" }}>
                   {headline} · {(elapsed ?? 0).toFixed(1)}s · {succeeded}/{total}{" "}
                   nodes succeeded
                   {costs && (
@@ -460,14 +460,14 @@ function DeadLetterRow({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 8,
+          gap: "var(--s-3)",
           flexWrap: "wrap",
         }}
       >
         <Pill mono tone="danger" dot>
           dead-lettered
         </Pill>
-        <span style={{ color: "var(--fg-muted)", fontSize: 10.5 }}>
+        <span style={{ color: "var(--fg-muted)", fontSize: "var(--t-0)" }}>
           {dl.nodeId} · attempt {dl.attemptCount}
         </span>
         <button
@@ -483,9 +483,9 @@ function DeadLetterRow({
           style={{
             marginLeft: "auto",
             fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
+            fontSize: "var(--t-0)",
             padding: "3px 8px",
-            borderRadius: 4,
+            borderRadius: "var(--r-1)",
             border: "1px solid var(--border-strong)",
             background: confirming ? "var(--accent-soft)" : "var(--bg-elev-2)",
             color: confirming ? "var(--accent)" : "var(--fg)",
@@ -495,7 +495,7 @@ function DeadLetterRow({
           {confirming ? "Confirm — completed steps won't re-run" : "Resume"}
         </button>
       </div>
-      <div style={{ color: "var(--fg-dim)", fontSize: 10, paddingTop: 2 }}>
+      <div style={{ color: "var(--fg-dim)", fontSize: "var(--t-0)", paddingTop: 2 }}>
         {dl.error}
       </div>
     </div>
@@ -536,7 +536,7 @@ function OutputCell({ output }: { output: unknown }) {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 5,
+            gap: "var(--s-1)",
             flexWrap: "wrap",
           }}
         >
@@ -596,7 +596,7 @@ function OutputCell({ output }: { output: unknown }) {
               cursor: "pointer",
               color: "var(--accent)",
               fontFamily: "var(--font-mono)",
-              fontSize: 10,
+              fontSize: "var(--t-0)",
             }}
           >
             {expanded ? "▾" : "▸"} response · {formatSize(text.length)}
@@ -610,9 +610,9 @@ function OutputCell({ output }: { output: unknown }) {
                 overflow: "auto",
                 background: "var(--bg)",
                 border: "1px solid var(--border)",
-                borderRadius: 4,
+                borderRadius: "var(--r-1)",
                 fontFamily: "var(--font-mono)",
-                fontSize: 10,
+                fontSize: "var(--t-0)",
                 lineHeight: 1.5,
                 color: "var(--fg)",
                 whiteSpace: "pre-wrap",
@@ -639,17 +639,17 @@ function OutputCell({ output }: { output: unknown }) {
 }
 
 const txLinkStyle: React.CSSProperties = {
-  color: "#E879F9",
+  color: "var(--type-x402)",
   textDecoration: "underline",
   fontFamily: "var(--font-mono)",
-  fontSize: 9.5,
+  fontSize: "var(--t-0)",
   whiteSpace: "nowrap",
 };
 
 function nodeTypeColor(t: string): string {
   if (t === "agent") return "var(--accent)";
-  if (t === "tool402") return "#E879F9";
-  if (t === "action") return "#FB923C";
+  if (t === "tool402") return "var(--type-x402)";
+  if (t === "action") return "var(--type-action)";
   return "var(--fg-dim)";
 }
 
