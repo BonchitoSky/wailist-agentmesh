@@ -200,7 +200,7 @@ export function ImportModal({
           <div>
             <h2
               style={{
-                fontSize: 17,
+                fontSize: "var(--t-5)",
                 fontWeight: 700,
                 margin: 0,
                 letterSpacing: "-0.01em",
@@ -211,7 +211,7 @@ export function ImportModal({
             <p
               style={{
                 margin: "3px 0 0",
-                fontSize: 12.5,
+                fontSize: "var(--t-2)",
                 color: "var(--fg-muted)",
                 maxWidth: "60ch",
               }}
@@ -274,7 +274,7 @@ export function ImportModal({
                 width: "100%",
                 resize: "none",
                 fontFamily: "var(--font-mono)",
-                fontSize: 13,
+                fontSize: "var(--t-3)",
                 lineHeight: 1.5,
                 padding: 10,
                 // Room for the Paste button while there is nothing to
@@ -304,7 +304,7 @@ export function ImportModal({
                   flex: "0 0 auto",
                   height: 26,
                   padding: "0 9px",
-                  fontSize: 11.5,
+                  fontSize: "var(--t-1)",
                   background: "var(--bg-elev-1)",
                 }}
               >
@@ -317,7 +317,7 @@ export function ImportModal({
         {error && (
           <div
             style={{
-              fontSize: 12,
+              fontSize: "var(--t-2)",
               color: "var(--danger)",
               marginBottom: 12,
               maxWidth: "60ch",
@@ -327,7 +327,7 @@ export function ImportModal({
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: "var(--s-3)" }}>
           <button
             type="button"
             onClick={() => {

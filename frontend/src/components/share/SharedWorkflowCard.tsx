@@ -112,7 +112,7 @@ export function SharedWorkflowCard({
           style={{
             display: "flex",
             flexWrap: "wrap",
-            gap: 6,
+            gap: "var(--s-2)",
             marginBottom: 20,
           }}
         >
@@ -166,21 +166,21 @@ export function SharedWorkflowCard({
 
 const eyebrow: React.CSSProperties = {
   margin: "0 0 6px",
-  fontSize: 11,
+  fontSize: "var(--t-1)",
   letterSpacing: "0.08em",
   textTransform: "uppercase",
   color: "var(--fg-dim)",
 };
 
 const pageName: React.CSSProperties = {
-  fontSize: 24,
+  fontSize: "var(--t-6)",
   fontWeight: 700,
   margin: "0 0 10px",
   letterSpacing: "-0.02em",
 };
 
 const dialogName: React.CSSProperties = {
-  fontSize: 15,
+  fontSize: "var(--t-4)",
   fontWeight: 700,
   margin: "0 0 4px",
   letterSpacing: "-0.01em",
@@ -188,7 +188,7 @@ const dialogName: React.CSSProperties = {
 
 const pageDescription: React.CSSProperties = {
   margin: "0 0 14px",
-  fontSize: 13.5,
+  fontSize: "var(--t-3)",
   lineHeight: 1.6,
   color: "var(--fg-muted)",
   maxWidth: "60ch",
@@ -196,7 +196,7 @@ const pageDescription: React.CSSProperties = {
 
 const dialogDescription: React.CSSProperties = {
   margin: "0 0 8px",
-  fontSize: 12.5,
+  fontSize: "var(--t-2)",
   lineHeight: 1.6,
   color: "var(--fg-muted)",
   maxWidth: "60ch",
@@ -205,7 +205,7 @@ const dialogDescription: React.CSSProperties = {
 const metaBase: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 8,
+  gap: "var(--s-3)",
   flexWrap: "wrap",
   fontFamily: "var(--font-mono)",
   fontVariantNumeric: "tabular-nums",
@@ -215,13 +215,13 @@ const metaBase: React.CSSProperties = {
 const pageMeta: React.CSSProperties = {
   ...metaBase,
   marginBottom: 20,
-  fontSize: 12,
+  fontSize: "var(--t-2)",
 };
 
 const dialogMeta: React.CSSProperties = {
   ...metaBase,
   marginBottom: 12,
-  fontSize: 11.5,
+  fontSize: "var(--t-1)",
 };
 
 const rule: React.CSSProperties = {
@@ -232,14 +232,14 @@ const rule: React.CSSProperties = {
 
 const reqHeading: React.CSSProperties = {
   margin: "0 0 5px",
-  fontSize: 12.5,
+  fontSize: "var(--t-2)",
   fontWeight: 600,
 };
 
 const reqList: React.CSSProperties = {
   margin: 0,
   paddingLeft: 17,
-  fontSize: 12.5,
+  fontSize: "var(--t-2)",
   lineHeight: 1.75,
   color: "var(--fg-muted)",
   maxWidth: "60ch",
@@ -247,7 +247,7 @@ const reqList: React.CSSProperties = {
 
 const reqBody: React.CSSProperties = {
   margin: 0,
-  fontSize: 12.5,
+  fontSize: "var(--t-2)",
   lineHeight: 1.6,
   color: "var(--fg-muted)",
   maxWidth: "60ch",
@@ -255,7 +255,7 @@ const reqBody: React.CSSProperties = {
 
 const reqFootnote: React.CSSProperties = {
   margin: "9px 0 0",
-  fontSize: 11.5,
+  fontSize: "var(--t-1)",
   lineHeight: 1.6,
   color: "var(--fg-dim)",
   maxWidth: "60ch",

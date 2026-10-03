@@ -318,7 +318,7 @@ export function ShareModal({
           <div>
             <h2
               style={{
-                fontSize: 17,
+                fontSize: "var(--t-5)",
                 fontWeight: 700,
                 margin: 0,
                 letterSpacing: "-0.01em",
@@ -329,7 +329,7 @@ export function ShareModal({
             <p
               style={{
                 margin: "3px 0 0",
-                fontSize: 12.5,
+                fontSize: "var(--t-2)",
                 color: "var(--fg-muted)",
               }}
             >
@@ -380,7 +380,9 @@ export function ShareModal({
             hears "preparing a share link" once instead of eight rectangles. */}
         {loading && (
           <div aria-hidden="true">
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <div
+              style={{ display: "flex", gap: "var(--s-3)", marginBottom: 8 }}
+            >
               <Skeleton height={38} radius="var(--r-2)" style={{ flex: 1 }} />
               <Skeleton width={104} height={38} radius="var(--r-2)" />
             </div>
@@ -390,14 +392,16 @@ export function ShareModal({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                gap: 8,
+                gap: "var(--s-3)",
                 marginBottom: 14,
               }}
             >
               <Skeleton width="40%" height={11} />
               <Skeleton width={62} height={26} radius="var(--r-2)" />
             </div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 9 }}>
+            <div
+              style={{ display: "flex", gap: "var(--s-3)", marginBottom: 9 }}
+            >
               <Skeleton height={36} radius="var(--r-2)" style={{ flex: 1 }} />
               <Skeleton height={36} radius="var(--r-2)" style={{ flex: 1 }} />
             </div>
@@ -416,7 +420,7 @@ export function ShareModal({
         {error && !share && (
           <div
             style={{
-              fontSize: 12.5,
+              fontSize: "var(--t-2)",
               color: "var(--danger)",
               padding: "8px 0",
               maxWidth: "60ch",
@@ -435,7 +439,9 @@ export function ShareModal({
                 console; the difference here is that copying is this dialog's
                 primary action, so it keeps the accent rather than going
                 ghost. */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <div
+              style={{ display: "flex", gap: "var(--s-3)", marginBottom: 8 }}
+            >
               <input
                 readOnly
                 value={url}
@@ -447,7 +453,7 @@ export function ShareModal({
                   minWidth: 0,
                   height: 38,
                   fontFamily: "var(--font-mono)",
-                  fontSize: 11.5,
+                  fontSize: "var(--t-1)",
                   padding: "0 10px",
                   background: "var(--bg-elev-2)",
                   border: "1px solid var(--border)",
@@ -479,7 +485,7 @@ export function ShareModal({
             <p
               style={{
                 margin: "0 0 4px",
-                fontSize: 11.5,
+                fontSize: "var(--t-1)",
                 lineHeight: 1.5,
                 color: "var(--fg-dim)",
               }}
@@ -491,10 +497,10 @@ export function ShareModal({
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                gap: 8,
+                gap: "var(--s-3)",
                 minHeight: 26,
                 marginBottom: 14,
-                fontSize: 11.5,
+                fontSize: "var(--t-1)",
                 color: currentLife.dead ? "var(--warm)" : "var(--fg-dim)",
               }}
             >
@@ -523,7 +529,7 @@ export function ShareModal({
             <p
               style={{
                 margin: 0,
-                fontSize: 11.5,
+                fontSize: "var(--t-1)",
                 lineHeight: 1.6,
                 color: "var(--fg-dim)",
                 maxWidth: "60ch",
@@ -554,7 +560,7 @@ export function ShareModal({
               <p
                 style={{
                   margin: "10px 0 0",
-                  fontSize: 12,
+                  fontSize: "var(--t-2)",
                   lineHeight: 1.5,
                   color: "var(--danger)",
                   maxWidth: "60ch",
@@ -579,7 +585,7 @@ export function ShareModal({
             <p
               style={{
                 margin: 0,
-                fontSize: 12,
+                fontSize: "var(--t-2)",
                 lineHeight: 1.65,
                 color: "var(--fg-muted)",
                 maxWidth: "60ch",
@@ -639,7 +645,7 @@ export function ShareModal({
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 8,
+                    gap: "var(--s-3)",
                     marginBottom: otherLinks.length > 0 ? 14 : 0,
                   }}
                 >
@@ -650,7 +656,7 @@ export function ShareModal({
                       had just copied. */}
                   <label
                     htmlFor="share-expiry"
-                    style={{ fontSize: 11.5, color: "var(--fg-dim)" }}
+                    style={{ fontSize: "var(--t-1)", color: "var(--fg-dim)" }}
                   >
                     Make another, expiring in
                   </label>
@@ -665,7 +671,7 @@ export function ShareModal({
                       border: "1px solid var(--border)",
                       borderRadius: "var(--r-2)",
                       color: "var(--fg)",
-                      fontSize: 12,
+                      fontSize: "var(--t-2)",
                     }}
                   >
                     {expiryChoices.map((c) => (
@@ -689,7 +695,7 @@ export function ShareModal({
                   <div>
                     <div
                       style={{
-                        fontSize: 11.5,
+                        fontSize: "var(--t-1)",
                         color: "var(--fg-dim)",
                         marginBottom: 6,
                       }}
@@ -703,9 +709,9 @@ export function ShareModal({
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "space-between",
-                          gap: 8,
+                          gap: "var(--s-3)",
                           padding: "6px 0",
-                          fontSize: 11.5,
+                          fontSize: "var(--t-1)",
                           color: "var(--fg-muted)",
                         }}
                       >
