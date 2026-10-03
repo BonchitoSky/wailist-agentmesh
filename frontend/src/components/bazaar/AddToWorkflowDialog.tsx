@@ -89,17 +89,17 @@ export function AddToWorkflowDialog({
           padding: 18,
           display: "flex",
           flexDirection: "column",
-          gap: 14,
+          gap: "var(--s-4)",
         }}
       >
         <div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--fg)" }}>
+          <div style={{ fontSize: "var(--t-4)", fontWeight: 600, color: "var(--fg)" }}>
             Add to a workflow
           </div>
           <div
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 11,
+              fontSize: "var(--t-1)",
               color: "var(--fg-dim)",
               marginTop: 4,
               wordBreak: "break-all",
@@ -110,23 +110,23 @@ export function AddToWorkflowDialog({
         </div>
 
         {error && (
-          <p style={{ margin: 0, fontSize: 12, color: "var(--danger)" }}>
+          <p style={{ margin: 0, fontSize: "var(--t-2)", color: "var(--danger)" }}>
             {error}
           </p>
         )}
         {!list && !error && (
-          <p style={{ margin: 0, fontSize: 12, color: "var(--fg-dim)" }}>
+          <p style={{ margin: 0, fontSize: "var(--t-2)", color: "var(--fg-dim)" }}>
             Loading your workflows…
           </p>
         )}
         {list?.length === 0 && (
-          <p style={{ margin: 0, fontSize: 12, color: "var(--fg-dim)" }}>
+          <p style={{ margin: 0, fontSize: "var(--t-2)", color: "var(--fg-dim)" }}>
             You have no workflows yet. Create one first, then add this endpoint
             to it.
           </p>
         )}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-2)" }}>
           {list?.map((w) => (
             <button
               key={w.id}
@@ -139,7 +139,7 @@ export function AddToWorkflowDialog({
                 background: "var(--bg)",
                 borderRadius: "var(--r-2)",
                 color: "var(--fg)",
-                fontSize: 13,
+                fontSize: "var(--t-3)",
                 cursor: "pointer",
                 fontFamily: "var(--font-sans)",
               }}
@@ -158,7 +158,7 @@ export function AddToWorkflowDialog({
             background: "transparent",
             color: "var(--fg-muted)",
             borderRadius: "var(--r-2)",
-            fontSize: 12,
+            fontSize: "var(--t-2)",
             cursor: "pointer",
             fontFamily: "var(--font-sans)",
           }}

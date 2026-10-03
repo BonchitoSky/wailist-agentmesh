@@ -22,6 +22,7 @@ import { WorkflowListSkeleton } from "@/components/ui/Skeleton";
 import { Workflow } from "@/lib/types";
 import { workflows as workflowsApi } from "@/lib/api";
 import { useCredits } from "@/lib/credits/store";
+import { usageHrefForWorkflow } from "@/lib/usageScope";
 import { TENDRIL_WORKFLOW } from "@/lib/data";
 import { loadTemplateWorkflow } from "@/lib/templateWorkflow";
 import { can } from "@/lib/readonly";
@@ -487,6 +488,7 @@ export function WorkflowsPage() {
               onSetSchedule={handleSetSchedule}
               onClearSchedule={handleClearSchedule}
               onShare={setShareWorkflowId}
+              onViewUsage={(id) => router.push(usageHrefForWorkflow(id))}
             />
           ) : (
             <WorkflowGrid
@@ -1252,6 +1254,7 @@ function WorkflowRows({
   onSetSchedule,
   onClearSchedule,
   onShare,
+  onViewUsage,
 }: {
   items: Workflow[];
   onOpen: (id: string) => void;
@@ -1260,6 +1263,7 @@ function WorkflowRows({
   onSetSchedule: (id: string, cron: string) => Promise<void>;
   onClearSchedule: (id: string) => Promise<void>;
   onShare: (id: string) => void;
+  onViewUsage: (id: string) => void;
 }) {
   const readOnly = useReadOnly();
   return (
@@ -1418,6 +1422,19 @@ function WorkflowRows({
               }}
             >
               Open
+            </button>
+            {/* Usage stays independent of the delete-gated RowMenu because it
+                is read-only. The phone list exposes the same action from its
+                compact row (see phone/WorkflowPhoneRow.tsx). */}
+            <button
+              style={ghostBtnSm}
+              onClick={(e) => {
+                e.stopPropagation();
+                onViewUsage(wf.id);
+              }}
+              title="Usage scoped to this workflow"
+            >
+              Usage
             </button>
             {/* Its own button rather than an item in RowMenu below, because
                 that menu is gated on "workflow.delete" and so never appears on

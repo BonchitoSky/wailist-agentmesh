@@ -7,6 +7,7 @@ import { IconSearch, Card, ghostBtnSm } from "@/components/ui";
 import { Topbar } from "@/components/Topbar";
 import { workflowHref } from "@/lib/routes";
 import { usage as usageApi } from "@/lib/api";
+import { scopedWorkflowLabel } from "@/lib/usageScope";
 import {
   UsageRange,
   UsagePayload,
@@ -147,6 +148,8 @@ export function UsagePage() {
           loading={loading}
           error={loadError}
           onRetry={retry}
+          scopedWorkflowId={scopedWf}
+          onClearScope={clearScope}
         />
       </div>
     );
@@ -190,7 +193,8 @@ export function UsagePage() {
                 color: "var(--accent)",
               }}
             >
-              Workflows by spend · filtered to {scopedWf}
+              Workflows by spend · filtered to{" "}
+              {scopedWorkflowLabel(scopedWf, data?.byWorkflow)}
               <button
                 onClick={clearScope}
                 style={{

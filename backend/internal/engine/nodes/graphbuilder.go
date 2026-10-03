@@ -1289,9 +1289,6 @@ const maxBuildIterations = 25
 // 60-90s. It is 300s on all plans now, so the old ceiling was stale.
 const defaultBuildTimeBudget = 240 * time.Second
 
-// maxTransportFailures bounds retries for a call that never arrived.
-const maxTransportFailures = 2
-
 // maxEmptyResponses bounds retries for a response with neither text nor a
 // function call.
 const maxEmptyResponses = 2
@@ -1564,13 +1561,66 @@ without one cannot run. Make small, sensible workflows unless asked for somethin
 done making changes, reply with a short plain-text summary of what you built or changed -- do not call any more
 tools once you're done.`
 
-// unfinishedReply is what a build that stopped early says -- never "",
-// which reaches the user as a blank chat bubble.
-func unfinishedReply(lastReply string) string {
+// unfinishedReply is what a build that stopped early says, never "", which
+// reaches the user as a blank chat bubble. A held reply was written before the
+// round that was meant to check or repair the graph, and that round did not
+// happen, so it is returned with a note instead of passing as a finished build.
+func unfinishedReply(lastReply, why string) string {
 	if strings.TrimSpace(lastReply) != "" {
-		return lastReply
+		return lastReply + "\n\n_I could not finish checking this one (" + why + "), so it may still need a fix._"
 	}
-	return "I didn't get to finish this one. What I built so far is on the canvas — tell me what to finish and I'll carry on from there."
+	return "I didn't get to finish this one (" + why + "). What I built so far is on the canvas, tell me what to finish and I'll carry on from there."
+}
+
+var modelAPIStatus = regexp.MustCompile(`LLM API (\d{3})`)
+
+func isTransientModelError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	m := modelAPIStatus.FindStringSubmatch(err.Error())
+	return m == nil || m[1] == "429" || strings.HasPrefix(m[1], "5")
+}
+
+const modelRetryDelay = time.Second
+
+// Leave enough budget for useful work after waiting; permanent refusals cannot
+// improve when the same request is sent again.
+func callBuildModel(ctx context.Context, apiURL string, headers map[string]string, payload any, timeLeft func() time.Duration) (map[string]any, error) {
+	resp, err := postLLMJSON(ctx, apiURL, headers, payload)
+	if !isTransientModelError(err) || ctx.Err() != nil || timeLeft() < modelRetryDelay*3 {
+		return resp, err
+	}
+	timer := time.NewTimer(modelRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+		return postLLMJSON(ctx, apiURL, headers, payload)
+	}
+}
+
+// modelFailureReason says what kind of failure stopped a build, never the
+// upstream body. The status comes from postLLMJSON's error, the only shape
+// that carries one; anything without it is a transport failure.
+func modelFailureReason(err error) string {
+	if errors.Is(err, ErrNoModelText) {
+		return "the model stopped without an answer"
+	}
+	m := modelAPIStatus.FindStringSubmatch(err.Error())
+	if m == nil {
+		return "the model service could not be reached"
+	}
+	switch status := m[1]; {
+	case status == "429":
+		return "the model service is busy right now (rate limit)"
+	case status == "401" || status == "403":
+		return "the model service refused this platform's credentials"
+	case strings.HasPrefix(status, "5"):
+		return "the model service is having trouble"
+	}
+	return "the model service rejected the request"
 }
 
 // repairMessage asks for another pass over what the audit found. The graph
@@ -1798,7 +1848,6 @@ func BuildGraph(ctx context.Context, req BuildRequest) (result BuildGraphResult,
 	baselineFindings := auditGraph(graph)
 	auditRetried := false
 	emptyResponses := 0
-	transportFailures := 0
 	// What this build spent. Gemini reports it on every response and it was
 	// decoded and thrown away, so nothing could say what a build cost or
 	// whether the stable prefix (instructions plus tool declarations) was
@@ -1819,22 +1868,18 @@ func BuildGraph(ctx context.Context, req BuildRequest) (result BuildGraphResult,
 		} else {
 			progress.working("Planning the next step")
 		}
-		resp, err := postLLMJSON(ctx, apiURL, apiHeaders, payload)
+		resp, err := callBuildModel(ctx, apiURL, apiHeaders, payload, func() time.Duration {
+			return budget - time.Since(started)
+		})
 		if err != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return ranOutOfTime(), nil
 			}
-			// An error here means BuildWorkflow never reaches its save and
-			// every node built goes with it. Try again, then keep them.
-			if transportFailures < maxTransportFailures {
-				transportFailures++
-				if req.TraceID != "" {
-					log.Printf("build %s: model call failed (%d): %v", req.TraceID, transportFailures, err)
-				}
-				continue
+			if req.TraceID != "" {
+				log.Printf("build %s: model call failed (%s): %v", req.TraceID, modelFailureReason(err), err)
 			}
 			if changedSomething() {
-				return BuildGraphResult{Reply: withTestStatus(unfinishedReply(lastReply)), Graph: graph}, nil
+				return BuildGraphResult{Reply: withTestStatus(unfinishedReply(lastReply, modelFailureReason(err))), Graph: graph}, nil
 			}
 			return BuildGraphResult{}, err
 		}
@@ -1871,12 +1916,12 @@ func BuildGraph(ctx context.Context, req BuildRequest) (result BuildGraphResult,
 				if emptyResponses < maxEmptyResponses {
 					emptyResponses++
 					if req.TraceID != "" {
-						log.Printf("build %s: empty model response, retrying (%d)", req.TraceID, emptyResponses)
+						log.Printf("build %s: empty model response, retrying (%d): %v", req.TraceID, emptyResponses, err)
 					}
 					continue
 				}
 				if changedSomething() {
-					return BuildGraphResult{Reply: withTestStatus(unfinishedReply(lastReply)), Graph: graph}, nil
+					return BuildGraphResult{Reply: withTestStatus(unfinishedReply(lastReply, modelFailureReason(err))), Graph: graph}, nil
 				}
 				return BuildGraphResult{}, err
 			}

@@ -963,6 +963,7 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
                   elapsed={chat.elapsed}
                   done={chat.done}
                   deadLetters={chat.deadLetters}
+                  costs={chat.costs}
                   onResume={handleResume}
                 />
               </div>
