@@ -66,30 +66,21 @@ export function nextLocalRun(
   value: CadenceValue,
   now: Date = new Date(),
 ): Date {
-  const [h, m] = value.time.split(":").map(Number);
+  const [minute, hour, dayOfMonth, , weekdays] = cadenceToCron(value, now).split(" ");
   const at = (y: number, mo: number, d: number) =>
-    new Date(y, mo, d, h, m, 0, 0);
-  const y = now.getFullYear();
-  const mo = now.getMonth();
-  const d = now.getDate();
+    new Date(Date.UTC(y, mo, d, Number(hour), Number(minute)));
+  const y = now.getUTCFullYear();
+  const mo = now.getUTCMonth();
+  const d = now.getUTCDate();
 
   if (value.cadence === "monthly") {
-    const dom = value.dayOfMonth ?? 1;
+    const dom = Number(dayOfMonth);
     const thisMonth = at(y, mo, dom);
     return thisMonth > now ? thisMonth : at(y, mo + 1, dom);
   }
   if (value.cadence === "weekly") {
-    const [minute, hour, , , weekdays] = cadenceToCron(value, now).split(" ");
     const candidates = weekdays.split(",").map((day) => {
-      const candidate = new Date(
-        Date.UTC(
-          now.getUTCFullYear(),
-          now.getUTCMonth(),
-          now.getUTCDate(),
-          Number(hour),
-          Number(minute),
-        ),
-      );
+      const candidate = at(y, mo, d);
       candidate.setUTCDate(
         candidate.getUTCDate() + ((Number(day) - candidate.getUTCDay() + 7) % 7),
       );
