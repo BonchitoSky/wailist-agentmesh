@@ -225,6 +225,15 @@ export function Topbar() {
                         router.push("/settings");
                       }}
                     >
+                      Settings
+                    </button>
+                    <button
+                      className="profile-menu__item"
+                      onClick={() => {
+                        setMenuState("closed");
+                        router.push("/settings#delete-title");
+                      }}
+                    >
                       Delete account
                     </button>
                     {IS_NATIVE && (

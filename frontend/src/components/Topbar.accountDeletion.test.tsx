@@ -21,6 +21,15 @@ it("opens account deletion directly from the signed-in profile icon", () => {
   expect(screen.queryByRole("button", { name: "Delete account" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
   fireEvent.click(screen.getByRole("button", { name: "Delete account" }));
-  expect(push).toHaveBeenCalledWith("/settings");
+  expect(push).toHaveBeenCalledWith("/settings#delete-title");
   expect(screen.queryByRole("button", { name: "Delete account" })).toBeNull();
+});
+
+it("opens Settings from the same profile menu", () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  render(<Topbar />);
+  fireEvent.click(screen.getByRole("button", { name: "Account menu" }));
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  expect(push).toHaveBeenCalledWith("/settings");
+  expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
 });
