@@ -4,7 +4,7 @@ import { DeveloperSection } from "./Developer";
 
 const list = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({ BASE: "/api", workflows: { list } }));
-beforeEach(() => list.mockReset().mockResolvedValue([{ id: "workflow-id", name: "Webhook workflow" }]));
+beforeEach(() => { list.mockReset().mockResolvedValue([{ id: "workflow-id", name: "Webhook workflow" }]); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 it("describes the deployed webhook and secret requirements and copies only the endpoint", async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
@@ -23,4 +23,3 @@ it("surfaces workflow listing failure instead of an empty list", async () => {
   await screen.findByRole("alert");
   expect(screen.queryByText("No workflows yet.")).toBeNull();
 });
-
