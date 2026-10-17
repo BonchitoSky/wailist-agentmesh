@@ -377,13 +377,13 @@ function HeroSection({
                 letterSpacing: "-0.005em",
               }}
             >
-              The visual canvas for autonomous{" "}
+              Build and run AI workflows{" "}
               {/* Forced break is a desktop typographic choice; on a phone it
                   fights the natural wrap, so it drops out below `sm`. The
                   explicit space above is load-bearing: with the <br> hidden
                   there is otherwise nothing separating the two words. */}
               <br className="hide-sm" />
-              agent networks.
+              on a visual canvas.
             </p>
             <div style={{ display: "flex", gap: "var(--s-4)", marginTop: 25 }}>
               <button
@@ -447,9 +447,9 @@ function LogoMarquee() {
             fontFamily: "var(--font-sans)",
           }}
         >
-          Built with best-in-class
+          Connect models and tools
           <br />
-          agent tooling
+          in one workflow
         </div>
         <div className="marquee-mask" style={{ flex: 1, overflow: "hidden" }}>
           <div className="marquee-track">
@@ -504,28 +504,28 @@ function LandingPillars() {
       tag: "01",
       kicker: "build",
       title: "Design agent workflows visually.",
-      body: "Drag triggers, agents, providers, tools, and actions onto a canvas. Connect them like Lego. The graph IS the execution graph.",
+      body: "Add triggers, agents, models, tools, and actions. Connect them to define the steps in your workflow.",
       glyph: "⬡",
     },
     {
       tag: "02",
       kicker: "fund",
-      title: "Budgets at deploy, not signup.",
-      body: "Each agent gets its own spending budget the moment you deploy. Top it up manually, watch usage tick live.",
+      title: "Track credit usage.",
+      body: "Add credits to your account and review usage costs for each workflow.",
       glyph: "◎",
     },
     {
       tag: "03",
       kicker: "wire",
       title: "Paid APIs as tools.",
-      body: "Any metered HTTP endpoint becomes a tool node. Priced at call-time, settled per call, accountable per agent.",
+      body: "Connect x402-compatible APIs as tools. Review the price before running a paid request.",
       glyph: "⟡",
     },
     {
       tag: "04",
       kicker: "run",
-      title: "Agent-to-agent messages, audit-ready.",
-      body: "Inter-agent messages produce verifiable receipts. Replay any run. Audit-friendly by default.",
+      title: "Follow each run.",
+      body: "View live logs, step results, and costs. Open past runs to check what happened.",
       glyph: "◈",
     },
   ];
@@ -555,7 +555,7 @@ function LandingPillars() {
               lineHeight: 1.12,
             }}
           >
-            Visual workflow design for autonomous agents.
+            Build workflows, connect tools, and follow results.
           </h2>
         </div>
         <div
@@ -677,25 +677,25 @@ function LandingFlow() {
     {
       k: "01",
       label: "Drop nodes",
-      body: "Trigger, agent, provider, tools, action, end.",
+      body: "Choose the steps your workflow needs.",
       glyph: "⊕",
     },
     {
       k: "02",
       label: "Wire ports",
-      body: "Provider + tools attach to agent's bottom ports.",
+      body: "Connect a model and tools to the agent.",
       glyph: "⟡",
     },
     {
       k: "03",
       label: "Deploy",
-      body: "Agents get their own spending budgets at this moment.",
+      body: "Save and deploy the workflow when it is ready.",
       glyph: "◎",
     },
     {
       k: "04",
-      label: "Fund + run",
-      body: "Top up agent budgets. Watch usage settle live.",
+      label: "Run and monitor",
+      body: "Add credits, start a run, and follow its logs.",
       glyph: "▶",
     },
   ];
@@ -728,7 +728,7 @@ function LandingFlow() {
               lineHeight: 1.15,
             }}
           >
-            Zero to running pipeline in four moves.
+            Create a workflow in four steps.
           </h2>
         </div>
         <div
