@@ -20,8 +20,8 @@ vi.mock("@/lib/api", () => ({
   workflows: { importGraph: api.importGraph },
 }));
 vi.mock("@/lib/workflowShare", () => ({ decodeWorkflowShare: api.decode }));
-vi.mock("@/hooks/useModalDismissal", () => ({
-  useModalDismissal: () => ({ current: null }),
+vi.mock("@/hooks/useCloseOnBack", () => ({
+  useCloseOnBack: () => () => {},
 }));
 
 import { ImportModal } from "./ImportModal";
@@ -69,6 +69,60 @@ function paste(value: string) {
 }
 
 describe("ImportModal", () => {
+  it("restores focus to the opener after the dialog unmounts", () => {
+    const opener = document.createElement("button");
+    opener.textContent = "Import a link";
+    document.body.append(opener);
+    opener.focus();
+    try {
+      const view = render(<ImportModal onImported={vi.fn()} onClose={vi.fn()} />);
+      expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "Import workflow" }));
+      view.unmount();
+      expect(document.activeElement).toBe(opener);
+    } finally {
+      opener.remove();
+    }
+  });
+
+  it("returns focus to the preview when the async lookup blurs Continue", async () => {
+    const lookup = Promise.withResolvers<typeof response>();
+    api.read.mockReturnValueOnce(lookup.promise);
+    openModal();
+    paste(token);
+    const continueButton = screen.getByRole("button", { name: "Continue" });
+    continueButton.focus();
+    fireEvent.click(continueButton);
+    await waitFor(() => expect(continueButton.hasAttribute("disabled")).toBe(true));
+    // This test DOM keeps disabled buttons focused; browsers blur them.
+    document.body.setAttribute("tabindex", "-1");
+    document.body.focus();
+    document.body.removeAttribute("tabindex");
+    expect(document.activeElement).toBe(document.body);
+
+    lookup.resolve(response);
+    const importButton = await screen.findByRole("button", { name: "Import to my workspace" });
+    expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "Import workflow" }));
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(importButton);
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Close" }));
+    expect(api.importInto).not.toHaveBeenCalled();
+  });
+
+  it("preserves focus on a dialog control while the preview finishes loading", async () => {
+    const lookup = Promise.withResolvers<typeof response>();
+    api.read.mockReturnValueOnce(lookup.promise);
+    openModal();
+    paste(token);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    const close = screen.getByRole("button", { name: "Close" });
+    close.focus();
+    lookup.resolve(response);
+    await screen.findByRole("button", { name: "Import to my workspace" });
+    expect(document.activeElement).toBe(close);
+    expect(api.importInto).not.toHaveBeenCalled();
+  });
+
   it.each(["link", "code"])("shows email setup before importing a sanitized %s", async (kind) => {
     const emailGraph: WorkflowShareData = {
       name: "Webhook email",
