@@ -27,6 +27,10 @@ const backendBinary = resolve(required("SMOKE_BACKEND_BINARY"));
 const walletBinary = resolve(required("SMOKE_WALLETGEN_BINARY"));
 const backendPort = port("SMOKE_API_PORT", 3218);
 const frontendPort = port("SMOKE_SERVER_PORT", 3227);
+const relayKey = required("SMOKE_SHARE_READ_RELAY_KEY");
+if (!/^[a-fA-F0-9]{64}$/.test(relayKey)) {
+  throw new Error("SMOKE_SHARE_READ_RELAY_KEY must be a disposable 32-byte hex key");
+}
 const inertPort = port("SMOKE_INERT_PORT", 3219);
 const inertURL = `http://127.0.0.1:${inertPort}`;
 const env = Object.fromEntries(
@@ -62,6 +66,7 @@ const backend = spawn(backendBinary, [], {
     DATABASE_URL: database,
     ENCRYPTION_KEY: encryptionKey,
     JWT_SECRET: randomBytes(32).toString("hex"),
+    SHARE_READ_RELAY_KEY: relayKey,
     PLATFORM_WALLET_ADDRESS: address,
     PLATFORM_WALLET_ENC_MNEMONIC: wallet.stdout.trim(),
     PLATFORM_SPEND_WALLET_ADDRESS: address,
