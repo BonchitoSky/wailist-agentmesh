@@ -16,12 +16,9 @@ export const alt = "A workflow shared on AgentMesh";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-// The static mobile export cannot run an image route per token, and nothing
-// in the WebView opens a share link anyway -- one shell keeps `output:
-// export` satisfied, exactly as page.tsx does.
-export function generateStaticParams() {
-  return process.env.MOBILE_BUILD === "1" ? [{ token: "app" }] : [];
-}
+// Only the mobile export can precompute this route; web images follow revocation.
+export const generateStaticParams =
+  process.env.MOBILE_BUILD === "1" ? () => [{ token: "app" }] : undefined;
 
 // Tokens copied, not imported: this renders in Satori, which never loads the
 // stylesheet. Kept in step with globals.css by hand -- there are five.
