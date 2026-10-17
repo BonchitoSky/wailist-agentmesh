@@ -971,6 +971,11 @@ export function CanvasPage({ workflowId }: CanvasPageProps) {
         running={running}
         onDeploy={onDeploy}
         onRun={onRun}
+        onBeforeShare={flushPendingSave}
+        onShareError={() => {
+          saveFlushQueue.record(false);
+          showToast("Share cancelled: latest changes failed to save", "error");
+        }}
         runBlocked={runBlocked}
         saveLabel={saveLabel}
         estimateTick={estimateTick}
@@ -1357,6 +1362,8 @@ function CanvasTopbar({
   running,
   onDeploy,
   onRun,
+  onBeforeShare,
+  onShareError,
   runBlocked,
   saveLabel,
   estimateTick,
@@ -1368,6 +1375,8 @@ function CanvasTopbar({
   running: boolean;
   onDeploy: () => void;
   onRun: () => void;
+  onBeforeShare: () => Promise<boolean>;
+  onShareError: () => void;
   /** Why the Run button is disabled, or null when a run can proceed --
    *  computed once in CanvasPage (runBlockedMessage) so this component
    *  doesn't need its own copy of graphReady/canDeploy to derive it. */
@@ -1386,6 +1395,8 @@ function CanvasTopbar({
   const { balanceUSD, balanceKnown, refreshBalance, lowBalanceThresholdUSD } = useCredits();
   const lowBalance = balanceKnown && balanceUSD < lowBalanceThresholdUSD;
   const [shareOpen, setShareOpen] = useState(false);
+  const [preparingShare, setPreparingShare] = useState(false);
+  const sharePending = useRef(false);
   const [estimate, setEstimate] = useState<CostEstimate | null>(null);
 
   useEffect(() => {
@@ -1541,18 +1552,33 @@ function CanvasTopbar({
         </span>
       </div>
 
+      {can("workflow.share", readOnly) && (
+        <button
+          style={{ ...ghostBtnSm, color: "var(--fg)" }}
+          disabled={preparingShare}
+          onClick={async () => {
+            if (sharePending.current) return;
+            sharePending.current = true;
+            setPreparingShare(true);
+            try {
+              // Mounting the dialog creates the server-side snapshot.
+              if (await onBeforeShare()) setShareOpen(true);
+              else onShareError();
+            } catch {
+              onShareError();
+            } finally {
+              sharePending.current = false;
+              setPreparingShare(false);
+            }
+          }}
+        >
+          {preparingShare ? "Saving…" : "Share"}
+        </button>
+      )}
       {can("workflow.deploy", readOnly) && (
-        <>
-          <button
-            style={{ ...ghostBtnSm, color: "var(--fg)" }}
-            onClick={() => setShareOpen(true)}
-          >
-            Share
-          </button>
-          <button onClick={onDeploy} style={btnStyle}>
-            {deployed ? "Re-deploy" : "Deploy"}
-          </button>
-        </>
+        <button onClick={onDeploy} style={btnStyle}>
+          {deployed ? "Re-deploy" : "Deploy"}
+        </button>
       )}
       {shareOpen && (
         <ShareModal

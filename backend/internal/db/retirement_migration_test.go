@@ -43,6 +43,23 @@ func TestRetirementMigrationPreservesRowsAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	latest, err := source.First()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		next, err := source.Next(latest)
+		if os.IsNotExist(err) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		latest = next
+	}
+	if latest < 43 {
+		t.Fatalf("latest migration=%d, want at least 43", latest)
+	}
 	u.Scheme = "pgx5"
 	m, err := migrate.NewWithSourceInstance("iofs", source, u.String())
 	if err != nil {
@@ -113,9 +130,9 @@ func TestRetirementMigrationPreservesRowsAndRollback(t *testing.T) {
 	if err := runMigrations(databaseURL); err != nil {
 		t.Fatal(err)
 	}
-	assertState(43, "waitlist_archived", "waitlist")
+	assertState(latest, "waitlist_archived", "waitlist")
 	if err := runMigrations(databaseURL); err != nil {
 		t.Fatal(err)
 	}
-	assertState(43, "waitlist_archived", "waitlist")
+	assertState(latest, "waitlist_archived", "waitlist")
 }
