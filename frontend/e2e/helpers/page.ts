@@ -46,8 +46,7 @@ export async function settle(page: Page): Promise<void> {
  * Visible elements that extend past either edge of the viewport.
  *
  * Elements are ignored when they sit inside:
- * - a container that scrolls horizontally on purpose (overflow-x auto or
- *   scroll), because its content is meant to be swiped;
+ * - an explicitly identified horizontal table, math or code region;
  * - a container running an infinite CSS animation, such as the landing page's
  *   logo marquee, whose track is wider than the screen by design.
  * Elements inside an overflow-hidden container are not ignored: content cut
@@ -58,6 +57,11 @@ export async function settle(page: Page): Promise<void> {
 export async function horizontalOffenders(page: Page): Promise<Offender[]> {
   return page.evaluate(() => {
     const viewportWidth = document.documentElement.clientWidth;
+    const horizontalScrollRegions = [
+      ".chat-markdown .chat-table-wrap",
+      ".chat-markdown .katex-display",
+      ".chat-code-block__body",
+    ].join(",");
 
     // The element itself counts for the animation (the marquee track is the
     // animated element) but not for scrolling (a scroller that sticks out
@@ -68,6 +72,7 @@ export async function horizontalOffenders(page: Page): Promise<Offender[]> {
         const style = getComputedStyle(n);
         if (
           n !== el &&
+          n.matches(horizontalScrollRegions) &&
           (style.overflowX === "auto" || style.overflowX === "scroll")
         ) {
           return true;
