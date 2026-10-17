@@ -223,9 +223,7 @@ export function WorkflowsPage() {
     );
   }, []);
 
-  // A phone gets its own thin list: no create, import, schedule or share
-  // actions (those are desktop-only), no view toggle, and the status tabs
-  // folded into the filter menu. It shares the fetch and the pull above.
+  // The phone list allows sharing, while creation and editing stay on desktop.
   if (readOnly) {
     return (
       <div
@@ -248,8 +246,15 @@ export function WorkflowsPage() {
             loading={loading}
             error={pageError?.message ?? null}
             onRetry={() => void reload({ keepOnError: true })}
+            onShare={can("workflow.share", readOnly) ? setShareWorkflowId : undefined}
           />
         </PullToRefresh>
+        {shareWorkflowId && (
+          <ShareModal
+            workflowId={shareWorkflowId}
+            onClose={() => setShareWorkflowId(null)}
+          />
+        )}
       </div>
     );
   }
@@ -304,7 +309,7 @@ export function WorkflowsPage() {
             >
               {can("workflow.create", readOnly) && (
                 <button style={ghostBtn} onClick={() => setImportOpen(true)}>
-                  Import
+                  Import a link
                 </button>
               )}
               {can("workflow.create", readOnly) && (
@@ -1473,6 +1478,18 @@ function WorkflowRows({
                 }
               >
                 {wf.geofenceRadiusM !== undefined ? "Zone ·" : "Zone"}
+              </button>
+            )}
+            {can("workflow.share", readOnly) && (
+              <button
+                style={ghostBtnSm}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onShare(wf.id);
+                }}
+                title="Share this workflow"
+              >
+                Share
               </button>
             )}
             {can("workflow.delete", readOnly) && (
