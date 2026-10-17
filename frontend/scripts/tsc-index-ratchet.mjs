@@ -20,7 +20,8 @@ if (
 
 const run = spawnSync(
   process.execPath,
-  [tsc, "--noEmit", "--pretty", "false", "--noUncheckedIndexedAccess"],
+  // Incremental state can reorder printed object properties in diagnostics.
+  [tsc, "--noEmit", "--pretty", "false", "--noUncheckedIndexedAccess", "--incremental", "false"],
   { cwd: root, encoding: "utf8" },
 );
 const output = `${run.stdout ?? ""}${run.stderr ?? ""}`;
