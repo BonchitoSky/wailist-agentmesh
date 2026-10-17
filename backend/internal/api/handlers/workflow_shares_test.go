@@ -730,7 +730,7 @@ func TestPublicReadHidesHowManyPeopleTookACopy(t *testing.T) {
 
 	// And the recipient is told what they have to supply: the BYOK provider
 	// key, and the file whose bytes were stripped.
-	if out.Requirements.APIKeys != 1 || out.Requirements.Files != 1 {
+	if out.Requirements.APIKeys != 1 || out.Requirements.Files != 1 || out.Requirements.EmailActions != 1 {
 		t.Errorf("requirements shown to the recipient look wrong: %+v", out.Requirements)
 	}
 }

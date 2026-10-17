@@ -326,6 +326,7 @@ export interface ShareRedactions {
 // many keys the sharer had in there is not a recipient's business.
 export interface ShareImportRequirements {
   apiKeys: number;
+  emailActions?: number;
   files: number;
   connectedAccounts: number;
   /** Connector providers to reconnect, named and sorted -- ["jira","slack"].

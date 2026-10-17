@@ -1,6 +1,7 @@
 package handlers_test
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -299,7 +300,7 @@ func TestRequirementsNameTheConnectorsTheRecipientMustReconnect(t *testing.T) {
 				ID: "n4", Type: models.NodeTypeAction, Template: "github",
 				Secrets: map[string]string{"githubOAuthAccessToken": "gho-fixture"},
 			},
-			// Not a connector: no account to reconnect, nothing to say.
+			// Email setup is separate from an OAuth connection.
 			{ID: "n5", Type: models.NodeTypeAction, Template: "email"},
 		},
 	})
@@ -316,6 +317,73 @@ func TestRequirementsNameTheConnectorsTheRecipientMustReconnect(t *testing.T) {
 	}
 	if !req.Any() {
 		t.Error("a graph needing two accounts reconnected reports nothing to do")
+	}
+}
+
+func TestRequirementsForSanitizedEmailActions(t *testing.T) {
+	configured := models.WorkflowNode{
+		ID: "email", Type: models.NodeTypeAction, Template: "email",
+		EmailProvider: "sendgrid", EmailAPIKey: "private-email-key",
+		EmailTo: "recipient@example.invalid", EmailFrom: "sender@example.invalid",
+		EmailSubject: "Workflow result", EmailBody: "{{ result }}",
+	}
+	tests := []struct {
+		name         string
+		nodes        []models.WorkflowNode
+		emailActions int
+		modelKeys    int
+	}{
+		{"configured email", []models.WorkflowNode{configured}, 1, 0},
+		{"unconfigured email", []models.WorkflowNode{{ID: "email", Type: models.NodeTypeAction, Template: "email"}}, 1, 0},
+		{"two email actions", []models.WorkflowNode{configured, {ID: "second", Type: models.NodeTypeAction, Template: "email", EmailProvider: "resend"}}, 2, 0},
+		{"nonemail action", []models.WorkflowNode{{ID: "action", Type: models.NodeTypeAction, Template: "webhook"}}, 0, 0},
+		{"nonaction template", []models.WorkflowNode{{ID: "trigger", Type: models.NodeTypeTrigger, Template: "email"}}, 0, 0},
+		{"platform model", []models.WorkflowNode{{ID: "model", Type: models.NodeTypeProvider, KeyMode: "platform"}}, 0, 0},
+		{"own model key", []models.WorkflowNode{{ID: "model", Type: models.NodeTypeProvider, KeyMode: "byok", APIKey: "private-model-key"}}, 0, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := models.WorkflowGraph{
+				Nodes: append([]models.WorkflowNode{{ID: "start", Type: models.NodeTypeTrigger, Template: "webhook"}}, tt.nodes...),
+				Edges: []models.WorkflowEdge{{ID: "flow", From: "start", To: tt.nodes[0].ID, Kind: models.EdgeKindFlow}},
+			}
+			graph, _ := handlers.SanitizeGraphForShare(original)
+			if len(graph.Nodes) != len(original.Nodes) || len(graph.Edges) != 1 {
+				t.Fatal("sanitizing changed the workflow structure")
+			}
+			for i, node := range graph.Nodes {
+				if node.EmailAPIKey != "" || node.EmailTo != "" || node.EmailFrom != "" {
+					t.Error("email credentials or addresses survived sanitizing")
+				}
+				before := original.Nodes[i]
+				if node.EmailProvider != before.EmailProvider || node.EmailSubject != before.EmailSubject || node.EmailBody != before.EmailBody {
+					t.Error("nonprivate email configuration changed")
+				}
+			}
+			var d handlers.Deps
+			req := d.RequirementsForImport(graph)
+			encoded, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire struct {
+				EmailActions int `json:"emailActions"`
+			}
+			if err := json.Unmarshal(encoded, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if wire.EmailActions != tt.emailActions || req.APIKeys != tt.modelKeys {
+				t.Errorf("email setup = %d, model keys = %d; want %d, %d", wire.EmailActions, req.APIKeys, tt.emailActions, tt.modelKeys)
+			}
+			if req.Any() != (tt.emailActions+tt.modelKeys > 0) {
+				t.Errorf("readiness = %v for requirements %s", req.Any(), encoded)
+			}
+			for _, private := range []string{configured.EmailAPIKey, configured.EmailTo, configured.EmailFrom, "private-model-key"} {
+				if strings.Contains(string(encoded), private) {
+					t.Error("requirements exposed a stripped value")
+				}
+			}
+		})
 	}
 }
 
