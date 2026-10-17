@@ -5,7 +5,7 @@ import {
   openRoute,
   settle,
 } from "./helpers/page";
-import { ALL_ROUTES, PROTECTED_ROUTES, WORKFLOW_ID } from "./routes";
+import { ALL_ROUTES, PROTECTED_ROUTES, SHARE_TOKEN, WORKFLOW_ID } from "./routes";
 
 const isDesktop = (project: string) => project.startsWith("desktop");
 const protectedRoutes: readonly string[] = PROTECTED_ROUTES;
@@ -17,6 +17,27 @@ test.beforeEach(async ({ context, baseURL }) => {
   await context.addCookies([
     { name: "agentmesh_ui", value: "1", url: baseURL ?? "" },
   ]);
+});
+
+test("public share preview accepts a request without a session cookie", async ({ context, page }) => {
+  await context.clearCookies();
+  expect(await context.cookies()).toEqual([]);
+  const errors = collectPageErrors(page);
+  const response = await openRoute(page, `/s/${SHARE_TOKEN}`);
+  expect(response?.status()).toBe(200);
+  expect(response?.request().headers()["cookie"] ?? "").not.toContain("agentmesh_ui");
+  expect(new URL(page.url()).pathname).toBe(`/s/${SHARE_TOKEN}`);
+  await settle(page);
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("private link management redirects an anonymous visitor", async ({ context, page }) => {
+  await context.clearCookies();
+  await openRoute(page, "/account/links");
+  const url = new URL(page.url());
+  expect(url.pathname).toBe("/signin");
+  expect(url.searchParams.get("next")).toBe("/account/links");
 });
 
 for (const route of ALL_ROUTES) {

@@ -26,6 +26,7 @@ const android = (width: number, height: number, deviceScaleFactor: number) => ({
 
 export default defineConfig({
   testDir: ".",
+  testMatch: ["harness.spec.ts", "smoke.spec.ts"],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
