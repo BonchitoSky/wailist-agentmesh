@@ -75,7 +75,8 @@ const (
 // code existed.
 type ShareImportRequirements struct {
 	// Provider nodes running on their own key rather than the platform's.
-	APIKeys int `json:"apiKeys"`
+	APIKeys      int `json:"apiKeys"`
+	EmailActions int `json:"emailActions"`
 	// File params with no bytes: the recipient uploads their own.
 	Files int `json:"files"`
 	// Google nodes, which need the recipient's own connected account.
@@ -90,7 +91,7 @@ type ShareImportRequirements struct {
 
 // Any reports whether the recipient has anything to do before running it.
 func (r ShareImportRequirements) Any() bool {
-	return r.APIKeys+r.Files+r.ConnectedAccounts+len(r.Connectors) > 0
+	return r.APIKeys+r.EmailActions+r.Files+r.ConnectedAccounts+len(r.Connectors) > 0
 }
 
 // RequirementsForImport inspects a sanitised graph and says what is missing.
@@ -126,6 +127,10 @@ func (d *Deps) RequirementsForImport(graph models.WorkflowGraph) ShareImportRequ
 			}
 		case models.NodeTypeGoogle:
 			req.ConnectedAccounts++
+		case models.NodeTypeAction:
+			if n.Template == "email" {
+				req.EmailActions++
+			}
 		}
 		if n.Template != "" && !needed[n.Template] {
 			if _, ok := connectors[n.Template]; ok {

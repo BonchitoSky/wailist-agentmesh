@@ -1,4 +1,4 @@
-import type { ShareImportRequirements } from "./types";
+import type { ShareImportRequirements, WorkflowNode } from "./types";
 
 // What a recipient still has to supply, said in sentences.
 //
@@ -12,13 +12,31 @@ import type { ShareImportRequirements } from "./types";
 // of this wording would drift, and the drift would be invisible: both would
 // go on rendering a plausible sentence.
 
-export function requirementLines(req: ShareImportRequirements): string[] {
+export function requirementLines(
+  req: ShareImportRequirements,
+  nodes: WorkflowNode[] = [],
+): string[] {
   const lines: string[] = [];
   if (req.apiKeys > 0) {
     lines.push(
       req.apiKeys === 1
         ? "Your own API key, for one model node"
         : `Your own API keys, for ${req.apiKeys} model nodes`,
+    );
+  }
+  const emailActions = Math.max(
+    req.emailActions ?? 0,
+    nodes.filter((node) => node.type === "action" && node.template === "email")
+      .length,
+  );
+  if (emailActions > 0) {
+    lines.push(
+      emailActions === 1
+        ? "Your own email provider API key, for one email action"
+        : `Your own email provider API keys, for ${emailActions} email actions`,
+      emailActions === 1
+        ? "Your sender and recipient email addresses, for one email action"
+        : `Your sender and recipient email addresses, for ${emailActions} email actions`,
     );
   }
   if (req.connectedAccounts > 0) {

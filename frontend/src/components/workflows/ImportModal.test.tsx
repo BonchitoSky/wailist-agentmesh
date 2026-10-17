@@ -69,6 +69,32 @@ function paste(value: string) {
 }
 
 describe("ImportModal", () => {
+  it.each(["link", "code"])("shows email setup before importing a sanitized %s", async (kind) => {
+    const emailGraph: WorkflowShareData = {
+      name: "Webhook email",
+      nodes: [
+        { id: "start", type: "trigger", template: "webhook", x: 0, y: 0 },
+        { id: "email", type: "action", template: "email", emailProvider: "sendgrid", x: 100, y: 0 },
+      ],
+      edges: [{ id: "flow", from: "start", to: "email", kind: "flow" }],
+    };
+    api.read.mockResolvedValue({
+      share: { ...response.share, name: emailGraph.name, graph: emailGraph, nodeCount: 2, edgeCount: 1 },
+      requirements: { apiKeys: 0, files: 0, connectedAccounts: 0, emailActions: 1 },
+    });
+    api.decode.mockResolvedValue(emailGraph);
+    openModal();
+    paste(kind === "link" ? token : "am1.email-graph");
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await screen.findByText("Your own email provider API key, for one email action");
+    expect(screen.getByText("Your sender and recipient email addresses, for one email action")).toBeTruthy();
+    expect(screen.queryByText("Ready to run as-is")).toBeNull();
+    expect(screen.queryByText(/Nothing to configure/)).toBeNull();
+    expect(api.importInto).not.toHaveBeenCalled();
+    expect(api.importGraph).not.toHaveBeenCalled();
+  });
+
   it("shows the link and required connection before creating a copy", async () => {
     const { onImported } = openModal();
     paste(`https://www.agent-mesh.app/s/${token}`);
