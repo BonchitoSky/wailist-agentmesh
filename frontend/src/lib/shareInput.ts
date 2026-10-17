@@ -79,5 +79,5 @@ const LINK_SHAPE =
 
 function tokenFromUrl(text: string): string | null {
   const match = LINK_SHAPE.exec(text);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
