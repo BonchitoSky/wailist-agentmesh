@@ -5,6 +5,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { useModalDismissal } from "@/hooks/useModalDismissal";
 import { shares as sharesApi } from "@/lib/api";
 import { shareUrl } from "@/lib/routes";
+import { copyText } from "@/lib/clipboard";
 import type { ShareRedactions, WorkflowShare } from "@/lib/types";
 import { encodeWorkflowShare } from "@/lib/workflowShare";
 
@@ -140,6 +141,16 @@ export function ShareModal({
     : (expiryChoices[0]?.days ?? 0);
 
   const dialogRef = useModalDismissal(onClose);
+  const codeCopyFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (busy) return;
+    const previous = codeCopyFocus.current;
+    codeCopyFocus.current = null;
+    // Selection-copy cannot refocus the code button while it is disabled.
+    if (previous?.isConnected && document.activeElement === document.body) {
+      previous.focus({ preventScroll: true });
+    }
+  }, [busy]);
 
   // One call, and the server decides whether this is a new link or one the
   // workflow already has. Opening the dialog four times should not leave four
@@ -201,14 +212,10 @@ export function ShareModal({
   const handleCopyLink = async () => {
     if (!share) return;
     try {
-      await navigator.clipboard.writeText(shareUrl(share.token));
+      await copyText(shareUrl(share.token), dialogRef.current ?? undefined);
       flash("link");
     } catch {
-      // Deliberately nothing. The link is on screen, in a field that selects
-      // itself when focused -- that IS the fallback, and raising an error for
-      // something the person can still do by hand is noise. CopyField on the
-      // Helixbox console makes the same call for the same reason. A code is
-      // different: that value is not on screen, so its failure still speaks.
+      // The visible link remains selectable when both clipboard paths fail.
     }
   };
 
@@ -216,6 +223,8 @@ export function ShareModal({
   // does not carry graphs, and most people copy the link and never touch this.
   const handleCopyCode = async () => {
     if (!share || busy) return;
+    codeCopyFocus.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setBusy(true);
     setError(null);
     try {
@@ -226,7 +235,7 @@ export function ShareModal({
         nodes: full.graph.nodes,
         edges: full.graph.edges,
       });
-      await navigator.clipboard.writeText(code);
+      await copyText(code, dialogRef.current ?? undefined);
       flash("code");
     } catch (e) {
       setError(e instanceof Error ? e.message : "could not prepare a code");
