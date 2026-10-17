@@ -62,20 +62,20 @@ export function SharedWorkflowCard({
   nodeCount: number;
   edgeCount: number;
   graph?: { nodes: WorkflowNode[]; edges: WorkflowEdge[] };
-  /** Absent means nobody has worked them out -- which is the case for a
-   *  pasted code. They are derived server-side from a stored snapshot, and a
-   *  code has no row anywhere until it is imported. The three headings below
-   *  turn on exactly that distinction, so it must not be flattened to an
-   *  empty object. */
+  /** A code has no full server assessment. Its known email setup still comes
+   *  from the graph, without treating other configuration as verified. */
   requirements?: ShareImportRequirements;
   expiresAt?: string;
   variant: "page" | "dialog";
   className?: string;
 }) {
   const page = variant === "page";
-  const lines = requirements ? requirementLines(requirements) : [];
   const expires = expiryNote(expiresAt);
   const nodes = graph?.nodes ?? [];
+  const lines = requirementLines(
+    requirements ?? { apiKeys: 0, files: 0, connectedAccounts: 0 },
+    nodes,
+  );
 
   return (
     <div className={className} style={{ marginBottom: page ? 20 : 14 }}>
@@ -147,11 +147,16 @@ export function SharedWorkflowCard({
             <li key={line}>{line}</li>
           ))}
         </ul>
-      ) : (
+      ) : requirements ? (
         <p style={reqBody}>
-          {requirements
-            ? "Nothing to configure. This one runs on AgentMesh's own model keys."
-            : "The sender's keys, secrets and uploaded files were never part of this code, so any model keys or connected accounts it uses will be yours to add. Open it after importing to see which."}
+          Nothing to configure. This one runs on AgentMesh&apos;s own model keys.
+        </p>
+      ) : null}
+      {!requirements && (
+        <p style={reqBody}>
+          The sender&apos;s keys, secrets and uploaded files were never part of
+          this code, so any model keys or connected accounts it uses will be yours
+          to add. Open it after importing to see which.
         </p>
       )}
       {requirements && (
