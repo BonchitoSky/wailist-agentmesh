@@ -5,6 +5,7 @@ import {
   render,
   screen,
   within,
+  waitFor,
 } from "@testing-library/react";
 
 // The dialog is tested against a stubbed API, the way WorkflowsPage is. What
@@ -14,6 +15,9 @@ const state = vi.hoisted(() => ({
   create: vi.fn(),
   listFor: vi.fn(),
   revoke: vi.fn(),
+  read: vi.fn(),
+  encode: vi.fn(),
+  native: false,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -21,12 +25,22 @@ vi.mock("@/lib/api", () => ({
     create: state.create,
     listFor: state.listFor,
     revoke: state.revoke,
+    read: state.read,
   },
 }));
 vi.mock("@/hooks/useModalDismissal", () => ({
   // Hands back a ref, the way the real hook does -- the dialog puts it on
   // its panel.
   useModalDismissal: () => ({ current: null }),
+}));
+
+vi.mock("@/lib/nativeAuth", () => ({
+  get IS_NATIVE() {
+    return state.native;
+  },
+}));
+vi.mock("@/lib/workflowShare", () => ({
+  encodeWorkflowShare: state.encode,
 }));
 
 import { ShareModal } from "./ShareModal";
@@ -53,6 +67,9 @@ const REDACTIONS = {
 };
 
 beforeEach(() => {
+  state.native = false;
+  state.read.mockResolvedValue({ share: SHARE });
+  state.encode.mockResolvedValue("amwf:sanitized-code");
   state.create.mockResolvedValue({ share: SHARE, redactions: REDACTIONS });
   state.listFor.mockResolvedValue([SHARE]);
   state.revoke.mockResolvedValue(undefined);
@@ -61,6 +78,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
+  Reflect.deleteProperty(document, "execCommand");
 });
 
 describe("ShareModal", () => {
@@ -201,5 +220,102 @@ describe("ShareModal", () => {
 
     fireEvent.click(armed);
     expect(state.revoke).toHaveBeenCalledWith("tok-current");
+  });
+});
+
+
+describe("ShareModal clipboard", () => {
+  function clipboard(copyAccepted: boolean, native: boolean) {
+    state.native = native;
+    const writeText = vi.fn().mockRejectedValue(new Error("Write permission denied"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const copied: string[] = [];
+    const execCommand = vi.fn(() => {
+      const field = document.activeElement;
+      if (copyAccepted && field instanceof HTMLTextAreaElement) {
+        copied.push(field.value);
+      }
+      return copyAccepted;
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: execCommand,
+    });
+    return { writeText, execCommand, copied };
+  }
+
+  it("copies the canonical native link and restores the Share control focus", async () => {
+    const copy = clipboard(true, true);
+    render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    const button = await screen.findByRole("button", { name: "Copy link" });
+    button.focus();
+    fireEvent.click(button);
+
+    await screen.findByRole("button", { name: "Copied" });
+    expect(copy.copied).toEqual(["https://www.agent-mesh.app/s/tok-current"]);
+    expect(copy.writeText).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(button);
+    expect(screen.getByLabelText("Share link")).toHaveProperty("readOnly", true);
+  });
+
+  it("copies only the encoded sanitized server snapshot on native", async () => {
+    const copy = clipboard(true, true);
+    render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    const button = await screen.findByRole("button", { name: "copy a code" });
+    button.focus();
+    fireEvent.click(button);
+
+    await screen.findByText("Code copied to clipboard");
+    expect(state.read).toHaveBeenCalledWith(SHARE.token);
+    expect(state.encode).toHaveBeenCalledWith({
+      name: SHARE.name,
+      description: undefined,
+      nodes: SHARE.graph.nodes,
+      edges: SHARE.graph.edges,
+    });
+    expect(copy.copied).toEqual(["amwf:sanitized-code"]);
+    expect(copy.writeText).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("retains normal web copying without a temporary selection", async () => {
+    const copy = clipboard(true, false);
+    copy.writeText.mockResolvedValue(undefined);
+    render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Copy link" }));
+
+    await screen.findByRole("button", { name: "Copied" });
+    expect(copy.writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/s/tok-current`,
+    );
+    expect(copy.execCommand).not.toHaveBeenCalled();
+  });
+
+  it("keeps manual link selection and reports code failure without claiming a copy", async () => {
+    const copy = clipboard(false, true);
+    render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Copy link" }));
+    await waitFor(() => expect(copy.writeText).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+    const link = screen.getByLabelText("Share link");
+    expect(link).toHaveProperty("value", "https://www.agent-mesh.app/s/tok-current");
+
+    fireEvent.click(screen.getByRole("button", { name: "copy a code" }));
+    await screen.findByText("Clipboard access was blocked.");
+    expect(screen.queryByText("Code copied to clipboard")).toBeNull();
+  });
+
+  it("keeps a revoked link uncopyable", async () => {
+    const copy = clipboard(true, true);
+    state.create.mockResolvedValue({
+      share: { ...SHARE, revokedAt: new Date().toISOString() },
+      redactions: REDACTIONS,
+    });
+    render(<ShareModal workflowId="wf-1" onClose={() => {}} />);
+    const button = await screen.findByRole("button", { name: "Link is dead" });
+    fireEvent.click(button);
+    expect(button).toHaveProperty("disabled", true);
+    expect(copy.execCommand).not.toHaveBeenCalled();
+    expect(copy.writeText).not.toHaveBeenCalled();
   });
 });
