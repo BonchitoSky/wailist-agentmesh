@@ -43,7 +43,7 @@ export async function settle(page: Page): Promise<void> {
 }
 
 /**
- * Visible elements that extend past either edge of the viewport.
+ * Visible element borders or text that extend past either viewport edge.
  *
  * Elements are ignored when they sit inside:
  * - an explicitly identified horizontal table, math or code region;
@@ -63,15 +63,13 @@ export async function horizontalOffenders(page: Page): Promise<Offender[]> {
       ".chat-code-block__body",
     ].join(",");
 
-    // The element itself counts for the animation (the marquee track is the
-    // animated element) but not for scrolling (a scroller that sticks out
-    // past the edge is itself an overflow).
-    const intentionallyOffscreen = (el: Element): boolean => {
+    // A scroller can contain overflowing text, but its own border must fit.
+    const intentionallyOffscreen = (el: Element, content = false): boolean => {
       for (let n: Element | null = el; n; n = n.parentElement) {
         if (n === document.body || n === document.documentElement) break;
         const style = getComputedStyle(n);
         if (
-          n !== el &&
+          (n !== el || content) &&
           n.matches(horizontalScrollRegions) &&
           (style.overflowX === "auto" || style.overflowX === "scroll")
         ) {
@@ -87,6 +85,21 @@ export async function horizontalOffenders(page: Page): Promise<Offender[]> {
         }
       }
       return false;
+    };
+
+    const directTextRects = (el: Element): DOMRect[] => {
+      if (intentionallyOffscreen(el, true)) return [];
+      for (let parent = el.parentElement; parent; parent = parent.parentElement) {
+        if (getComputedStyle(parent).opacity === "0") return [];
+      }
+      const rects: DOMRect[] = [];
+      const range = document.createRange();
+      for (const node of el.childNodes) {
+        if (node.nodeType !== Node.TEXT_NODE || !node.textContent?.trim()) continue;
+        range.selectNodeContents(node);
+        rects.push(...Array.from(range.getClientRects()));
+      }
+      return rects.filter((rect) => rect.width > 0 && rect.height > 0);
     };
 
     const describe = (el: Element): string => {
@@ -115,12 +128,15 @@ export async function horizontalOffenders(page: Page): Promise<Offender[]> {
       if (style.pointerEvents === "none" && !(el.textContent ?? "").trim()) {
         continue;
       }
-      const outside = rect.right > viewportWidth + 1 || rect.left < -1;
+      const rects = [rect, ...directTextRects(el)];
+      const left = Math.min(...rects.map((bounds) => bounds.left));
+      const right = Math.max(...rects.map((bounds) => bounds.right));
+      const outside = right > viewportWidth + 1 || left < -1;
       if (outside && !intentionallyOffscreen(el)) {
         offenders.push({
           element: describe(el),
-          left: Math.round(rect.left),
-          right: Math.round(rect.right),
+          left: Math.round(left),
+          right: Math.round(right),
         });
       }
     }
