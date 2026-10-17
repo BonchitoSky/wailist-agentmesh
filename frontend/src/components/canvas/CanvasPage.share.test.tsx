@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Dispatch, SetStateAction } from "react";
 import type { Workflow } from "@/lib/types";
@@ -117,7 +117,11 @@ describe("CanvasPage Share save boundary", () => {
 
     expect(await screen.findByRole("dialog", { name: "Share workflow" })).toBeTruthy();
     expect(mocks.createShare).toHaveBeenCalledExactlyOnceWith(workflow.id, 0, true);
-    expect(mocks.update.mock.invocationCallOrder[0]).toBeLessThan(mocks.createShare.mock.invocationCallOrder[0]);
+    const [saveOrder] = mocks.update.mock.invocationCallOrder;
+    const [shareOrder] = mocks.createShare.mock.invocationCallOrder;
+    assert.isDefined(saveOrder);
+    assert.isDefined(shareOrder);
+    expect(saveOrder).toBeLessThan(shareOrder);
   });
 
   it("keeps Share closed after a failed save and allows a successful edit retry", async () => {
