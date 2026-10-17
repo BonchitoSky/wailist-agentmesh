@@ -122,6 +122,19 @@ jobs:
     name: frontend / smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentmesh_smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v7
 
@@ -158,6 +171,26 @@ jobs:
       - name: smoke
         working-directory: frontend/e2e
         run: npm run smoke -- --workers=1
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: build scratch sharing server
+        working-directory: backend
+        run: |
+          mkdir -p "$RUNNER_TEMP/agentmesh-smoke"
+          go build -o "$RUNNER_TEMP/agentmesh-smoke/server" ./cmd/server
+          go build -o "$RUNNER_TEMP/agentmesh-smoke/walletgen" ./cmd/walletgen
+
+      - name: verify fresh anonymous sharing and revocation
+        working-directory: frontend/e2e
+        env:
+          SMOKE_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/agentmesh_smoke?sslmode=disable
+          SMOKE_BACKEND_BINARY: ${{ runner.temp }}/agentmesh-smoke/server
+          SMOKE_WALLETGEN_BINARY: ${{ runner.temp }}/agentmesh-smoke/walletgen
+        run: npm run smoke -- --config share-server.config.ts
 
       - name: upload failure traces
         if: failure()

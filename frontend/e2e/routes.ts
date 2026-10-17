@@ -6,6 +6,21 @@
 // Dynamic segments use a fixed id. In mock mode lib/api.ts answers
 // workflows.get() with the sample workflow whatever the id is.
 export const WORKFLOW_ID = "smoke";
+export const SHARE_TOKEN = "smoke-sharing-token";
+
+export function pageRoute(segments: readonly string[]): string {
+  return "/" + segments
+    .filter((segment) => !segment.startsWith("("))
+    .map((segment) => {
+      if (segment === "[id]") return WORKFLOW_ID;
+      if (segment === "[token]") return SHARE_TOKEN;
+      if (segment.includes("[")) {
+        throw new Error(`No smoke sample for dynamic segment ${segment}`);
+      }
+      return segment;
+    })
+    .join("/");
+}
 
 export const PUBLIC_ROUTES = [
   "/",
@@ -15,6 +30,7 @@ export const PUBLIC_ROUTES = [
   "/terms",
   "/refund-policy",
   "/delete-account",
+  `/s/${SHARE_TOKEN}`,
 ] as const;
 
 // Behind src/middleware.ts, which redirects to /signin unless the agentmesh_ui
@@ -31,6 +47,7 @@ export const PROTECTED_ROUTES = [
   "/billing",
   "/activity",
   "/account",
+  "/account/links",
   "/settings",
 ] as const;
 

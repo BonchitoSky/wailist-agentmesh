@@ -7,7 +7,7 @@ import {
   openRoute,
   settle,
 } from "./helpers/page";
-import { ALL_ROUTES, WORKFLOW_ID } from "./routes";
+import { ALL_ROUTES, pageRoute, SHARE_TOKEN, WORKFLOW_ID } from "./routes";
 
 test("the route inventory covers current page modules", () => {
   const app = join(__dirname, "../src/app");
@@ -17,11 +17,7 @@ test("the route inventory covers current page modules", () => {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) visit(path);
       else if (entry.name === "page.tsx") {
-        const segments = relative(app, directory)
-          .split(sep)
-          .filter((segment) => !segment.startsWith("("))
-          .map((segment) => (segment === "[id]" ? WORKFLOW_ID : segment));
-        routes.push("/" + segments.join("/"));
+        routes.push(pageRoute(relative(app, directory).split(sep)));
       }
     }
   };
@@ -31,6 +27,13 @@ test("the route inventory covers current page modules", () => {
   expect([...ALL_ROUTES].sort()).toEqual(
     routes.filter((route) => route !== "/auth/callback").sort(),
   );
+});
+
+test("dynamic route samples are explicit and unknown parameters fail", () => {
+  expect(pageRoute(["(workspace)", "workflows", "[id]"])).toBe(`/workflows/${WORKFLOW_ID}`);
+  expect(pageRoute(["s", "[token]"])).toBe(`/s/${SHARE_TOKEN}`);
+  expect(() => pageRoute(["new", "[unknown]"])).toThrow("No smoke sample");
+  expect(() => pageRoute(["new", "[...slug]"])).toThrow("No smoke sample");
 });
 
 test("page-error collection detects an uncaught error after a clean load", async ({
