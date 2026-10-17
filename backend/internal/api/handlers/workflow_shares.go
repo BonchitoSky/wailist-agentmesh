@@ -354,7 +354,13 @@ func (d *Deps) RevokeShare(w http.ResponseWriter, r *http.Request) {
 // PublicTrigger already follows: the response must not tell a caller whether
 // a token ever existed.
 func (d *Deps) GetShare(w http.ResponseWriter, r *http.Request) {
-	if !shareReads.allow(clientIP(r), time.Now()) {
+	now := time.Now()
+	visitor, err := d.shareReadClientIP(r, now)
+	if err != nil {
+		respond.Error(w, http.StatusUnauthorized, "invalid share relay")
+		return
+	}
+	if !shareReads.allow(visitor, now) {
 		w.Header().Set("Retry-After", strconv.Itoa(int(shareReadWindow.Seconds())))
 		respond.Error(w, http.StatusTooManyRequests, "too many requests -- try again in a moment")
 		return
