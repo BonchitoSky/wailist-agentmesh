@@ -192,3 +192,116 @@ test("an intentional horizontal scroller must itself fit the viewport", async ({
     expect(await horizontalOffenders(page)).toEqual([]);
   }
 });
+
+for (const control of [
+  { name: "visible nowrap text", mode: "visible", className: "", spills: true },
+  { name: "left-indented text", mode: "left", className: "", spills: true },
+  { name: "ordinary vertical scroller", mode: "vertical", className: "", spills: true },
+  { name: "wrapped text", mode: "wrapped", className: "", spills: false },
+  { name: "hidden text", mode: "hidden", className: "", spills: false },
+  { name: "transparent ancestor", mode: "transparent", className: "", spills: false },
+  { name: "chat table text", mode: "horizontal", className: "chat-table-wrap", spills: false },
+  { name: "display math text", mode: "horizontal", className: "katex-display", spills: false },
+  { name: "code block text", mode: "horizontal", className: "chat-code-block__body", spills: false },
+]) {
+  test(`text overflow collection distinguishes ${control.name}`, async ({ page }) => {
+    await openRoute(page, "/signin");
+    await settle(page);
+    expect(await horizontalOffenders(page)).toEqual([]);
+
+    const geometry = await page.evaluate(({ mode, className }) => {
+      const host = document.createElement("div");
+      host.id = "smoke-text-control";
+      host.className = "chat-markdown";
+      Object.assign(host.style, {
+        position: "fixed",
+        left: "0",
+        top: "0",
+        width: `${document.documentElement.clientWidth}px`,
+      });
+      if (mode === "vertical") {
+        host.style.overflow = "auto";
+        host.style.height = "40px";
+      }
+      if (mode === "transparent") host.style.opacity = "0";
+
+      const element = document.createElement("div");
+      element.className = className;
+      element.setAttribute("aria-label", "text overflow control");
+      element.textContent = mode === "left"
+        ? "text overflow control"
+        : "text overflow control ".repeat(24);
+      Object.assign(element.style, {
+        boxSizing: "border-box",
+        width: "100%",
+        margin: "0",
+        padding: "0",
+        font: "16px monospace",
+        lineHeight: "20px",
+        whiteSpace: mode === "wrapped" ? "normal" : "nowrap",
+        textAlign: "left",
+        textIndent: mode === "left" ? "-80px" : "0",
+      });
+      if (mode !== "horizontal") element.style.overflow = "visible";
+      if (mode === "vertical") element.style.height = "80px";
+      if (mode === "hidden") element.style.visibility = "hidden";
+      host.append(element);
+      document.body.append(host);
+
+      const border = element.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const textRects = Array.from(range.getClientRects());
+      return {
+        viewport: document.documentElement.clientWidth,
+        borderLeft: border.left,
+        borderRight: border.right,
+        textLeft: Math.min(...textRects.map((rect) => rect.left)),
+        textRight: Math.max(...textRects.map((rect) => rect.right)),
+        textRectCount: textRects.length,
+        overflowX: getComputedStyle(element).overflowX,
+        visibility: getComputedStyle(element).visibility,
+        ancestorOpacity: getComputedStyle(host).opacity,
+      };
+    }, control);
+
+    try {
+      expect(geometry.borderLeft).toBe(0);
+      expect(geometry.borderRight).toBeLessThanOrEqual(geometry.viewport);
+      expect(geometry.textRectCount).toBeGreaterThan(0);
+      if (control.mode === "wrapped") {
+        expect(geometry.textRectCount).toBeGreaterThan(1);
+        expect(geometry.textRight).toBeLessThanOrEqual(geometry.viewport + 1);
+      } else if (control.mode === "left") {
+        expect(geometry.textLeft).toBeLessThan(-1);
+        expect(geometry.textRight).toBeLessThanOrEqual(geometry.viewport);
+      } else {
+        expect(geometry.textRight).toBeGreaterThan(geometry.viewport + 1);
+      }
+      if (control.mode === "horizontal") expect(geometry.overflowX).toBe("auto");
+      if (control.mode === "hidden") expect(geometry.visibility).toBe("hidden");
+      if (control.mode === "transparent") expect(geometry.ancestorOpacity).toBe("0");
+
+      const offenders = await horizontalOffenders(page);
+      if (control.spills) {
+        expect(offenders).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              element: expect.stringContaining("[text overflow control]"),
+            }),
+          ]),
+        );
+        const offender = offenders.find((entry) => entry.element.includes("[text overflow control]"));
+        expect(offender?.left).toBe(Math.round(Math.min(geometry.borderLeft, geometry.textLeft)));
+        expect(offender?.right).toBe(Math.round(Math.max(geometry.borderRight, geometry.textRight)));
+      } else {
+        expect(offenders).toEqual([]);
+      }
+    } finally {
+      await page.evaluate(() => {
+        document.getElementById("smoke-text-control")?.remove();
+      });
+      expect(await horizontalOffenders(page)).toEqual([]);
+    }
+  });
+}
