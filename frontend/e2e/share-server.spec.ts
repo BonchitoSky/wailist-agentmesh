@@ -153,6 +153,35 @@ test("a newly minted share has anonymous server content and uncached revocation"
   }
 });
 
+test("public share reads reject wrong or partial relay authentication", async () => {
+  const owner = await request.newContext({ baseURL: backend });
+  const anonymous = await request.newContext({ baseURL: backend });
+  try {
+    const share = await mintScratchShare(owner);
+    const path = `/shares/${share.token}`;
+    const headers = signedHeaders(share.token);
+    const signature = headers["X-AgentMesh-Share-Signature"];
+    const wrong = (signature.startsWith("0") ? "1" : "0") + signature.slice(1);
+    expect((await anonymous.get(path, { headers: {
+      ...headers, "X-AgentMesh-Share-Signature": wrong,
+    } })).status()).toBe(401);
+    expect((await anonymous.get(path, { headers: {
+      "X-AgentMesh-Share-Visitor": headers["X-AgentMesh-Share-Visitor"],
+      "X-AgentMesh-Share-Timestamp": headers["X-AgentMesh-Share-Timestamp"],
+    } })).status()).toBe(401);
+    expect((await anonymous.get(path, { headers })).status()).toBe(200);
+    expect((await anonymous.get(path)).status()).toBe(200);
+    expect((await anonymous.get("/shares")).status()).toBe(401);
+    expect((await owner.delete(`/shares/${share.token}`)).ok()).toBe(true);
+    expect((await anonymous.get(path, { headers: signedHeaders(share.token) })).status()).toBe(404);
+    expect((await owner.delete(`/workflows/${share.workflowId}`)).ok()).toBe(true);
+  } finally {
+    await anonymous.dispose();
+    await owner.dispose();
+  }
+});
+
+// Run the exhaustion control last because the backend limiter spans tests.
 test("one visitor cannot exhaust another visitor behind the same frontend", async ({ page, context, browser }) => {
   test.setTimeout(90_000);
   const owner = await request.newContext({ baseURL: backend });
@@ -231,34 +260,6 @@ test("one visitor cannot exhaust another visitor behind the same frontend", asyn
   } finally {
     await visitorB.close();
     await quota.dispose();
-    await owner.dispose();
-  }
-});
-
-test("public share reads reject wrong or partial relay authentication", async () => {
-  const owner = await request.newContext({ baseURL: backend });
-  const anonymous = await request.newContext({ baseURL: backend });
-  try {
-    const share = await mintScratchShare(owner);
-    const path = `/shares/${share.token}`;
-    const headers = signedHeaders(share.token);
-    const signature = headers["X-AgentMesh-Share-Signature"];
-    const wrong = (signature.startsWith("0") ? "1" : "0") + signature.slice(1);
-    expect((await anonymous.get(path, { headers: {
-      ...headers, "X-AgentMesh-Share-Signature": wrong,
-    } })).status()).toBe(401);
-    expect((await anonymous.get(path, { headers: {
-      "X-AgentMesh-Share-Visitor": headers["X-AgentMesh-Share-Visitor"],
-      "X-AgentMesh-Share-Timestamp": headers["X-AgentMesh-Share-Timestamp"],
-    } })).status()).toBe(401);
-    expect((await anonymous.get(path, { headers })).status()).toBe(200);
-    expect((await anonymous.get(path)).status()).toBe(200);
-    expect((await anonymous.get("/shares")).status()).toBe(401);
-    expect((await owner.delete(`/shares/${share.token}`)).ok()).toBe(true);
-    expect((await anonymous.get(path, { headers: signedHeaders(share.token) })).status()).toBe(404);
-    expect((await owner.delete(`/workflows/${share.workflowId}`)).ok()).toBe(true);
-  } finally {
-    await anonymous.dispose();
     await owner.dispose();
   }
 });
