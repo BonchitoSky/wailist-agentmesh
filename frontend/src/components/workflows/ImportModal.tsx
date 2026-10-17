@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { IconClose } from "@/components/ui";
 import { useModalDismissal } from "@/hooks/useModalDismissal";
 import { shares as sharesApi, workflows as workflowsApi } from "@/lib/api";
@@ -68,6 +68,13 @@ export function ImportModal({
   const [error, setError] = useState<string | null>(null);
 
   const dialogRef = useModalDismissal(onClose);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (resolved && dialog && !dialog.contains(document.activeElement)) {
+      dialog.focus({ preventScroll: true });
+    }
+  }, [resolved, dialogRef]);
 
   const handlePasteFromClipboard = async () => {
     try {
@@ -249,7 +256,6 @@ export function ImportModal({
           // pasted as several lines.
           <div style={{ position: "relative", marginBottom: 12 }}>
             <textarea
-              autoFocus
               value={input}
               onChange={(e) => {
                 setInput(e.target.value);
