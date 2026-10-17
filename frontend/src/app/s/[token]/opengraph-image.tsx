@@ -1,4 +1,5 @@
 import { ImageResponse } from "next/og";
+import { loadServerShare } from "@/lib/serverShare";
 
 // The picture Slack, WhatsApp, X, Discord and iMessage show when somebody
 // pastes a share link.
@@ -28,35 +29,13 @@ const FG = "#f2f0f7";
 const MUTED = "#8e8aa3";
 const ACCENT = "#a78bfa";
 
-type Share = {
-  name: string;
-  nodeCount: number;
-  edgeCount: number;
-};
-
-async function loadShare(token: string): Promise<Share | null> {
-  const base = process.env.BACKEND_URL;
-  if (!base || process.env.MOBILE_BUILD === "1") return null;
-  try {
-    const res = await fetch(
-      `${base.replace(/\/$/, "")}/shares/${encodeURIComponent(token)}`,
-      { cache: "no-store" },
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as { share: Share };
-    return data.share;
-  } catch {
-    return null;
-  }
-}
-
 export default async function Image({
   params,
 }: {
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const share = await loadShare(token);
+  const share = (await loadServerShare(token))?.share;
 
   // A dead or missing link gets the neutral card. Same rule as the 404 and
   // the metadata: an unfurl must not reveal whether a token ever existed.
