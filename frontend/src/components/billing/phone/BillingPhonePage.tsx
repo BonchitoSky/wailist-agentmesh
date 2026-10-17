@@ -3,6 +3,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { ghostBtn } from "@/components/ui/buttons";
 import { IconArrow, IconWallet } from "@/components/ui";
+import { BalanceLoadNotice } from "@/components/billing/BalanceLoadNotice";
 import { PurchaseHistory } from "@/components/billing/PurchaseHistory";
 import { creditsForTopup } from "@/lib/credits/fx";
 import type { Purchase } from "@/lib/credits/types";
@@ -27,6 +28,9 @@ const shortINR = (n: number) =>
 export interface BillingPhoneProps {
   balanceUSD: number;
   balanceKnown: boolean;
+  balanceLoading: boolean;
+  balanceFailed: boolean;
+  onRetryBalance: () => Promise<void>;
   isLow: boolean;
   /** Spent across every workflow over the same 30 days the list counts. */
   // null while unknown: still loading, or the load failed.
@@ -67,7 +71,7 @@ export function BillingPhonePage(p: BillingPhoneProps) {
   const [allPayments, setAllPayments] = useState(false);
   const [howOpen, setHowOpen] = useState(false);
 
-  const state = !p.balanceKnown ? "unknown" : p.isLow ? "low" : "ok";
+  const state = !p.balanceKnown || p.balanceFailed || p.balanceLoading ? "unknown" : p.isLow ? "low" : "ok";
   const credits =
     p.usdPerINR > 0 && p.canCheckout
       ? creditsForTopup(p.effectiveINR, p.usdPerINR)
@@ -103,11 +107,11 @@ export function BillingPhonePage(p: BillingPhoneProps) {
             </span>
             <span className="bilp-pill">
               <span className="bilp-pill__dot" aria-hidden />
-              {state === "unknown"
-                ? "Checking"
-                : state === "low"
-                  ? "Low"
-                  : "Active"}
+              {p.balanceLoading
+                ? (p.balanceKnown ? "Refreshing" : "Checking")
+                : p.balanceFailed
+                  ? "Unavailable"
+                  : state === "unknown" ? "Checking" : state === "low" ? "Low" : "Active"}
             </span>
           </span>
         </div>
@@ -118,6 +122,8 @@ export function BillingPhonePage(p: BillingPhoneProps) {
           </span>
         </div>
       </section>
+
+      <BalanceLoadNotice known={p.balanceKnown} failed={p.balanceFailed} loading={p.balanceLoading} onRetry={p.onRetryBalance} />
 
       {p.returnState && (
         <p className="bilp-note" data-tone={p.returnState.tone} role="status">

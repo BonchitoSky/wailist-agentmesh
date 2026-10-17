@@ -68,6 +68,12 @@ export function AccountPage() {
 
           <ul style={list}>
             <li>
+              <Link href="/settings#delete-title" className="account-row" style={row}>
+                <span>Delete account</span>
+                <Chevron />
+              </Link>
+            </li>
+            <li>
               <Link href="/billing" className="account-row" style={row}>
                 <span>Credits</span>
                 <span style={rowValue}>
@@ -95,6 +101,17 @@ export function AccountPage() {
                 </button>
               </li>
             )}
+            {/* On both web and native, deliberately: Google Play requires the
+                privacy policy to be reachable from inside the app, and on the
+                web it is simply useful. Not gated like Notifications. */}
+            <li>
+              <Link href="/privacy" className="account-row" style={row}>
+                <span>Privacy Policy</span>
+                <span style={rowValue}>
+                  <Chevron />
+                </span>
+              </Link>
+            </li>
           </ul>
 
           <button

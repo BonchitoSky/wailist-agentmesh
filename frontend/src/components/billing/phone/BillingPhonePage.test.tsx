@@ -31,6 +31,9 @@ function renderPage(over: Partial<BillingPhoneProps> = {}) {
   const props: BillingPhoneProps = {
     balanceUSD: 5.24,
     balanceKnown: true,
+    balanceLoading: false,
+    balanceFailed: false,
+    onRetryBalance: vi.fn(async () => {}),
     isLow: false,
     spent30dUSD: 8.71,
     returnState: null,
@@ -290,5 +293,30 @@ describe("the way back", () => {
     expect(
       screen.getByRole("link", { name: /Back/ }).getAttribute("href"),
     ).toBe("/workflows");
+  });
+});
+
+
+describe("phone balance recovery", () => {
+  it("shows first failure and an observable retry before recovery", () => {
+    const view = renderPage({ balanceKnown: false, balanceFailed: true });
+    expect(screen.getByText("Could not load your balance.")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry balance" }));
+    expect(view.props.onRetryBalance).toHaveBeenCalledOnce();
+    view.rerender(<BillingPhonePage {...view.props} balanceLoading />);
+    expect((screen.getByRole("button", { name: "Retry balance" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("Retrying…")).toBeTruthy();
+    view.rerender(<BillingPhonePage {...view.props} balanceKnown balanceFailed={false} />);
+    expect(screen.queryByRole("button", { name: "Retry balance" })).toBeNull();
+    expect(screen.getByText("Active")).toBeTruthy();
+  });
+
+  it("keeps and labels the last known amount after refresh failure", () => {
+    renderPage({ balanceFailed: true });
+    expect(screen.getByText("$5.24")).toBeTruthy();
+    expect(screen.getByText("Could not refresh your balance. Showing the last known amount.")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(screen.queryByText("Active")).toBeNull();
   });
 });
