@@ -458,7 +458,9 @@ function AgentNode({
               whiteSpace: "nowrap",
             }}
           >
-            {node.name === tpl.catalogName ? tpl.name : node.name ?? tpl.name}
+            {tpl && node.name === tpl.catalogName
+              ? tpl.name
+              : node.name ?? tpl?.name}
           </div>
         </div>
         {deployed && (
