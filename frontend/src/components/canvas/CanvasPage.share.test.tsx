@@ -118,7 +118,7 @@ describe("CanvasPage Share save boundary", () => {
     const dialog = await screen.findByRole("dialog", { name: "Share workflow" });
     expect(document.activeElement).toBe(dialog);
     if (dismissal === "Escape") fireEvent.keyDown(dialog, { key: "Escape" });
-    else fireEvent.click(screen.getByRole("button", { name: "Close", exact: true }));
+    else fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await act(async () => {});
     expect(document.activeElement).toBe(share);
