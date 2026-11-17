@@ -1398,6 +1398,7 @@ function CanvasTopbar({
   const [shareOpen, setShareOpen] = useState(false);
   const [preparingShare, setPreparingShare] = useState(false);
   const sharePending = useRef(false);
+  const shareButton = useRef<HTMLButtonElement>(null);
   const [estimate, setEstimate] = useState<CostEstimate | null>(null);
 
   useEffect(() => {
@@ -1555,6 +1556,7 @@ function CanvasTopbar({
 
       {can("workflow.share", readOnly) && (
         <button
+          ref={shareButton}
           style={{ ...ghostBtnSm, color: "var(--fg)" }}
           disabled={preparingShare}
           onClick={async () => {
@@ -1584,7 +1586,10 @@ function CanvasTopbar({
       {shareOpen && (
         <ShareModal
           workflowId={workflow.id}
-          onClose={() => setShareOpen(false)}
+          onClose={() => {
+            setShareOpen(false);
+            shareButton.current?.focus({ preventScroll: true });
+          }}
         />
       )}
       <button

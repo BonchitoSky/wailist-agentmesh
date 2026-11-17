@@ -93,6 +93,40 @@ afterEach(() => {
 });
 
 describe("CanvasPage Share save boundary", () => {
+  it.each([
+    [false, "Escape"],
+    [false, "Close"],
+    [true, "Escape"],
+    [true, "Close"],
+  ] as const)("restores Share focus after pending save %s and %s dismissal", async (pending, dismissal) => {
+    const saved = deferred<Workflow>();
+    if (pending) mocks.update.mockReturnValue(saved.promise);
+    render(<CanvasPage workflowId={workflow.id} />);
+    const share = await screen.findByRole("button", { name: "Share" });
+    if (pending) fireEvent.click(screen.getByRole("button", { name: "Edit graph" }));
+    share.focus();
+    expect(document.activeElement).toBe(share);
+    // Model the browser's disabled-button blur before the DOM harness dispatches activation.
+    share.blur();
+    fireEvent.click(share);
+    expect((screen.getByRole("button", { name: "Saving…" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+    if (pending) {
+      expect(mocks.createShare).not.toHaveBeenCalled();
+      await act(async () => { saved.resolve(workflow); });
+    }
+    const dialog = await screen.findByRole("dialog", { name: "Share workflow" });
+    expect(document.activeElement).toBe(dialog);
+    if (dismissal === "Escape") fireEvent.keyDown(dialog, { key: "Escape" });
+    else fireEvent.click(screen.getByRole("button", { name: "Close", exact: true }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(async () => {});
+    expect(document.activeElement).toBe(share);
+    expect((share as HTMLButtonElement).disabled).toBe(false);
+    expect(mocks.createShare).toHaveBeenCalledTimes(1);
+    expect(mocks.update).toHaveBeenCalledTimes(pending ? 1 : 0);
+  });
+
   it("creates one snapshot only after the newest graph has saved", async () => {
     const saved = deferred<Workflow>();
     mocks.update.mockReturnValue(saved.promise);
